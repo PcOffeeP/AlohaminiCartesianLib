@@ -1,0 +1,50 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "alohamini-cartesian"
+version = "0.1.0"
+description = "AlohaMini 笛卡尔遥操作的独立库：机器人运行时适配协议、能力探测与配置覆盖。"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = []
+
+[project.optional-dependencies]
+# lerobot 目前不在 PyPI 上发布（上游只提供 git 仓库安装方式）。
+# 使用 runtime extra 之前，请先按 lerobot 上游 README 把 lerobot 装进同一个环境，
+# 例如从上游仓库以 editable 方式安装；本文件不声明可解析的 lerobot 分发地址。
+runtime = ["lerobot"]
+yaml = ["PyYAML>=6.0"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "PyYAML>=6.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/alohamini_cartesian"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "N", "ANN", "D"]
+# ANN401：`Any` 是本库对外契约的一部分（观测与动作是异构映射），
+# 在这里禁用该规则而不是削弱整个 ANN 规则组。
+# D415：本库 docstring 以中文为主，句末用全角「。」；该规则只认半角 . ? !，全是噪音。
+# N818：`ConversionUnavailable` 是对外公开的异常名，由设计约定固定为不带 Error 后缀。
+ignore = ["ANN401", "D415", "N818"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
