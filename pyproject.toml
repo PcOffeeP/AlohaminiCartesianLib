@@ -4,12 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "alohamini-cartesian"
-version = "0.1.0"
+version = "0.2.0"
 description = "AlohaMini 笛卡尔遥操作的独立库：机器人运行时适配协议、能力探测与配置覆盖。"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
-dependencies = []
+dependencies = ["numpy>=1.26"]
 
 [project.optional-dependencies]
 # lerobot 目前不在 PyPI 上发布（上游只提供 git 仓库安装方式）。

@@ -615,7 +615,19 @@ def test_no_module_outside_adapter_imports_lerobot() -> None:
     assert protocol_path.exists()
     assert _lerobot_imports(protocol_path) == []
 
+    # 运行期断言按「前后快照差集」的口径写，不断言重放会话级的 ``"lerobot"
+    # not in sys.modules``：装了文档承诺的 ``[runtime]`` extra 的用户跑整套
+    # 测试时，parity 文件会在收集期真的 ``import lerobot`` 并留下
+    # ``sys.modules`` 条目，那条全局断言于是把「导入本库的这两个无适配器模块
+    # 没有拉起 lerobot」错判成会话顺序问题。这里只钉住被测动作本身不引入任何
+    # lerobot 模块，与收集顺序无关。
+    def _lerobot_modules() -> set[str]:
+        return {name for name in sys.modules if name == "lerobot" or name.startswith("lerobot.")}
+
+    before = _lerobot_modules()
+
     importlib.import_module("alohamini_cartesian.capability.detect")
     importlib.import_module("alohamini_cartesian.config.overlay")
 
-    assert "lerobot" not in sys.modules
+    after = _lerobot_modules()
+    assert after - before == set()

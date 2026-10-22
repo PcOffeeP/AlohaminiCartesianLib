@@ -1,6 +1,6 @@
 # AlohaMini Cartesian
 
-AlohaMini 笛卡尔遥操作的产品侧库：对机器人运行时的适配协议、能力探测与单位换算裁决、配置覆盖。核心依赖为空。
+AlohaMini 笛卡尔遥操作的产品侧库：对机器人运行时的适配协议、能力探测与单位换算裁决、配置覆盖，以及控制层与运动学。核心只依赖 numpy。
 
 ## 为什么独立成库
 
@@ -10,7 +10,7 @@ AlohaMini 笛卡尔遥操作的产品侧库：对机器人运行时的适配协�
 
 验证工具还把 metadata 的 `schema_version` 当成兼容判据。旧仓库 `benchmarks/alohamini_io/measure_latency.py` 的运动门禁只接受 `schema_version == 2`，遇到 schema 1 或字符串 `"2"` 直接拒绝，工具被版本号拦死，而真正该判的是这项能力在不在。
 
-## 四项定案
+## 六项定案
 
 | 编号 | 定案 | 要点 |
 | --- | --- | --- |
@@ -18,12 +18,14 @@ AlohaMini 笛卡尔遥操作的产品侧库：对机器人运行时的适配协�
 | D2 | 配置格式 | YAML 单文件加环境变量覆盖，顺序为默认值 → 模板 → 现场文件 → 环境变量 |
 | D3 | 迁移范围 | 只搬 `control/`、运动学（`joint_kinematic_adapter`、`model_specs`）与 `benchmarks/`，分阶段搬，v0.1.0 不含 |
 | D4 | 启动方式 | 新开仓库，当前状态作为 `v0.1.0` 起点，旧仓库冻结为只读参考 |
+| D5 | 迁移范围与适配边界 | 控制层与运动学入库内，控制器不直连 `lerobot`，电机语义改为库内镜像 |
+| D6 | numpy 依赖 | 核心不再零依赖，只加 numpy；不引入 torch/scipy，`placo` 不声明 |
 
 每条的背景、决定与代价见 [docs/decisions.md](docs/decisions.md)。
 
 ## 安装
 
-核心零依赖，可在没有机器人、没有 `lerobot` 的环境里导入和测试。
+核心只依赖 numpy；不需要机器人，不需要 `lerobot`。
 
 ```bash
 pip install -e .
@@ -63,7 +65,7 @@ pip install -e . pytest ruff pyyaml        # 不用 uv 时手动列出
 
 这两层合并后是 `{wrist: /dev/video9, top: /dev/video1}`。
 
-文件格式以 YAML 为主，需要 `yaml` extra 里的 PyYAML；`.json` 后缀走标准库，作为零依赖退路。按文件后缀分派，其他后缀抛 `ConfigError`。
+文件格式以 YAML 为主，需要 `yaml` extra 里的 PyYAML；`.json` 后缀走标准库，作为不装 PyYAML 时的退路。按文件后缀分派，其他后缀抛 `ConfigError`。
 
 校验是严格的，不做静默纠正：
 
@@ -143,27 +145,57 @@ conversion = resolve_deg_per_unit(caps, "left_waist.pos", model_resolution={"sts
 deg_per_unit = conversion.deg_per_unit
 ```
 
+## 控制层与运动学
+
+`control/` 是会话级控制 SDK。`connect(...)` 打开一次会话，返回 `AlohaMiniControl`；由这个会话取左右臂、升降、底盘、夹爪的 handle，再由 handle 发命令。命令走状态机，非法组合被拒绝，异常带原因。
+
+`control/__init__.py` 导出：
+
+- 会话与句柄：`AlohaMiniControl`、`ArmHandle`、`BaseHandle`、`GripperHandle`、`LiftHandle`、`connect`
+- 结果与诊断：`MoveReport`、`StepDiagnostic`
+- 异常：`FeedbackLost`、`MotionBlocked`、`MotionNotEnabled`、`MotionTimeout`、`OutOfRange`、`RuntimeUnavailable`
+
+`kinematics/model_specs.py` 给出整机型号表 `ROBOT_SPECS` 与关节名表 `ARM_PROFILE_JOINTS`，并提供 `validate_robot_model` 与 `arm_state_keys`。`kinematics/joint_adapter.py` 的 `JointKinematicAdapter` 在原始电机刻度与运动学关节角之间双向换算，语义对齐 `MotorsBus` 的 `_normalize` / `_unnormalize`。
+
+`control/arm_ik.py` 做 FK 与数值 IK。它只在函数内惰性 import `placo`，`placo` 未写进依赖。
+
+`control/api.py` 不含默认运行时：`connect` 未注入 `client_factory` 时抛 `RuntimeUnavailable`。真实连接由调用方自己构造运行时 client 传进来。
+
 ## 公开 API
 
 - `alohamini_cartesian.adapter.protocol`：`RobotTransport`（`get_observation`、`send_action`、`prime_observation_request_window(*, include_cameras)`）、`RobotSpec`（`robot_model`、`left_port`、`right_port`），两个 `typing.Protocol`。
 - `alohamini_cartesian.capability.detect`：常量 `SPAN_BY_NORMALIZATION`、`SUPPORTED_METADATA_SCHEMAS`；异常 `CapabilityError`、`ConversionUnavailable`；数据类 `MotorInfo`、`Capabilities`、`Conversion`；函数 `detect_from_observation`、`resolve_deg_per_unit`。
 - `alohamini_cartesian.config.overlay`：常量 `ENV_PREFIX`；异常 `ConfigError`；数据类 `AlohaMiniSettings`；函数 `load_settings`。
+- `alohamini_cartesian.control`：会话 `AlohaMiniControl`，句柄 `ArmHandle`、`BaseHandle`、`GripperHandle`、`LiftHandle`，入口 `connect`，结果 `MoveReport`、`StepDiagnostic`，异常 `FeedbackLost`、`MotionBlocked`、`MotionNotEnabled`、`MotionTimeout`、`OutOfRange`、`RuntimeUnavailable`。
+- `alohamini_cartesian.kinematics.model_specs`：常量 `ROBOT_SPECS`、`ARM_PROFILE_JOINTS`；函数 `validate_robot_model`、`arm_state_keys`、`arm_state_keys_for_robot_model`。
+- `alohamini_cartesian.kinematics.joint_adapter`：类 `JointKinematicAdapter`，方法 `observation_to_kinematic_deg`、`kinematic_deg_to_action`、`effective_limits_deg`、`sign`。
 
 ## 纪律
 
 两条硬约束，改代码时先看这里。
 
-1. `adapter/` 之外禁止 import `lerobot`。`lerobot` 只能通过 `RobotTransport` 与 `RobotSpec` 两个 `Protocol` 接触，其余模块不碰 `lerobot.motors`、`lerobot.robots.alohamini` 这类深层模块。
+1. `adapter/protocol.py` 之外禁止 import `lerobot`。`lerobot` 只能通过 `RobotTransport` 与 `RobotSpec` 两个 `Protocol` 接触，其余模块不碰 `lerobot.motors`、`lerobot.robots.alohamini` 这类深层模块。
 2. 能力探测不得把版本号当兼容判据。判据是这项能力是否存在，`schema_version` 只用来决定字段怎么解析。
 
-第一条有机器守卫，不靠人工 review 维持。`tests/test_capability.py` 里有一条测试用 AST 遍历断言除 `adapter/protocol.py` 之外没有任何模块 import `lerobot`，并断言导入 `capability.detect`、`config.overlay` 后 `sys.modules` 里没有 `lerobot`。
+两条机器守卫，不靠人工 review 维持。
+
+- `tests/test_capability.py` 用 AST 遍历断言 `src/` 内除 `adapter/protocol.py` 之外没有任何模块 import `lerobot`，并用 `sys.modules` 前后快照断言导入 `capability.detect`、`config.overlay` 这两个动作本身不会引入 `lerobot`。
+- `tests/test_control_commands.py` 断言 `control/` 下除 `api.py` 之外没有模块 import 设备适配层、客户端或主机模块。它带正反两条控制用例：一条证明守卫能命中相对 import 的适配层，一条证明合法 import 不会被误判。
 
 ## 当前状态与下一步
 
-v0.1.0 已完成：仓库骨架、适配协议、能力探测与换算裁决、配置 overlay、71 条不依赖硬件的测试。
+v0.2.0 把控制层与运动学搬入库内：`control/`（会话与句柄、命令状态机、单臂控制器、`arm_ik`）、`kinematics/`（型号规格表、关节单位适配、`assets/am_arm200/kinematics.urdf`）。版本号从 `0.1.0` 升到 `0.2.0`，核心依赖从空改为 `numpy>=1.26`。行为变更一处：`connect()` 不再在内部 import `lerobot`，未注入 `client_factory` 时抛 `RuntimeUnavailable`。
 
-- S3（下一步）：迁移 `control/`、`joint_kinematic_adapter`、`model_specs`，以及本轮尚未搬运的 `benchmarks/`。
-- S4：现场 smoke（实机加 vendor 运行时），验证 overlay 能否完整表达现场差异。
+本轮 `pytest tests` 结果：`737 passed, 51 skipped`。
+
+- S4（剩余）：迁移 `benchmarks/`（旧仓库的 `benchmarks/alohamini_ik`、`benchmarks/alohamini_io` 仍在旧仓库），与现场 smoke（实机加 vendor 运行时）同轮，验证 overlay 能否完整表达现场差异。
+
+## 已知限制
+
+- 缺 `placo` 时，`tests/test_arm_ik.py` 的 47 条数值参数实例与 `tests/test_control_controller.py` 的 2 条真 IK 用例跳过。运动学的数值行为在最小环境里没有测试证据。
+- 缺 `lerobot` 时，`tests/test_kinematics_lerobot_parity.py` 与 `tests/test_control_api_lerobot_parity.py` 在收集期整体跳过。这两个文件用真实 `FeetechMotorsBus` 与 `AlohaMiniClient` 作 oracle 做差分对照，所以与真实总线的整环对照未在最小环境执行。
+- `connect(...)` 必须注入 `client_factory`。默认工厂恒抛 `RuntimeUnavailable`，没有内部 import `lerobot` 的退路。
+- `benchmarks/` 尚未搬入本库。
 
 ## 开发与测试
 
@@ -176,23 +208,41 @@ ruff check .
 
 `addopts = "-q"` 已经生效，自己再加 `-q` 会变成 `-qq` 并隐藏 `N passed` 汇总行。看不到汇总行时加 `-o addopts=""`。
 
-当前 71 条用例全部通过。测试不依赖真实设备，不联网。
+当前 `pytest tests` 报 `737 passed, 51 skipped`。跳过项全部来自本机没有装可选依赖，构成见「已知限制」。测试不依赖真实设备，不联网。
 
 ## 目录结构
 
 ```
 alohamini-cartesian-lib/
-├── pyproject.toml             # 包元数据、extras、dev 组、pytest 与 ruff 配置
+├── pyproject.toml                    # 包元数据、extras、dev 组、pytest 与 ruff 配置
 ├── README.md
 ├── .gitignore
-├── docs/decisions.md          # D1–D4 决策记录
+├── docs/decisions.md                 # D1–D6 决策记录
 ├── src/alohamini_cartesian/
-│   ├── __init__.py            # __version__ = "0.1.0"
+│   ├── __init__.py                   # __version__ = "0.2.0"
 │   ├── py.typed
-│   ├── adapter/protocol.py    # 对 lerobot 的唯一接触面（typing.Protocol）
-│   ├── capability/detect.py   # 能力探测与降级、单位换算裁决
-│   └── config/overlay.py      # YAML/JSON 加环境变量三级覆盖
+│   ├── adapter/protocol.py           # 对 lerobot 的唯一接触面（typing.Protocol）
+│   ├── capability/detect.py          # 能力探测与降级、单位换算裁决
+│   ├── config/overlay.py             # YAML/JSON 加环境变量三级覆盖
+│   ├── control/
+│   │   ├── __init__.py               # 控制 SDK 导出面
+│   │   ├── api.py                    # 会话与句柄、connect
+│   │   ├── commands.py               # 控制状态机（无 I/O）
+│   │   ├── controller.py             # 单臂笛卡尔控制器
+│   │   └── arm_ik.py                 # FK 与数值 IK，placo 惰性可选
+│   └── kinematics/
+│       ├── __init__.py
+│       ├── model_specs.py            # 型号规格表
+│       ├── joint_adapter.py          # 电机刻度与关节角的单位适配
+│       └── assets/am_arm200/kinematics.urdf
 └── tests/
+    ├── test_arm_ik.py
     ├── test_capability.py
-    └── test_config_overlay.py
+    ├── test_config_overlay.py
+    ├── test_control_api.py
+    ├── test_control_api_lerobot_parity.py
+    ├── test_control_commands.py
+    ├── test_control_controller.py
+    ├── test_kinematics_adapter.py
+    └── test_kinematics_lerobot_parity.py
 ```
