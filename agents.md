@@ -41,7 +41,7 @@ ruff format --check .          # 格式
 git log --oneline -3           # 最近提交
 ```
 
-## 6 项目现状（v0.2.0，HEAD 7313ad0，代码提交 3fd41e4）
+## 6 项目现状（v0.2.0，代码提交 3fd41e4）
 
 - 已建成：`adapter`（与厂商软件打交道的唯一入口）、`capability`（探测对端具备哪些能力）、`config`（配置分层覆盖）、`control`（控制层）、`kinematics`（运动学与关节换算）
 - 测试：737 条实跑通过，51 条跳过
