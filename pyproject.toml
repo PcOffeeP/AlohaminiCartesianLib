@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "alohamini-cartesian"
-version = "0.3.0"
+version = "0.4.0"
 description = "AlohaMini 笛卡尔遥操作的独立库：机器人运行时适配协议、能力探测与配置覆盖。"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -53,3 +53,31 @@ convention = "google"
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-q"
+
+# 以下四个文件是从旧仓库（lerobot_alohamini-cartesian-teleop）原样迁入的现场基准脚本与
+# 其配套测试（v0.4.0）。迁入原则是语义零改动：断言、字符串、docstring 文字、退出码都不动，
+# 只允许 ruff format 的机械换行。因此这里按精确路径做最小豁免，而不是 exclude 整个
+# benchmarks/ 目录、也不放宽全局 ignore / select。
+# 各码为什么不能靠改代码消除：
+# - ANN001/ANN003/ANN201/ANN202/ANN204/ANN205：报在测试夹具、闭包与 helper 签名上；
+#   补注解要改测试代码本身（新增类型导入、改参数默认写法），属禁止的语义改动。
+#   benchmarks/alohamini_io 两脚本在函数内惰性 import lerobot，夹具签名也随之不带注解。
+# - D103/D107：报在 `parse_args`/`main`/`__init__`；这些函数 docstring 的「有无」是
+#   旧仓库固定契约的一部分，新增 docstring 文字属于改文案。
+# - D403：报在 `"""rtt run: ..."""`，首词是协议字段名 `rtt`；大写会改 docstring 文字。
+# - E501：余下 10 处全部是不能再拆的单个字符串字面量或行尾注释（中英文长消息、f-string
+#   消息），ruff format 已经把所有可拆的行都拆完了；再拆就要改字符串内容。
+[tool.ruff.lint.per-file-ignores]
+"benchmarks/alohamini_io/capture_robot_fingerprint.py" = ["D103", "D107", "E501"]
+"benchmarks/alohamini_io/measure_latency.py" = ["D103", "D107", "E501"]
+"tests/benchmarks/test_capture_robot_fingerprint.py" = ["ANN001", "ANN201", "ANN202", "ANN204"]
+"tests/benchmarks/test_measure_latency.py" = [
+    "ANN001",
+    "ANN003",
+    "ANN201",
+    "ANN202",
+    "ANN204",
+    "ANN205",
+    "D403",
+    "E501",
+]
