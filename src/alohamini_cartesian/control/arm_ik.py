@@ -100,8 +100,8 @@ def _require_placo() -> None:
         import placo  # noqa: F401
     except ImportError as exc:
         raise ImportError(
-            "placo is required for arm kinematics. Install it with: "
-            "pip install 'lerobot[kinematics]' (or uv pip install 'lerobot[kinematics]')"
+            "placo is required for arm kinematics. Install the optional dependency "
+            "placo, then retry."
         ) from exc
 
 

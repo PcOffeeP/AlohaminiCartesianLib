@@ -86,9 +86,9 @@ subprocess 真跑脚本，因此模块级要求可选依赖 placo。
 # - 目标流非确定性（同 seed 两次结果不同）      -> T15-3；
 # - 不可用 URDF 静默成功                       -> T14-9。
 #
-# 环境事实（已核实）：指定 runner `uv run --no-sync` 的 dev group 含 placo，
-# 且 `uv run --no-sync python -c "import placo"` 约 0.5 s 可用；脚本与测试共用
-# 同一 .venv。所有 subprocess 以仓库根为 cwd，传入小 steps 保证快速。
+# 环境事实（本库）：开发环境默认不含 placo，缺它时本模块由下面的
+# pytest.importorskip 整模块跳过；装了 placo 的环境才会真跑这些 subprocess 用例。
+# 所有 subprocess 以仓库根为 cwd，传入小 steps 保证快速。
 
 from __future__ import annotations
 
