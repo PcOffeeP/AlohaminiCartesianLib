@@ -17,6 +17,11 @@ dependencies = ["numpy>=1.26"]
 # 例如从上游仓库以 editable 方式安装；本文件不声明可解析的 lerobot 分发地址。
 runtime = ["lerobot"]
 yaml = ["PyYAML>=6.0"]
+# 需要跑依赖 placo 的数值 IK 用例（tests/test_arm_ik.py、tests/benchmarks/）
+# 与离线基准（benchmarks/alohamini_ik）时安装本 extra。
+# placo 自 0.10 系列才切到 qpmad QP 后端，本库的数值断言基线按 0.10 定；
+# 上限钉在 <0.11，防止再换后端导致数值漂移、把断言变成假失败。
+kinematics = ["placo>=0.10.1,<0.11"]
 
 [dependency-groups]
 dev = [
