@@ -44,19 +44,19 @@ git log --oneline -3           # 最近提交
 ## 6 项目现状（v0.2.0，代码提交 3fd41e4）
 
 - 已建成：`adapter`（与厂商软件打交道的唯一入口）、`capability`（探测对端具备哪些能力）、`config`（配置分层覆盖）、`control`（控制层）、`kinematics`（运动学与关节换算）
-- 测试：737 条实跑通过，51 条跳过
-- 跳过的原因：47+2 条需要可选的 `placo`（IK 数值用例），2 个 parity 文件需要 `lerobot` 做对照。**这不等于全部通过**，引用时必须说清
-- 未搬入：`benchmarks/` 现场采集与测量脚本（计划 S4 与现场冒烟一起做）
-- 仓库现状：未配置 remote，无 tag，全部提交只在本地
+- 测试：737 条实跑通过，52 条跳过
+- 跳过的原因：47+2 条需要可选的 `placo`（IK 数值用例），2 个 parity 文件需要 `lerobot` 做对照，迁入的 benchmark 测试模块因缺 `placo` 整模块跳过（记 1 条 skip）。**这不等于全部通过**，引用时必须说清
+- 未搬入：`benchmarks/alohamini_io` 两脚本与现场 smoke 未完成，见 `docs/migration-backlog.md`
+- 仓库现状：已打 `v0.2.0` tag（指向代码提交 `3fd41e4`），未配置 remote，全部提交只在本地
 
 ## 7 待决事项
 
 1. `placo` 是否声明为 `kinematics` extra 并装进开发环境——决定 49 条数值用例能否真跑
-2. `benchmarks/` 迁移时机（S4）
-3. 旧仓库那 49 例线上协议测试是否搬入（测的是厂商侧模块，本库不包含）
+2. `benchmarks/` 迁移时机——已部分完成（`benchmarks/alohamini_ik` 已迁入），剩余见 `docs/decisions.md` D7 与 `docs/migration-backlog.md`
+3. 旧仓库那 49 例线上协议测试是否搬入（测的是厂商侧模块，本库不包含）——已决：不迁，见 D7
 
 ## 8 相关位置
 
-- 决策记录：`docs/decisions.md`（D1–D6）
+- 决策记录：`docs/decisions.md`（D1–D7）
 - 实测数据：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/`
 - 旧仓库（只读参考）：`/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini-cartesian-teleop`

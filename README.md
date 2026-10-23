@@ -10,6 +10,17 @@ AlohaMini 笛卡尔遥操作的产品侧库：对机器人运行时的适配协�
 
 验证工具还把 metadata 的 `schema_version` 当成兼容判据。旧仓库 `benchmarks/alohamini_io/measure_latency.py` 的运动门禁只接受 `schema_version == 2`，遇到 schema 1 或字符串 `"2"` 直接拒绝，工具被版本号拦死，而真正该判的是这项能力在不在。
 
+## 与旧仓库的分工
+
+本库与旧仓库是两个项目：本库是产品侧的库，旧仓库是厂商运行时的 fork（从上游仓库分出来的副本）。
+
+| 项目 | 定位 | 包含什么 | 与本库的关系 |
+| --- | --- | --- | --- |
+| 本库 `alohamini-cartesian-lib` | 产品侧独立 Python 库，只跑在 PC 一侧 | 把「末端目标 → 六关节角 → 指令」翻译成协议动作发给 Host；不含厂商代码；测试离线、不连设备；唯一接触面是 `adapter/protocol.py` | 本库自身 |
+| 旧仓库 `/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini-cartesian-teleop` | 厂商运行时的 fork | `src/lerobot`，版本 0.6.1，remote 指向 `liyiteng/lerobot_alohamini`，当前分支 `codex/alohamini-cartesian-teleop`；该路径是 `lerobot_alohamini` 仓库的 worktree；含 Host 进程、电机总线、相机、录制、ROS 兼容；实机运行的唯一已验证路径 | 本库不修改它，只作只读参考 |
+
+改产品逻辑进本库，改 vendor 运行时进旧仓库上游，两边不混。
+
 ## 六项定案
 
 | 编号 | 定案 | 要点 |
@@ -186,16 +197,18 @@ deg_per_unit = conversion.deg_per_unit
 
 v0.2.0 把控制层与运动学搬入库内：`control/`（会话与句柄、命令状态机、单臂控制器、`arm_ik`）、`kinematics/`（型号规格表、关节单位适配、`assets/am_arm200/kinematics.urdf`）。版本号从 `0.1.0` 升到 `0.2.0`，核心依赖从空改为 `numpy>=1.26`。行为变更一处：`connect()` 不再在内部 import `lerobot`，未注入 `client_factory` 时抛 `RuntimeUnavailable`。
 
-本轮 `pytest tests` 结果：`737 passed, 51 skipped`。
+`benchmarks/alohamini_ik/benchmark_arm_ik.py` 与配套测试 `tests/benchmarks/test_benchmark_arm_ik.py` 已迁入，离线可跑；本机缺 `placo` 时，该测试模块由 `pytest.importorskip` 整模块跳过，记 1 条 skip。
 
-- S4（剩余）：迁移 `benchmarks/`（旧仓库的 `benchmarks/alohamini_ik`、`benchmarks/alohamini_io` 仍在旧仓库），与现场 smoke（实机加 vendor 运行时）同轮，验证 overlay 能否完整表达现场差异。
+本轮 `pytest tests` 结果（本机实测）：`737 passed, 52 skipped`。
+
+- S4（剩余）：迁移旧仓库 `benchmarks/alohamini_io` 的两个脚本（`capture_robot_fingerprint.py`、`measure_latency.py`），并做现场 smoke（实机加 vendor 运行时），验证 overlay 能否完整表达现场差异。两项的阻塞条件与计划见 [docs/migration-backlog.md](docs/migration-backlog.md)。
 
 ## 已知限制
 
 - 缺 `placo` 时，`tests/test_arm_ik.py` 的 47 条数值参数实例与 `tests/test_control_controller.py` 的 2 条真 IK 用例跳过。运动学的数值行为在最小环境里没有测试证据。
 - 缺 `lerobot` 时，`tests/test_kinematics_lerobot_parity.py` 与 `tests/test_control_api_lerobot_parity.py` 在收集期整体跳过。这两个文件用真实 `FeetechMotorsBus` 与 `AlohaMiniClient` 作 oracle 做差分对照，所以与真实总线的整环对照未在最小环境执行。
 - `connect(...)` 必须注入 `client_factory`。默认工厂恒抛 `RuntimeUnavailable`，没有内部 import `lerobot` 的退路。
-- `benchmarks/` 尚未搬入本库。
+- `benchmarks/alohamini_io` 的两个采集/测量脚本未迁入，见 [docs/migration-backlog.md](docs/migration-backlog.md)。
 
 ## 开发与测试
 
@@ -208,7 +221,7 @@ ruff check .
 
 `addopts = "-q"` 已经生效，自己再加 `-q` 会变成 `-qq` 并隐藏 `N passed` 汇总行。看不到汇总行时加 `-o addopts=""`。
 
-当前 `pytest tests` 报 `737 passed, 51 skipped`。跳过项全部来自本机没有装可选依赖，构成见「已知限制」。测试不依赖真实设备，不联网。
+当前 `pytest tests` 报 `737 passed, 52 skipped`。跳过项全部来自本机没有装可选依赖，构成见「已知限制」。测试不依赖真实设备，不联网。
 
 ## 目录结构
 
@@ -217,7 +230,9 @@ alohamini-cartesian-lib/
 ├── pyproject.toml                    # 包元数据、extras、dev 组、pytest 与 ruff 配置
 ├── README.md
 ├── .gitignore
-├── docs/decisions.md                 # D1–D6 决策记录
+├── benchmarks/alohamini_ik/benchmark_arm_ik.py  # FK 与数值 IK 基准脚本
+├── docs/decisions.md                 # D1–D7 决策记录
+├── docs/migration-backlog.md         # 未迁入清单与阻塞条件
 ├── src/alohamini_cartesian/
 │   ├── __init__.py                   # __version__ = "0.2.0"
 │   ├── py.typed
@@ -236,6 +251,7 @@ alohamini-cartesian-lib/
 │       ├── joint_adapter.py          # 电机刻度与关节角的单位适配
 │       └── assets/am_arm200/kinematics.urdf
 └── tests/
+    ├── benchmarks/test_benchmark_arm_ik.py         # 基准测试，缺 placo 时整模块跳过
     ├── test_arm_ik.py
     ├── test_capability.py
     ├── test_config_overlay.py
