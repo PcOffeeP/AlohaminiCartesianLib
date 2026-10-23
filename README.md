@@ -33,6 +33,7 @@ AlohaMini 笛卡尔遥操作的产品侧库：对机器人运行时的适配协�
 | D6 | numpy 依赖 | 核心不再零依赖，只加 numpy；不引入 torch/scipy，`placo` 的依赖形态见 D8 |
 | D7 | 迁移边界 | 厂商侧协议测试不迁入，本库对厂商内部协议不负回归责任 |
 | D8 | `placo` 依赖形态 | 声明 `kinematics` extra（`placo>=0.10.1,<0.11`），接受 numpy 落到 2.3.x |
+| D9 | 现场基准脚本迁移时机 | `benchmarks/alohamini_io` 两脚本与配套测试在 v0.4.0 迁入，不等 S4；语义零改动，`lerobot` 保持函数体内惰性导入 |
 
 每条的背景、决定与代价见 [docs/ADR.md](docs/ADR.md)。
 
@@ -211,16 +212,18 @@ v0.3.0 做三件事：把 `placo` 声明为 `kinematics` extra（`placo>=0.10.1,
 
 `benchmarks/alohamini_ik/benchmark_arm_ik.py` 与配套测试 `tests/benchmarks/test_benchmark_arm_ik.py` 已迁入，离线可跑。开发环境已按 `kinematics` extra 装上 `placo`，离线 IK 基准与 IK 数值用例真跑，不再整模块跳过。
 
-本轮 `pytest tests` 结果（本机实测，命令 `.venv/bin/python -m pytest tests -q -o addopts= -p no:cacheprovider`）：`823 passed, 2 skipped`。跳过只剩两个 parity 文件（缺 `lerobot`）。
+v0.4.0 把旧仓库 `benchmarks/alohamini_io` 的两个现场基准脚本与配套测试一并迁入：`benchmarks/alohamini_io/capture_robot_fingerprint.py`（473 行）与 `benchmarks/alohamini_io/measure_latency.py`（2151 行），配套测试 `tests/benchmarks/test_capture_robot_fingerprint.py`（638 行，静态 20 个测试函数）与 `tests/benchmarks/test_measure_latency.py`（3365 行，静态 110 个测试函数）。版本号从 `0.3.0` 升到 `0.4.0`。迁入原则是语义零改动：四个文件与旧仓库版本 `ast.dump` 逐一相等（4/4），字节不同处只是 `ruff format` 的折行（旧仓库 line-length 110，本库 100）。两个脚本对 `lerobot` 的 import 全在 `default_client_factory()` 函数体内（`capture_robot_fingerprint.py:140-141`、`measure_latency.py:847-848`），模块顶层只有标准库与 numpy；配套测试用依赖注入的 fake client 与 fake clock，不碰 `lerobot`、`zmq`、`socket`、线程。为让这四份文件过本库风格门，`pyproject.toml` 尾部按四条精确路径新增 `[tool.ruff.lint.per-file-ignores]`，全局 `select` / `ignore` 未改。取舍见 [docs/ADR.md](docs/ADR.md) D9。
 
-- S4（剩余）：迁移旧仓库 `benchmarks/alohamini_io` 的两个脚本（`capture_robot_fingerprint.py`、`measure_latency.py`），并做现场 smoke（实机加 vendor 运行时），验证 overlay 能否完整表达现场差异。两项的阻塞条件与计划见 [docs/migration-backlog.md](docs/migration-backlog.md)。
+本轮 `pytest tests` 结果（本机实测，命令 `uv run --no-sync python -m pytest tests -o addopts="" -p no:cacheprovider`）：`999 passed, 2 skipped`。迁移前是 `823 passed, 2 skipped`，增量 176 条 = 23 条（capture 测试参数化展开）+ 153 条（measure 测试参数化展开）。跳过仍是那两个 parity 文件（缺 `lerobot`）。`tests/benchmarks` 子集 190 条通过 = 14（`test_benchmark_arm_ik.py`）+ 23 + 153。`ruff check .` 报 `All checks passed!`，`ruff format --check .` 报 `34 files already formatted`。
+
+- S4（剩余）：只做真机侧的现场验证——两个脚本对着真机 Host 跑一遍，产出 Gate A–E 归档与配置样例。脚本迁移与离线测试在 v0.4.0 已完成，不属 S4。阻塞条件与计划见 [docs/migration-backlog.md](docs/migration-backlog.md)。
 
 ## 已知限制
 
 - 未装 `kinematics` extra 时，`tests/test_arm_ik.py` 的数值参数实例、`tests/test_control_controller.py` 的 2 条真 IK 用例与 `tests/benchmarks/test_benchmark_arm_ik.py` 因缺 `placo` 跳过。开发环境已装该 extra，本机这部分真跑。
 - 缺 `lerobot` 时，`tests/test_kinematics_lerobot_parity.py` 与 `tests/test_control_api_lerobot_parity.py` 在收集期整体跳过。这两个文件用真实 `FeetechMotorsBus` 与 `AlohaMiniClient` 作 oracle 做差分对照，所以与真实总线的整环对照未在最小环境执行。
 - `connect(...)` 必须注入 `client_factory`。默认工厂恒抛 `RuntimeUnavailable`，没有内部 import `lerobot` 的退路。
-- `benchmarks/alohamini_io` 的两个采集/测量脚本未迁入，见 [docs/migration-backlog.md](docs/migration-backlog.md)。
+- `benchmarks/alohamini_io` 的两个脚本已入库，配套测试离线跑通 176 条用例，但从未对着真机 Host 跑过。缺三样证据：`schema_version == 2` 的实际取值没有样本；`measure_latency.py` 的 Mode B `tracking` 会真动机器人，未跑过；Gate F（运行时门禁，决定这次测量能不能发命令）的真实拒绝路径未跑过。见 [docs/migration-backlog.md](docs/migration-backlog.md)。
 
 ## 开发与测试
 
@@ -233,7 +236,7 @@ uv run --no-sync ruff check .             # 代码风格
 
 本仓库没有 `uv.lock`，所以一律带 `--no-sync`：不带它的 `uv run` 会自行解析依赖并新写一个 `uv.lock`。`addopts = "-q"` 已经生效，自己再加 `-q` 会变成 `-qq` 并隐藏 `N passed` 汇总行；看不到汇总行时用 `-o addopts=""`。
 
-当前 `pytest tests` 报 `823 passed, 2 skipped`。跳过项只剩两个 parity 文件缺 `lerobot`，构成见「已知限制」。测试不依赖真实设备，不联网。
+当前 `pytest tests` 报 `999 passed, 2 skipped`。跳过项只剩两个 parity 文件缺 `lerobot`，构成见「已知限制」。测试不依赖真实设备，不联网。
 
 ## 目录结构
 
@@ -242,11 +245,13 @@ alohamini-cartesian-lib/
 ├── pyproject.toml                    # 包元数据、extras、dev 组、pytest 与 ruff 配置
 ├── README.md
 ├── .gitignore
-├── benchmarks/alohamini_ik/benchmark_arm_ik.py  # FK 与数值 IK 基准脚本
-├── docs/ADR.md                       # D1–D8 决策记录
-├── docs/migration-backlog.md         # 未迁入清单与阻塞条件
+├── benchmarks/alohamini_ik/benchmark_arm_ik.py           # FK 与数值 IK 基准脚本
+├── benchmarks/alohamini_io/capture_robot_fingerprint.py  # 现场采集对端 metadata 指纹，lerobot 惰性 import
+├── benchmarks/alohamini_io/measure_latency.py            # 现场测时延，Mode B tracking 会真动机器人
+├── docs/ADR.md                       # D1–D9 决策记录
+├── docs/migration-backlog.md         # 迁移进度、剩余事项与阻塞条件
 ├── src/alohamini_cartesian/
-│   ├── __init__.py                   # __version__ = "0.3.0"
+│   ├── __init__.py                   # __version__ = "0.4.0"
 │   ├── py.typed
 │   ├── adapter/protocol.py           # 对 lerobot 的唯一接触面（typing.Protocol）
 │   ├── capability/detect.py          # 能力探测与降级、单位换算裁决
@@ -264,6 +269,8 @@ alohamini-cartesian-lib/
 │       └── assets/am_arm200/kinematics.urdf
 └── tests/
     ├── benchmarks/test_benchmark_arm_ik.py         # 基准测试，缺 placo 时整模块跳过
+    ├── benchmarks/test_capture_robot_fingerprint.py  # 采集脚本测试，fake client，不碰 lerobot
+    ├── benchmarks/test_measure_latency.py          # 测量脚本测试，fake client 与 fake clock，不碰 lerobot
     ├── test_arm_ik.py
     ├── test_capability.py
     ├── test_config_overlay.py

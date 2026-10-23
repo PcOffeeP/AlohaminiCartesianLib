@@ -1,6 +1,6 @@
 # 架构决策记录（ADR）
 
-本文记录 `alohamini-cartesian` 自 v0.1.0 起沿用的决策，编号 D1–D8。每条按背景、决定、后果三段记录，后果同时写正面收益与已知代价。状态写作「已接受（自 vX.Y.Z 起）」，不记具体日期。新的重大取舍按顺序追加编号，已接受的条目不回改。
+本文记录 `alohamini-cartesian` 自 v0.1.0 起沿用的决策，编号 D1–D9。每条按背景、决定、后果三段记录，后果同时写正面收益与已知代价。状态写作「已接受（自 vX.Y.Z 起）」，不记具体日期。新的重大取舍按顺序追加编号，已接受的条目不回改。
 
 ## 索引
 
@@ -14,6 +14,7 @@
 | D6 | numpy 依赖：核心只加 numpy，不引入 torch/scipy | 已接受（自 v0.2.0 起） |
 | D7 | 迁移边界：厂商侧协议测试不迁入 | 已接受（自 v0.2.0 起） |
 | D8 | placo 依赖形态：声明 kinematics extra，接受 numpy 2.3.x | 已接受（自 v0.2.0 起） |
+| D9 | 现场基准脚本迁移时机：`benchmarks/alohamini_io` 两脚本与配套测试在 v0.4.0 迁入 | 已接受（自 v0.4.0 起） |
 
 ## D1 依赖形态：独立包，lerobot 作为可选 extra
 
@@ -67,6 +68,8 @@
 
 正面：v0.1.0 的边界清楚，验收只依赖 71 条不碰硬件的测试；`lerobot` 与产品代码的解耦在搬控制回路之前先立住，后面搬迁时不必再改适配面。
 已知代价：迁移期间两处代码并存，旧仓库与新库都有控制相关代码，修 bug 时要判断改哪一处，同一问题可能被修两遍；S3 完成之前，运动学与控制回路仍只在旧仓库可用。
+
+后续修订（v0.4.0）：D3 把 `benchmarks/` 推到 S4 的安排已部分提前——`benchmarks/alohamini_io` 两个脚本与配套测试在 v0.4.0 迁入，见 D9。
 
 ## D4 启动方式：新开仓库，旧仓库冻结为只读参考
 
@@ -175,3 +178,31 @@ S3 要把旧仓库的 `control/` 与运动学搬进本库。旧代码在 `contro
 正面：那 49 条运动学数值用例真跑并通过；离线 IK 基准（`benchmarks/alohamini_ik/benchmark_arm_ik.py`）可运行。实测 0.9.15 与 0.10.1 的 IK 解一致到 1e-13 量级（12 个关节角分量最大差 4.3e-14 度），说明数值基线对 `placo` 版本不敏感。
 
 已知代价：依赖闭包 46 个包，含 pinocchio 一整套与 `meshcat`（其传递依赖含 tornado、pyzmq、pillow、ipython）。numpy 上限被 `pin==3.8.0` 拉来的 `cmeel-boost~=1.89.0` 锁在 2.3.x——上游 1.90.0 已放开为 `numpy>=2.0`，待 `pin` 升到 4.x 后这条限制才解除。换回 `placo` 0.9.x 不能规避这条代价（0.9.26 同样要 `pin==3.8.0`）。
+
+## D9 现场基准脚本迁移时机：`benchmarks/alohamini_io` 两脚本与配套测试在 v0.4.0 迁入
+
+状态：已接受（自 v0.4.0 起）
+
+### 背景
+
+`docs/migration-backlog.md` 原定把 `benchmarks/alohamini_io` 两个脚本推到 S4 现场，理由是「本机没有 Host，迁入后也只是一份跑不起来的代码」。v0.4.0 重新核查，这条依据对脚本成立，对配套测试不成立。
+
+两个脚本对 `lerobot` 的 import 全部在 `default_client_factory()` 函数体内（`capture_robot_fingerprint.py:140-141`、`measure_latency.py:847-848`），模块顶层只有标准库与 numpy。两个配套测试只用标准库与 pytest，用依赖注入的 fake client（假的客户端对象顶上真连接）与 fake clock，不碰 `lerobot`、`zmq`、`socket`、线程。
+
+它们在旧仓库原位跑不起来的唯一原因，是旧仓库根 `tests/conftest.py` 顶层 import `lerobot`；pytest 收集测试时必然加载这个文件。迁入本库后不再加载那个 conftest。
+
+### 决定
+
+把两个脚本与配套测试在 v0.4.0 一并迁入，不等 S4。
+
+迁入原则是语义零改动：与原文件 `ast.dump` 逐一相等（实测 4/4），只允许 `ruff format` 的机械折行与版本号同步。字节不同处只是折行，原因是旧仓库 line-length 110、本库 100。
+
+为让这四份文件通过本库的风格门（ruff 的风格检查与格式校验），`pyproject.toml` 尾部新增 `[tool.ruff.lint.per-file-ignores]`，按四条精确路径配置，不 exclude 目录，不放宽全局 `select` / `ignore`。脚本两条豁免 `D103, D107, E501`；测试两条豁免 `ANN001/ANN201/ANN202/ANN204`（capture）与 `ANN001, ANN003, ANN201, ANN202, ANN204, ANN205, D403, E501`（measure）。
+
+脚本里的 `from lerobot` 保持函数体内惰性导入，`lerobot` 仍不进 `dependencies`。
+
+### 后果
+
+正面：130 个测试函数（静态计数，20 + 110）进入本库测试集，参数化展开后是 176 条用例。`pytest tests` 从 `823 passed, 2 skipped` 变为 `999 passed, 2 skipped`，跳过的仍是两个 parity 文件（缺 `lerobot`）。`tests/benchmarks` 子集 190 条通过 = 14（`test_benchmark_arm_ik.py`）+ 23 + 153。这套采集与测量逻辑此后由本库回归网守着，不再依赖旧仓库。
+
+已知代价：迁入的是「有测试、无实测」的代码。两个脚本从未对着真机 Host 跑过，`schema_version == 2` 的实际取值、Mode B 的真实运动、Gate F 的真实拒绝路径都还没有证据。per-file-ignores 让这四份文件在 docstring、类型注解与行宽三条规则上不受本库标准约束，长期看是风格例外。

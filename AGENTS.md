@@ -48,23 +48,23 @@ git log --oneline -3                    # 最近提交
 - **pytest 不要再追加 `-q`**：`addopts = "-q"` 已生效，再加会变成 `-qq` 并隐藏 `N passed, M skipped` 汇总行。要看汇总行用 `uv run --no-sync python -m pytest tests -o addopts=""`。
 - 本包已以 editable 方式装进 `.venv`，`uv run --no-sync` 直接复用，不必先 `pip install -e .`。
 
-## 6 项目现状（v0.3.0）
+## 6 项目现状（v0.4.0）
 
-- 已建成：`adapter`（与厂商软件打交道的唯一入口）、`capability`（探测对端具备哪些能力）、`config`（配置分层覆盖）、`control`（控制层）、`kinematics`（运动学与关节换算）、`benchmarks`（离线 IK 基准 `benchmarks/alohamini_ik/benchmark_arm_ik.py`）
-- 测试：823 条实跑通过，2 条跳过
+- 已建成：`adapter`（与厂商软件打交道的唯一入口）、`capability`（探测对端具备哪些能力）、`config`（配置分层覆盖）、`control`（控制层）、`kinematics`（运动学与关节换算）、`benchmarks`（离线 IK 基准 `benchmarks/alohamini_ik/benchmark_arm_ik.py`，现场采集与测量脚本 `benchmarks/alohamini_io/capture_robot_fingerprint.py` 与 `benchmarks/alohamini_io/measure_latency.py`）
+- 测试：999 条实跑通过，2 条跳过
 - 跳过的原因：两个 parity 文件需要 `lerobot` 做对照（`tests/test_control_api_lerobot_parity.py`、`tests/test_kinematics_lerobot_parity.py`）。**这不等于全部通过**，引用时必须说清
-- 未搬入：`benchmarks/alohamini_io` 两脚本与现场 smoke 未完成，见 `docs/migration-backlog.md`
-- 仓库现状：已打 `v0.3.0` tag（指向 `0.3.0` 版本提交），`v0.2.0` tag 仍指向 `3fd41e4`；未配置 remote，全部提交只在本地
+- 未完成：现场 smoke（S4）与配置样例。`benchmarks/alohamini_io` 两脚本与其配套测试已在 v0.4.0 迁入并有离线测试，但从未对着真机 Host 跑过，见 `docs/migration-backlog.md`
+- 仓库现状：`v0.2.0`、`v0.3.0`、`v0.4.0` 三个 tag 均为 annotated（`git cat-file -t` 报 `tag`）。`v0.2.0` 指向 `3fd41e4`（`feat: 迁移控制层与运动学到独立库（v0.2.0）`）；`v0.3.0` 指向 `4281f2b`（`release: v0.3.0 版本号与文档同步`）；`v0.4.0` 指向本次文档提交（代码提交 `d23be22`）；未配置 remote，全部提交只在本地
 
 ## 7 待决事项
 
 1. `placo` 依赖形态——已决：声明 `kinematics` extra（`placo>=0.10.1,<0.11`）并装进开发环境，接受 numpy 落到 2.3.x，见 `docs/ADR.md` D8
-2. `benchmarks/` 迁移时机——已部分完成（`benchmarks/alohamini_ik` 已迁入），剩余见 `docs/ADR.md` D7 与 `docs/migration-backlog.md`
+2. `benchmarks/` 迁移时机——已迁完（`benchmarks/alohamini_ik` 在 v0.3.0，`benchmarks/alohamini_io` 在 v0.4.0），剩现场验证：真机 metadata 取值、Mode A/B 测量、Gate F 拒绝路径、配置样例采集。见 `docs/ADR.md` D3 与 D9、`docs/migration-backlog.md`
 3. 旧仓库那 49 例线上协议测试是否搬入（测的是厂商侧模块，本库不包含）——已决：不迁，见 D7
 4. 限位表倒置（`lo > hi`）没有校验也没有用例守护，`solve()` 入口不检查
 
 ## 8 相关位置
 
-- 决策记录：`docs/ADR.md`（D1–D8）
+- 决策记录：`docs/ADR.md`（D1–D9）
 - 实测数据：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/`
 - 旧仓库（只读参考）：`/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini-cartesian-teleop`
