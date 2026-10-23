@@ -1,4 +1,4 @@
-# agents.md — 本项目的 Agent 行为约定
+# AGENTS.md — 本项目的 Agent 行为约定
 
 任何 Agent 在这个项目里工作或汇报，都遵守本文件。它是约束，不是建议。
 
@@ -53,13 +53,13 @@ git log --oneline -3           # 最近提交
 
 ## 7 待决事项
 
-1. `placo` 依赖形态——已决：声明 `kinematics` extra（`placo>=0.10.1,<0.11`）并装进开发环境，接受 numpy 落到 2.3.x，见 `docs/decisions.md` D8
-2. `benchmarks/` 迁移时机——已部分完成（`benchmarks/alohamini_ik` 已迁入），剩余见 `docs/decisions.md` D7 与 `docs/migration-backlog.md`
+1. `placo` 依赖形态——已决：声明 `kinematics` extra（`placo>=0.10.1,<0.11`）并装进开发环境，接受 numpy 落到 2.3.x，见 `docs/ADR.md` D8
+2. `benchmarks/` 迁移时机——已部分完成（`benchmarks/alohamini_ik` 已迁入），剩余见 `docs/ADR.md` D7 与 `docs/migration-backlog.md`
 3. 旧仓库那 49 例线上协议测试是否搬入（测的是厂商侧模块，本库不包含）——已决：不迁，见 D7
 4. 限位表倒置（`lo > hi`）没有校验也没有用例守护，`solve()` 入口不检查
 
 ## 8 相关位置
 
-- 决策记录：`docs/decisions.md`（D1–D8）
+- 决策记录：`docs/ADR.md`（D1–D8）
 - 实测数据：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/`
 - 旧仓库（只读参考）：`/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini-cartesian-teleop`

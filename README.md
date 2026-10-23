@@ -34,7 +34,7 @@ AlohaMini 笛卡尔遥操作的产品侧库：对机器人运行时的适配协�
 | D7 | 迁移边界 | 厂商侧协议测试不迁入，本库对厂商内部协议不负回归责任 |
 | D8 | `placo` 依赖形态 | 声明 `kinematics` extra（`placo>=0.10.1,<0.11`），接受 numpy 落到 2.3.x |
 
-每条的背景、决定与代价见 [docs/decisions.md](docs/decisions.md)。
+每条的背景、决定与代价见 [docs/ADR.md](docs/ADR.md)。
 
 ## 安装
 
@@ -56,7 +56,7 @@ pip install -e ".[yaml]"
 pip install -e ".[kinematics]"
 ```
 
-这个 extra 会把 numpy 带到 2.3.x：`placo` 依赖 `pin==3.8.0`，它拉来的 `cmeel-boost~=1.89.0` 要求 numpy 2.3.x，详见 [docs/decisions.md](docs/decisions.md) D8。
+这个 extra 会把 numpy 带到 2.3.x：`placo` 依赖 `pin==3.8.0`，它拉来的 `cmeel-boost~=1.89.0` 要求 numpy 2.3.x，详见 [docs/ADR.md](docs/ADR.md) D8。
 
 需要接触真实运行时再加 `runtime` extra：
 
@@ -243,7 +243,7 @@ alohamini-cartesian-lib/
 ├── README.md
 ├── .gitignore
 ├── benchmarks/alohamini_ik/benchmark_arm_ik.py  # FK 与数值 IK 基准脚本
-├── docs/decisions.md                 # D1–D8 决策记录
+├── docs/ADR.md                       # D1–D8 决策记录
 ├── docs/migration-backlog.md         # 未迁入清单与阻塞条件
 ├── src/alohamini_cartesian/
 │   ├── __init__.py                   # __version__ = "0.3.0"

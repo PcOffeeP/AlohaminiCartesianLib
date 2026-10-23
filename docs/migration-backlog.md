@@ -7,7 +7,7 @@
 | `benchmarks/alohamini_io/capture_robot_fingerprint.py` | 仍在旧仓库 `benchmarks/alohamini_io/`，约 469 行；配套测试约 20 例，用 fake client，本身可离线跑 | 需要 Pi 上常驻 Host 进程；对端 metadata 的 `schema_version` 必须为 2（Schema 2），否则脚本以退出码 6 退出（fail-closed） | S4 现场 smoke |
 | `benchmarks/alohamini_io/measure_latency.py` | 仍在旧仓库 `benchmarks/alohamini_io/`，约 2116 行；配套测试约 110 例 | 需要真机：Mode B `tracking` 会真动机器人；Gate F 要求 `schema_version == 2` | S4 现场 smoke |
 | 现场 smoke（S4） | 未开始，需要一次到现场的窗口 | 需要 AlohaMini 2 Pro 真机、Pi 上 Host 常驻、PC 与 Pi 同网段、现场授权、Gate A–E 归档（一臂一 Gate 一 JSON） | 一次现场窗口内完成 |
-| 旧仓库厂商侧协议测试 `tests/robots/test_alohamini_cartesian_protocol.py` | 留在旧仓库，49 个测试函数 | 决定不迁，理由见 `docs/decisions.md` D7 | 不迁（见 D7） |
+| 旧仓库厂商侧协议测试 `tests/robots/test_alohamini_cartesian_protocol.py` | 留在旧仓库，49 个测试函数 | 决定不迁，理由见 `docs/ADR.md` D7 | 不迁（见 D7） |
 | 配置样例 | D2 规定「模板文件 → 现场文件」两层 YAML 覆盖，两仓库都没有 YAML 实例文件，旧仓库靠 draccus 命令行参数传配置。这是缺口，不是已完成项 | 现场取值的真实样例要现场采集才可信 | S4 随现场 smoke 一起产出模板与现场两份样例 |
 
 ## 1 `benchmarks/alohamini_io/capture_robot_fingerprint.py`
@@ -52,7 +52,7 @@
 
 数字来源：旧仓库只读盘点，测试函数 49 个。
 
-结论：决定不迁，理由写在 `docs/decisions.md` D7。这 49 条测的是厂商模块的行为，本库不含这些代码；本库对厂商内部协议不负回归责任。
+结论：决定不迁，理由写在 `docs/ADR.md` D7。这 49 条测的是厂商模块的行为，本库不含这些代码；本库对厂商内部协议不负回归责任。
 
 计划：不迁（见 D7）。
 
