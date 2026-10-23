@@ -35,13 +35,18 @@
 ## 5 怎么自检
 
 ```bash
-python -m pytest tests -q      # 自动测试
-ruff check .                   # 代码风格
-ruff format --check .          # 格式
-git log --oneline -3           # 最近提交
+uv run --no-sync ruff check .           # 代码风格
+uv run --no-sync ruff format --check .  # 格式
+uv run --no-sync python -m pytest tests # 自动测试
+git log --oneline -3                    # 最近提交
 ```
 
-本包已以 editable 方式装进 `.venv`，上面的裸命令可直接跑，不必先 `pip install -e .`。
+为什么这样写：
+
+- **必须走 `uv`**：裸 `ruff` 不在 `PATH` 上（`exit 127`）；裸 `python`、`pytest` 解析到 miniconda，不是本库的 `.venv`。
+- **必须带 `--no-sync`**：本仓库没有 `uv.lock`，不带它的 `uv run` 会自行解析依赖并新写一个 `uv.lock`。`--no-sync` 只复用现有 `.venv`（editable 安装），不装包、不改环境、不产生新文件。
+- **pytest 不要再追加 `-q`**：`addopts = "-q"` 已生效，再加会变成 `-qq` 并隐藏 `N passed, M skipped` 汇总行。要看汇总行用 `uv run --no-sync python -m pytest tests -o addopts=""`。
+- 本包已以 editable 方式装进 `.venv`，`uv run --no-sync` 直接复用，不必先 `pip install -e .`。
 
 ## 6 项目现状（v0.3.0）
 

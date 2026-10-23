@@ -224,14 +224,14 @@ v0.3.0 做三件事：把 `placo` 声明为 `kinematics` extra（`placo>=0.10.1,
 
 ## 开发与测试
 
-pytest 已配好 `testpaths`、`pythonpath = ["src"]` 与 `addopts = "-q"`。本包已以 editable 方式装进 `.venv`，裸命令 `.venv/bin/python -m pytest tests` 可直接跑。
+pytest 已配好 `testpaths`、`pythonpath = ["src"]` 与 `addopts = "-q"`。本包已以 editable 方式装进 `.venv`；`uv run --no-sync` 会直接复用这个 `.venv`，不装包、不改环境。
 
 ```bash
-python -m pytest tests      # 用 uv 时改 uv run pytest
-ruff check .
+uv run --no-sync python -m pytest tests   # 自动测试
+uv run --no-sync ruff check .             # 代码风格
 ```
 
-`addopts = "-q"` 已经生效，自己再加 `-q` 会变成 `-qq` 并隐藏 `N passed` 汇总行。看不到汇总行时加 `-o addopts=""`。
+本仓库没有 `uv.lock`，所以一律带 `--no-sync`：不带它的 `uv run` 会自行解析依赖并新写一个 `uv.lock`。`addopts = "-q"` 已经生效，自己再加 `-q` 会变成 `-qq` 并隐藏 `N passed` 汇总行；看不到汇总行时用 `-o addopts=""`。
 
 当前 `pytest tests` 报 `823 passed, 2 skipped`。跳过项只剩两个 parity 文件缺 `lerobot`，构成见「已知限制」。测试不依赖真实设备，不联网。
 
