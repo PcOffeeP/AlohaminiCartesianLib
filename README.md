@@ -21,7 +21,7 @@ AlohaMini 笛卡尔遥操作的产品侧库：对机器人运行时的适配协�
 
 改产品逻辑进本库，改 vendor 运行时进旧仓库上游，两边不混。
 
-## 六项定案
+## 定案一览
 
 | 编号 | 定案 | 要点 |
 | --- | --- | --- |
@@ -30,7 +30,9 @@ AlohaMini 笛卡尔遥操作的产品侧库：对机器人运行时的适配协�
 | D3 | 迁移范围 | 只搬 `control/`、运动学（`joint_kinematic_adapter`、`model_specs`）与 `benchmarks/`，分阶段搬，v0.1.0 不含 |
 | D4 | 启动方式 | 新开仓库，当前状态作为 `v0.1.0` 起点，旧仓库冻结为只读参考 |
 | D5 | 迁移范围与适配边界 | 控制层与运动学入库内，控制器不直连 `lerobot`，电机语义改为库内镜像 |
-| D6 | numpy 依赖 | 核心不再零依赖，只加 numpy；不引入 torch/scipy，`placo` 不声明 |
+| D6 | numpy 依赖 | 核心不再零依赖，只加 numpy；不引入 torch/scipy，`placo` 的依赖形态见 D8 |
+| D7 | 迁移边界 | 厂商侧协议测试不迁入，本库对厂商内部协议不负回归责任 |
+| D8 | `placo` 依赖形态 | 声明 `kinematics` extra（`placo>=0.10.1,<0.11`），接受 numpy 落到 2.3.x |
 
 每条的背景、决定与代价见 [docs/decisions.md](docs/decisions.md)。
 
@@ -47,6 +49,14 @@ pip install -e .
 ```bash
 pip install -e ".[yaml]"
 ```
+
+需要跑数值 IK 用例与离线 IK 基准时加 `kinematics` extra：
+
+```bash
+pip install -e ".[kinematics]"
+```
+
+这个 extra 会把 numpy 带到 2.3.x：`placo` 依赖 `pin==3.8.0`，它拉来的 `cmeel-boost~=1.89.0` 要求 numpy 2.3.x，详见 [docs/decisions.md](docs/decisions.md) D8。
 
 需要接触真实运行时再加 `runtime` extra：
 
@@ -168,7 +178,7 @@ deg_per_unit = conversion.deg_per_unit
 
 `kinematics/model_specs.py` 给出整机型号表 `ROBOT_SPECS` 与关节名表 `ARM_PROFILE_JOINTS`，并提供 `validate_robot_model` 与 `arm_state_keys`。`kinematics/joint_adapter.py` 的 `JointKinematicAdapter` 在原始电机刻度与运动学关节角之间双向换算，语义对齐 `MotorsBus` 的 `_normalize` / `_unnormalize`。
 
-`control/arm_ik.py` 做 FK 与数值 IK。它只在函数内惰性 import `placo`，`placo` 未写进依赖。
+`control/arm_ik.py` 做 FK 与数值 IK。`placo` 是可选 extra `kinematics` 的依赖，函数内惰性 import，见 D8。
 
 `control/api.py` 不含默认运行时：`connect` 未注入 `client_factory` 时抛 `RuntimeUnavailable`。真实连接由调用方自己构造运行时 client 传进来。
 
@@ -197,22 +207,22 @@ deg_per_unit = conversion.deg_per_unit
 
 v0.2.0 把控制层与运动学搬入库内：`control/`（会话与句柄、命令状态机、单臂控制器、`arm_ik`）、`kinematics/`（型号规格表、关节单位适配、`assets/am_arm200/kinematics.urdf`）。版本号从 `0.1.0` 升到 `0.2.0`，核心依赖从空改为 `numpy>=1.26`。行为变更一处：`connect()` 不再在内部 import `lerobot`，未注入 `client_factory` 时抛 `RuntimeUnavailable`。
 
-`benchmarks/alohamini_ik/benchmark_arm_ik.py` 与配套测试 `tests/benchmarks/test_benchmark_arm_ik.py` 已迁入，离线可跑；本机缺 `placo` 时，该测试模块由 `pytest.importorskip` 整模块跳过，记 1 条 skip。
+`benchmarks/alohamini_ik/benchmark_arm_ik.py` 与配套测试 `tests/benchmarks/test_benchmark_arm_ik.py` 已迁入，离线可跑。开发环境已按 `kinematics` extra 装上 `placo`，离线 IK 基准与 IK 数值用例真跑，不再整模块跳过。
 
-本轮 `pytest tests` 结果（本机实测）：`737 passed, 52 skipped`。
+本轮 `pytest tests` 结果（本机实测，命令 `.venv/bin/python -m pytest tests -q -o addopts= -p no:cacheprovider`）：`823 passed, 2 skipped`。跳过只剩两个 parity 文件（缺 `lerobot`）。
 
 - S4（剩余）：迁移旧仓库 `benchmarks/alohamini_io` 的两个脚本（`capture_robot_fingerprint.py`、`measure_latency.py`），并做现场 smoke（实机加 vendor 运行时），验证 overlay 能否完整表达现场差异。两项的阻塞条件与计划见 [docs/migration-backlog.md](docs/migration-backlog.md)。
 
 ## 已知限制
 
-- 缺 `placo` 时，`tests/test_arm_ik.py` 的 47 条数值参数实例与 `tests/test_control_controller.py` 的 2 条真 IK 用例跳过。运动学的数值行为在最小环境里没有测试证据。
+- 未装 `kinematics` extra 时，`tests/test_arm_ik.py` 的数值参数实例、`tests/test_control_controller.py` 的 2 条真 IK 用例与 `tests/benchmarks/test_benchmark_arm_ik.py` 因缺 `placo` 跳过。开发环境已装该 extra，本机这部分真跑。
 - 缺 `lerobot` 时，`tests/test_kinematics_lerobot_parity.py` 与 `tests/test_control_api_lerobot_parity.py` 在收集期整体跳过。这两个文件用真实 `FeetechMotorsBus` 与 `AlohaMiniClient` 作 oracle 做差分对照，所以与真实总线的整环对照未在最小环境执行。
 - `connect(...)` 必须注入 `client_factory`。默认工厂恒抛 `RuntimeUnavailable`，没有内部 import `lerobot` 的退路。
 - `benchmarks/alohamini_io` 的两个采集/测量脚本未迁入，见 [docs/migration-backlog.md](docs/migration-backlog.md)。
 
 ## 开发与测试
 
-pytest 已配好 `testpaths`、`pythonpath = ["src"]` 与 `addopts = "-q"`，不用先装包也能直接跑。
+pytest 已配好 `testpaths`、`pythonpath = ["src"]` 与 `addopts = "-q"`。本包已以 editable 方式装进 `.venv`，裸命令 `.venv/bin/python -m pytest tests` 可直接跑。
 
 ```bash
 python -m pytest tests      # 用 uv 时改 uv run pytest
@@ -221,7 +231,7 @@ ruff check .
 
 `addopts = "-q"` 已经生效，自己再加 `-q` 会变成 `-qq` 并隐藏 `N passed` 汇总行。看不到汇总行时加 `-o addopts=""`。
 
-当前 `pytest tests` 报 `737 passed, 52 skipped`。跳过项全部来自本机没有装可选依赖，构成见「已知限制」。测试不依赖真实设备，不联网。
+当前 `pytest tests` 报 `823 passed, 2 skipped`。跳过项只剩两个 parity 文件缺 `lerobot`，构成见「已知限制」。测试不依赖真实设备，不联网。
 
 ## 目录结构
 
@@ -231,7 +241,7 @@ alohamini-cartesian-lib/
 ├── README.md
 ├── .gitignore
 ├── benchmarks/alohamini_ik/benchmark_arm_ik.py  # FK 与数值 IK 基准脚本
-├── docs/decisions.md                 # D1–D7 决策记录
+├── docs/decisions.md                 # D1–D8 决策记录
 ├── docs/migration-backlog.md         # 未迁入清单与阻塞条件
 ├── src/alohamini_cartesian/
 │   ├── __init__.py                   # __version__ = "0.2.0"

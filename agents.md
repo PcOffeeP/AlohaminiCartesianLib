@@ -41,22 +41,25 @@ ruff format --check .          # 格式
 git log --oneline -3           # 最近提交
 ```
 
-## 6 项目现状（v0.2.0，代码提交 3fd41e4）
+本包已以 editable 方式装进 `.venv`，上面的裸命令可直接跑，不必先 `pip install -e .`。
 
-- 已建成：`adapter`（与厂商软件打交道的唯一入口）、`capability`（探测对端具备哪些能力）、`config`（配置分层覆盖）、`control`（控制层）、`kinematics`（运动学与关节换算）
-- 测试：737 条实跑通过，52 条跳过
-- 跳过的原因：47+2 条需要可选的 `placo`（IK 数值用例），2 个 parity 文件需要 `lerobot` 做对照，迁入的 benchmark 测试模块因缺 `placo` 整模块跳过（记 1 条 skip）。**这不等于全部通过**，引用时必须说清
+## 6 项目现状（v0.2.0）
+
+- 已建成：`adapter`（与厂商软件打交道的唯一入口）、`capability`（探测对端具备哪些能力）、`config`（配置分层覆盖）、`control`（控制层）、`kinematics`（运动学与关节换算）、`benchmarks`（离线 IK 基准 `benchmarks/alohamini_ik/benchmark_arm_ik.py`）
+- 测试：823 条实跑通过，2 条跳过
+- 跳过的原因：两个 parity 文件需要 `lerobot` 做对照（`tests/test_control_api_lerobot_parity.py`、`tests/test_kinematics_lerobot_parity.py`）。**这不等于全部通过**，引用时必须说清
 - 未搬入：`benchmarks/alohamini_io` 两脚本与现场 smoke 未完成，见 `docs/migration-backlog.md`
 - 仓库现状：已打 `v0.2.0` tag（指向代码提交 `3fd41e4`），未配置 remote，全部提交只在本地
 
 ## 7 待决事项
 
-1. `placo` 是否声明为 `kinematics` extra 并装进开发环境——决定 49 条数值用例能否真跑
+1. `placo` 依赖形态——已决：声明 `kinematics` extra（`placo>=0.10.1,<0.11`）并装进开发环境，接受 numpy 落到 2.3.x，见 `docs/decisions.md` D8
 2. `benchmarks/` 迁移时机——已部分完成（`benchmarks/alohamini_ik` 已迁入），剩余见 `docs/decisions.md` D7 与 `docs/migration-backlog.md`
 3. 旧仓库那 49 例线上协议测试是否搬入（测的是厂商侧模块，本库不包含）——已决：不迁，见 D7
+4. 限位表倒置（`lo > hi`）没有校验也没有用例守护，`solve()` 入口不检查
 
 ## 8 相关位置
 
-- 决策记录：`docs/decisions.md`（D1–D7）
+- 决策记录：`docs/decisions.md`（D1–D8）
 - 实测数据：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/`
 - 旧仓库（只读参考）：`/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini-cartesian-teleop`
