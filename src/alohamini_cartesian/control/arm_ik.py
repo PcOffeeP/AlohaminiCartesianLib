@@ -33,6 +33,11 @@ import numpy as np
 
 FAILURE_REASONS = ("NON_FINITE", "JOINT_LIMIT", "RESIDUAL")
 
+# Floating-point tolerance (degrees) used when classifying joint limits: it absorbs
+# solver round-off of order 1e-14 deg for targets that sit exactly on a limit face,
+# so only a deviation beyond this tolerance counts as a real limit violation.
+LIMIT_EPS_DEG = 1e-9
+
 
 @dataclass(frozen=True)
 class IKResult:
@@ -103,6 +108,39 @@ def _require_placo() -> None:
             "placo is required for arm kinematics. Install the optional dependency "
             "placo, then retry."
         ) from exc
+
+
+def _clamp_to_joint_limits(
+    q_deg: np.ndarray,
+    limits_deg: dict[str, tuple[float, float]],
+    joint_names: tuple[str, ...],
+) -> tuple[bool, np.ndarray]:
+    """Clamp ``q_deg`` onto the joint limits and classify the result.
+
+    A joint counts as within limits when it lies in the epsilon-widened closed
+    interval ``[lo - LIMIT_EPS_DEG, hi + LIMIT_EPS_DEG]``; the tolerance absorbs
+    solver round-off (~1e-14 deg) for targets sitting exactly on a limit face.
+
+    Args:
+        q_deg: Joint positions in degrees, shape ``(6,)``.  Never modified.
+        limits_deg: Mapping from joint name to ``(min, max)`` in degrees.
+        joint_names: Joint names in the same order as ``q_deg``.
+
+    Returns:
+        ``(within_limits, q_clamped)`` where ``within_limits`` is ``True`` exactly
+        when every joint is inside the epsilon-widened interval and ``q_clamped``
+        is a new vector with each component clamped onto ``[lo, hi]``.
+    """
+    values = np.asarray(q_deg, dtype=float)
+    q_clamped = values.copy()
+    within_limits = True
+    for index, (name, value) in enumerate(zip(joint_names, values, strict=True)):
+        lo_deg, hi_deg = limits_deg[name]
+        if not (lo_deg - LIMIT_EPS_DEG <= value <= hi_deg + LIMIT_EPS_DEG):
+            within_limits = False
+        q_clamped[index] = min(max(value, lo_deg), hi_deg)
+
+    return within_limits, q_clamped
 
 
 class ArmIK:
@@ -328,12 +366,12 @@ class ArmIK:
             _reached_pose,
         ) = self._solve_once(q_current_deg, target_pose, joint_limits_deg, orientation_weight)
 
-        within_limits = True
-        for name, value in zip(self.profile.joint_names, q_sol_deg, strict=True):
-            lo_deg, hi_deg = joint_limits_deg[name]
-            if not (lo_deg <= value <= hi_deg):
-                within_limits = False
-                break
+        # T-IK-17: judge the limits with a small epsilon so a solution sitting on a
+        # limit face is not rejected by its last float bit; the returned vector is
+        # clamped onto [lo, hi] so no caller ever sees the 1e-14 deg overflow.
+        within_limits, q_sol_deg = _clamp_to_joint_limits(
+            q_sol_deg, joint_limits_deg, self.profile.joint_names
+        )
 
         ok = position_error_m <= self.profile.residual_limit_m and within_limits
         if ok:

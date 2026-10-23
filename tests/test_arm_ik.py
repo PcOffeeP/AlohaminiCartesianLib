@@ -1553,3 +1553,521 @@ def test_t_ik_10_5_tilde_urdf_path_is_expanded_for_fk_and_solve(
     seed = np.asarray(SOLVE_SEED_Q, dtype=float)
     result = arm.solve(seed, FROZEN_OVER_LIMIT_TARGET_POSE, limits_for())
     assert result.ok is True, f"tilde URDF path must be usable by solve (reason={result.reason!r})"
+
+
+# ===========================================================================
+# T-IK-17  limit-face tolerance (closed-interval classification)
+# ===========================================================================
+#
+# 缺陷（本轮修复前）：`ArmIK.solve` 末尾用闭区间 ``lo <= value <= hi`` 判越界
+# （``control/arm_ik.py`` 约 :325-330），于是「目标恰好压在限位面上」时结论由浮点
+# 最后一位决定：同一目标在 placo 0.10.1 下解出 90.00000000000001（超 1.42e-14 度）
+# 判 JOINT_LIMIT，在 placo 0.9.15 下解出 89.99999999999997 判 ok。修复方向：只有
+# 超出容差才算 JOINT_LIMIT，且返回的 q_deg 仍夹在 ``[lo, hi]`` 内。两项均已落地
+# （``control/arm_ik.py`` 的 ``LIMIT_EPS_DEG`` 与 ``_clamp_to_joint_limits``）。
+#
+# 断言的层次（本段两类用例的分工）：
+# - 端到端用例（T-IK-17.1 / 17.11 / 17.12）只断 ``ArmIK.solve()`` 的可观察行为
+#   （ok / reason / 返回的 q_deg），不引用实现内部常量名；
+# - 纯逻辑用例（T-IK-17.2 - 17.10）直接测实现接缝：``LIMIT_EPS_DEG`` 的取值量级
+#   与 ``_clamp_to_joint_limits`` 的判定/夹紧语义。它们是有意的白盒断言 —— 隔离度
+#   更高，一条红点能直接指到「容差量级错」还是「夹紧/接线错」，不必再从数值求解
+#   的浮点噪声里去分辨。
+#
+# 构造方式：取一个边界姿态 q*，把被测关节 j 的注入限位面精确设在 q*[j] 上（下限面
+# 或上限面），目标位姿取 ``fk(q*)`` —— 目标与该限位面精确重合，残差 ~1e-17 m，
+# 物理上完全可达。此时任何 JOINT_LIMIT 结论都只能来自「边界上的浮点最后一位」，
+# 不可能来自残差或真实越界，这正是本段要钉住的那一类误判。
+#
+# 修复前实测（本机 placo 0.10.1，3/3 次重复一致，无随机、无时钟）：
+# - 上限面 ``left_wrist_roll`` = 90 -> 解出 ``90.00000000000001``（+1.421e-14 度）
+# - 下限面 ``left_wrist_yaw_joint`` = 90 -> 解出 ``89.99999999999996``（-4.263e-14 度）
+# 两例都被当前代码判成 ``JOINT_LIMIT``（本段的红证据）。
+#
+# 断言的语义（修复后必须成立）：
+# 1. ``ok is True`` / ``reason is None`` —— 压在限位面上不算越界；
+# 2. ``position_error_m <= residual_limit_m`` —— 目标物理可达（残差判据不变）；
+# 3. 返回的 ``q_deg`` 每个分量都落在 ``[lo, hi]`` 闭区间内 —— 返回值被夹紧，
+#    不得因为容差放宽而带着 1e-14 量级的外溢返回给调用方。
+#
+# 鉴别力（合理但错误的实现会挂）：
+# - 保留闭区间严格比较 -> 第 1 条先红（ok=False / reason=JOINT_LIMIT）；
+# - 放宽判定但忘记夹紧 -> 第 3 条红（q 仍外溢 1.4e-14 度）；
+# - 为通过而删掉越界判定 / 放宽残差 -> T-IK-4.1 仍要求「物理可达但超注入限位」
+#   的目标报 JOINT_LIMIT，两条要求不能同时被削弱。
+#
+# 说明（外部 oracle 取舍）：目标位姿由被测 ``fk()`` 从其自身边界姿态取得，不是冻结
+# 外部字面量。本段只检验限位分类，不检验 FK 数值；FK 的数值正确性已由 T-IK-1 用
+# 外部冻结位姿独立钉住，且 FK 若漂移会让本段的宽度前提 / 残差断言失败（不会静默
+# 通过），因此不引入「拿 SUT 输出当 oracle」的静默风险。
+
+# (face, joint, value)：face="upper" 表示 value 是该关节的 *上* 限位，"lower" 为下限位。
+# 两个关节的漂移方向不同（实测：wrist_roll 偏正、wrist_yaw_joint 偏负），所以上下
+# 两个限位面各用一条实测能复现漂移的组合；漂移方向若在 placo 升级后翻转，这些用例
+# 只会失去鉴别力，不会产生假失败。
+LIMIT_FACE_CASES = (
+    ("upper", "left_wrist_roll", 90.0),
+    ("lower", "left_wrist_yaw_joint", 90.0),
+)
+
+
+def make_limit_face_case(
+    face: str, joint: str, value: float
+) -> tuple[Any, np.ndarray, np.ndarray, dict[str, tuple[float, float]]]:
+    """构造「目标恰好压在限位面」的输入：(arm, seed, target_pose, limits)。"""
+    _arm_ik, arm = make_arm_ik()
+    index = JOINT_NAMES.index(joint)
+
+    q_boundary_deg = list(SOLVE_SEED_Q)
+    q_boundary_deg[index] = value
+    seed = np.asarray(q_boundary_deg, dtype=float)
+    target_pose = np.asarray(arm.fk(seed), dtype=float)
+
+    limits = limits_for(lo=-170.0, hi=170.0)
+    limits[joint] = (value, 170.0) if face == "lower" else (-170.0, value)
+    return arm, seed, target_pose, limits
+
+
+@pytest.mark.parametrize(("face", "joint", "value"), LIMIT_FACE_CASES)
+def test_t_ik_17_1_target_on_limit_face_is_not_a_joint_limit_failure(
+    face: str, joint: str, value: float
+) -> None:
+    """T-IK-17.1：目标恰好压在限位面上时判 ok，且返回的 q 被夹在闭区间内。"""
+    pytest.importorskip("placo", reason="ArmIK 的数值求解需要可选依赖 placo")
+    arm, seed, target_pose, limits = make_limit_face_case(face, joint, value)
+    index = JOINT_NAMES.index(joint)
+
+    # 前提：该关节的注入限位面确实与边界姿态的关节值精确重合（夹具漂移检查）。
+    lo_face, hi_face = limits[joint]
+    assert value == lo_face or value == hi_face, (value, (lo_face, hi_face))
+
+    # 前提：同一目标在宽限位下可达 —— 下面的失败只可能来自限位面分类。
+    wide = arm.solve(seed, target_pose, limits_for(lo=-170.0, hi=170.0))
+    assert wide.ok is True, f"test premise broken: target unreachable ({wide.reason!r})"
+
+    result = arm.solve(seed, target_pose, limits)
+
+    q_raw_index = float(np.asarray(result.q_deg, dtype=float)[index])
+    assert result.ok is True, (
+        f"target exactly on the {face} limit face of {joint} (= {value!r} deg) must not be "
+        f"rejected: ok={result.ok!r} reason={result.reason!r} "
+        f"q[{joint}]={q_raw_index!r} (off the face by {q_raw_index - value!r} deg) "
+        f"position_error_m={result.position_error_m!r}"
+    )
+    assert result.reason is None, result.reason
+    assert result.position_error_m <= SOLVE_RESIDUAL_LIMIT_M, result.position_error_m
+
+    q_deg = np.asarray(result.q_deg, dtype=float)
+    assert q_deg.shape == (6,)
+    for name, q_value in zip(JOINT_NAMES, q_deg, strict=True):
+        lo, hi = limits[name]
+        assert lo <= q_value <= hi, (
+            f"returned {name}={q_value!r} escaped the closed limits ({lo}, {hi})"
+        )
+
+    # 解仍停在限位面上（既没外溢也没被推离）。断言容差 1e-6 度只是「还贴在面上」的粗
+    # 边界，**故意与 ``LIMIT_EPS_DEG`` 解耦**（同值会让人误以为是实现容差的重述）：1e-6
+    # 度 = 1.7e-8 rad，0.3 m 力臂上约 5 nm，物理上与「在面上」不可区分，却足以让「把解
+    # 主动推离限位面」的实现（例如 clamp 后又向区间内部让一个小量）变红。
+    assert abs(float(q_deg[index]) - value) <= 1e-6, (float(q_deg[index]), value)
+
+
+# ---------------------------------------------------------------------------
+# T-IK-17.2 - T-IK-17.8  纯逻辑：限位容差与夹紧语义（不依赖 placo）
+# ---------------------------------------------------------------------------
+#
+# T-IK-17.1 端到端地钉住「目标压在限位面上判 ok」，但它必须借 placo 做数值求解，
+# 隔离度低（一个红点无法区分「容差判定错」还是「求解器数值漂移」）。本轮修复把判定
+# 与夹紧抽成了纯逻辑接缝 ``_clamp_to_joint_limits`` + ``LIMIT_EPS_DEG``，于是本段
+# 直接用合成关节值测这两条语义，**不 import placo、不构造 ArmIK**：
+#
+# - 容差语义：``[lo - LIMIT_EPS_DEG, hi + LIMIT_EPS_DEG]`` 为内（两端都是闭的），
+#   超出容差才算越界；边界点本身算内。
+# - 夹紧语义：返回向量逐分量夹回 ``[lo, hi]``（容差只放宽「判内」，不放宽「返回值」），
+#   且不就地修改入参。
+#
+# 为什么必须钉住「容差只放宽判定、不放宽返回值」：T-IK-17.1 只断言返回 q 落在闭区间，
+# 若实现把容差直接写进返回向量（q 允许外溢 1e-9 度），端到端用例也会通过；本段的
+# ``q_clamped[probe] == face`` 逐位断言让这种实现变红。
+#
+# 合成数据：六个关节共用同一条对称限位 (-170, 170) 度，基准姿态全部落在内部且不与任何
+# 限位面重合；每个用例只改探针关节（``left_wrist_roll``）一个分量，其余分量恒定。这样
+# 一条断言失败只可能来自探针分量的分类 / 夹紧逻辑。
+
+
+def load_limit_clamp() -> tuple[float, Any]:
+    """惰性导入纯逻辑接缝：``LIMIT_EPS_DEG`` 与 ``_clamp_to_joint_limits``。
+
+    与本文件其它用例一致，导入放在 helper 里而不是模块顶层：实现缺失时只会让本段的
+    用例各自 ImportError，不会因为收集期报错而拖垮整个模块（也不触发任何 placo 导入）。
+    """
+    from alohamini_cartesian.control.arm_ik import LIMIT_EPS_DEG, _clamp_to_joint_limits
+
+    return LIMIT_EPS_DEG, _clamp_to_joint_limits
+
+
+CLAMP_LIMITS_DEG: dict[str, tuple[float, float]] = dict.fromkeys(JOINT_NAMES, (-170.0, 170.0))
+CLAMP_BASELINE_Q = np.asarray([-10.0, 20.0, 30.0, -40.0, 50.0, 60.0], dtype=float)
+CLAMP_PROBE_INDEX = JOINT_NAMES.index("left_wrist_roll")
+CLAMP_LO_DEG, CLAMP_HI_DEG = CLAMP_LIMITS_DEG["left_wrist_roll"]
+# (face, 面值)：upper/lower 两个面各一组对称用例，所有容差用例都跑这两个方向。
+CLAMP_FACES = (("upper", CLAMP_HI_DEG), ("lower", CLAMP_LO_DEG))
+# 容差内部的偏移（用 LIMIT_EPS_DEG 表达，不写裸魔数）。
+# ``one_ulp_above_face`` 是「面值旁边最小可表示的浮点数」：本段面值是 ±170.0，
+# ``math.ulp(170.0) == 2 ** -45 ≈ 2.842e-14``，正好是实测求解器舍入的量级。
+# 这里**不能**用字面量 1e-14：ulp(170.0) 的一半是 1.42e-14，1e-14 小于它，
+# ``170.0 + 1e-14`` 舍入后逐位等于 170.0，参数退化成「恰好压面」（= T-IK-17.3），
+# 任何容差下都恒绿、零鉴别力。
+TOLERANCE_INSIDE_OFFSETS = ("half_eps", "one_ulp_above_face")
+# 容差外的偏移：刚好两倍容差（钉住"容差外的偏离才算越界"这一侧界）+ 一个明显越界值。
+TOLERANCE_OUTSIDE_OFFSETS = ("two_eps", "one_e_minus_3")
+
+
+def face_sign(face: str) -> float:
+    """返回「越过该面」的数值方向：上限面为 +1，下限面为 -1。"""
+    return 1.0 if face == "upper" else -1.0
+
+
+def clamp_offset_deg(kind: str) -> float:
+    """把偏移量名字翻译成度数（正数，方向由调用方按上下限决定）。"""
+    eps, _clamp = load_limit_clamp()
+    offsets = {
+        "half_eps": eps / 2.0,
+        "one_ulp_above_face": 2.0**-45,
+        "two_eps": 2.0 * eps,
+        "one_e_minus_3": 1e-3,
+    }
+    return offsets[kind]
+
+
+def q_with_probe(value_deg: float) -> np.ndarray:
+    """返回基准姿态的副本，只把探针关节改成 ``value_deg``。"""
+    q_deg = CLAMP_BASELINE_Q.copy()
+    q_deg[CLAMP_PROBE_INDEX] = value_deg
+    return q_deg
+
+
+def test_t_ik_17_2_interior_joint_values_pass_through_unchanged() -> None:
+    """T-IK-17.2：六关节全在闭区间内部时判内，且返回值与入参逐分量相等。"""
+    # 鉴别力：若容差判定写反（把内部当越界）、或用严开区间 ``lo < v < hi`` 且实现把
+    # 边界值当内部、或对内部值做了任何再量化/取整，都会让下面两条断言之一先红。
+    _eps, clamp = load_limit_clamp()
+    q_deg = CLAMP_BASELINE_Q.copy()
+
+    within_limits, q_clamped = clamp(q_deg, dict(CLAMP_LIMITS_DEG), JOINT_NAMES)
+
+    assert within_limits is True
+    assert q_clamped.shape == (6,)
+    assert np.array_equal(q_clamped, q_deg), (q_clamped, q_deg)
+
+
+@pytest.mark.parametrize(("face", "face_deg"), CLAMP_FACES)
+def test_t_ik_17_3_value_exactly_on_limit_face_is_inside(face: str, face_deg: float) -> None:
+    """T-IK-17.3：关节值恰好等于上限或下限时判内，且返回值不被推离该面。"""
+    # 鉴别力：若容差被设成 0 且判定写成严开区间（``lo < v < hi``），压在面上会判
+    # 越界 → 第 1 条红；若实现为了"保险"把面值向区间内部推动（例如 clamp 后再减一个
+    # 小量），第 2 条的逐位相等会红。
+    _eps, clamp = load_limit_clamp()
+    q_deg = q_with_probe(face_deg)
+
+    within_limits, q_clamped = clamp(q_deg, dict(CLAMP_LIMITS_DEG), JOINT_NAMES)
+
+    assert within_limits is True, f"{face} face value {face_deg!r} must count as inside"
+    assert q_clamped[CLAMP_PROBE_INDEX] == face_deg, (float(q_clamped[CLAMP_PROBE_INDEX]), face_deg)
+
+
+@pytest.mark.parametrize(("face", "face_deg"), CLAMP_FACES)
+@pytest.mark.parametrize("offset_kind", TOLERANCE_INSIDE_OFFSETS)
+def test_t_ik_17_4_overflow_within_tolerance_is_inside_and_clamped_onto_face(
+    face: str, face_deg: float, offset_kind: str
+) -> None:
+    """T-IK-17.4：越面幅度在 ``LIMIT_EPS_DEG`` 以内时判内，但返回值被夹回恰好该面。"""
+    # 鉴别力（互斥的实现错法）：
+    # - 容差被设成 0（判定退化成闭区间严格比较）→ ``one_ulp_above_face`` 这条参数的
+    #   偏移（1 ulp ≈ 2.84e-14 度，在 170 量级上可表示）落到面外，within_limits 变
+    #   False，第 1 条红；``half_eps`` 这条在 eps=0 时偏移归 0、退化成「恰好压面」
+    #   （等价 T-IK-17.3），它抓不到 eps=0。抓 eps=0 / 极小 eps 的是 T-IK-17.5（两倍
+    #   容差偏移同时归零，面值被要求判越界）与 T-IK-17.9（直接钉容差下界）。
+    # - 判内但忘记夹紧（直接返回原值）→ 返回值比面值大 eps/2 或 1 ulp，第 2 条红；
+    # - 容差被放大到 1e-4 / 1e-3 量级 → 本用例仍绿，由 T-IK-17.10（直接钉容差上界）
+    #   与 T-IK-17.5 的 one_e_minus_3 参数抓。
+    _eps, clamp = load_limit_clamp()
+    value_deg = face_deg + face_sign(face) * clamp_offset_deg(offset_kind)
+    q_deg = q_with_probe(value_deg)
+
+    # 前提：该偏移在 ±170 度的量级上真的可表示（不为 0）。否则本参数退化成「恰好
+    # 压面」、与 T-IK-17.3 重复，失去全部鉴别力 —— 这条断言就是为守 1 ulp 那类偏移。
+    assert value_deg != face_deg, (value_deg, face_deg, offset_kind)
+
+    within_limits, q_clamped = clamp(q_deg, dict(CLAMP_LIMITS_DEG), JOINT_NAMES)
+
+    assert within_limits is True, (
+        f"{value_deg!r} deg is {value_deg - face_deg!r} beyond the {face} face, "
+        "which is inside the epsilon tolerance and must not count as a violation"
+    )
+    assert q_clamped[CLAMP_PROBE_INDEX] == face_deg, (
+        f"returned {float(q_clamped[CLAMP_PROBE_INDEX])!r} must be clamped exactly onto the "
+        f"{face} face {face_deg!r}, not left {float(q_clamped[CLAMP_PROBE_INDEX]) - face_deg!r} "
+        "outside it"
+    )
+    lo, hi = CLAMP_LIMITS_DEG[JOINT_NAMES[CLAMP_PROBE_INDEX]]
+    assert lo <= float(q_clamped[CLAMP_PROBE_INDEX]) <= hi
+
+
+@pytest.mark.parametrize(("face", "face_deg"), CLAMP_FACES)
+@pytest.mark.parametrize("offset_kind", TOLERANCE_OUTSIDE_OFFSETS)
+def test_t_ik_17_5_overflow_beyond_tolerance_is_outside_and_clamped_onto_face(
+    face: str, face_deg: float, offset_kind: str
+) -> None:
+    """T-IK-17.5：越面幅度超过 ``LIMIT_EPS_DEG`` 时判越界，返回值仍夹在该面上。"""
+    # 鉴别力：
+    # - 容差被放大（例如 1e-3 或更大）→ 这些点会变成判内，第 1 条红；
+    # - 容差方向写反（只在区间内侧放宽，即 ``lo <= v <= hi`` 配 ``lo-eps`` 误用）→
+    #   上下两个面的符号覆盖会让其中一半变红；
+    # - 判越界但夹紧被删 → 第 2、3 条红（返回值仍在外侧）。
+    _eps, clamp = load_limit_clamp()
+    value_deg = face_deg + face_sign(face) * clamp_offset_deg(offset_kind)
+    q_deg = q_with_probe(value_deg)
+
+    within_limits, q_clamped = clamp(q_deg, dict(CLAMP_LIMITS_DEG), JOINT_NAMES)
+
+    assert within_limits is False, (
+        f"{value_deg!r} deg is {value_deg - face_deg!r} beyond the {face} face, "
+        "which exceeds the epsilon tolerance and must count as a violation"
+    )
+    assert q_clamped[CLAMP_PROBE_INDEX] == face_deg, (float(q_clamped[CLAMP_PROBE_INDEX]), face_deg)
+    for name, q_value in zip(JOINT_NAMES, q_clamped, strict=True):
+        lo, hi = CLAMP_LIMITS_DEG[name]
+        assert lo <= float(q_value) <= hi, f"clamped {name}={float(q_value)!r} escaped ({lo}, {hi})"
+
+
+@pytest.mark.parametrize(
+    ("face", "face_deg", "offsets_outward", "expect_clamped"),
+    (
+        ("upper", CLAMP_HI_DEG, True, True),  # hi + eps：恰在边界外侧，算内
+        ("upper", CLAMP_HI_DEG, False, False),  # hi - eps：显然在内，不该被夹
+        ("lower", CLAMP_LO_DEG, True, True),  # lo - eps：恰在边界外侧，算内
+        ("lower", CLAMP_LO_DEG, False, False),  # lo + eps：显然在内，不该被夹
+    ),
+)
+def test_t_ik_17_6_tolerance_boundary_is_inclusive(
+    face: str, face_deg: float, offsets_outward: bool, expect_clamped: bool
+) -> None:
+    """T-IK-17.6：恰好距面 ``LIMIT_EPS_DEG`` 的点算**内**（容差区间两端都是闭的）。"""
+    # 鉴别力：这条钉的是"包含还是排除"的侧界。若实现写成严开区间
+    # （``lo - eps < v < hi + eps``），外侧的两条（offsets_outward=True）会因
+    # within_limits 变 False 而红；若容差只加在不该加的一侧，上下不对称会让其中一条红。
+    # 第二条断言同时防止"容差放宽后不再夹紧"：边缘外侧点仍必须被夹回面值。
+    eps, clamp = load_limit_clamp()
+    sign = face_sign(face)
+    value_deg = face_deg + sign * eps if offsets_outward else face_deg - sign * eps
+    q_deg = q_with_probe(value_deg)
+
+    within_limits, q_clamped = clamp(q_deg, dict(CLAMP_LIMITS_DEG), JOINT_NAMES)
+
+    assert within_limits is True, (
+        f"{value_deg!r} deg sits exactly LIMIT_EPS_DEG ({eps!r}) from the {face} face "
+        "and must count as inside (closed interval on both sides)"
+    )
+    expected_deg = face_deg if expect_clamped else value_deg
+    assert q_clamped[CLAMP_PROBE_INDEX] == expected_deg, (
+        float(q_clamped[CLAMP_PROBE_INDEX]),
+        expected_deg,
+    )
+
+
+def test_t_ik_17_7_input_vector_is_not_modified_in_place() -> None:
+    """T-IK-17.7：调用后入参数组内容逐位不变，返回的是新数组。"""
+    # 鉴别力：若实现直接在入参上夹紧（``values[:] = np.clip(...)`` 后返回 ``values``），
+    # 第 2 条红 —— 调用方的 q_deg 会被悄悄改写，这在 solve() 的调用链里等于篡改上次解。
+    # 用超过容差的点驱动，保证夹紧分支一定被执行到（否则本用例没有实际覆盖夹紧路径）。
+    eps, clamp = load_limit_clamp()
+    q_deg = q_with_probe(CLAMP_HI_DEG + 2.0 * eps)
+    before = q_deg.copy()
+
+    within_limits, q_clamped = clamp(q_deg, dict(CLAMP_LIMITS_DEG), JOINT_NAMES)
+
+    assert within_limits is False, "premise: this probe value must take the clamping branch"
+    assert np.array_equal(q_deg, before), (q_deg, before)
+    assert q_clamped is not q_deg, "clamp must return a new array, not the caller's array"
+    assert q_clamped[CLAMP_PROBE_INDEX] == CLAMP_HI_DEG
+
+
+def test_t_ik_17_8_pure_logic_clamp_is_usable_with_placo_absent() -> None:
+    """T-IK-17.8：placo 不可见时纯逻辑接缝仍可导入并夹紧（本段不依赖 placo 的证据）。"""
+    # 用本文件已有的 placo_absent() 在进程内屏蔽 placo 并强制重新导入被测模块：若
+    # ``_clamp_to_joint_limits`` 或它的模块顶层链条里出现任何 `import placo`，本用例
+    # 会 ImportError；若它偷偷走求解器，同样会因为 placo 缺失而失败。
+    with placo_absent():
+        eps, clamp = load_limit_clamp()
+        q_deg = q_with_probe(CLAMP_HI_DEG + 2.0 * eps)
+
+        within_limits, q_clamped = clamp(q_deg, dict(CLAMP_LIMITS_DEG), JOINT_NAMES)
+
+    assert within_limits is False
+    assert q_clamped[CLAMP_PROBE_INDEX] == CLAMP_HI_DEG
+
+
+# ---------------------------------------------------------------------------
+# T-IK-17.9 - T-IK-17.10  容差量级的允许区间（直接读常量，不乘任何系数）
+# ---------------------------------------------------------------------------
+#
+# 为什么必须直接钉量级：本段其余用例都用 ``LIMIT_EPS_DEG`` 的**相对**倍数（``eps/2``、
+# ``2*eps``）或一个远大于任何合理容差的绝对值（1e-3）表达偏移。前者对任何 eps > 0 都
+# 自洽（实测把容差改成 1e-6 甚至 1e-4，整个文件仍全绿），后者只能抓 >= 1e-3 的放大。
+# 于是补两条直接断言常量落区的用例：下界盖住求解器实测舍入，上界远小于任何物理上可
+# 分辨的关节偏差。
+#
+# 允许区间 ``[1e-12, 1e-6]`` 度的依据（以后要改容差的人以此为准）：
+# - 下界 1e-12：本机 placo 0.10.1 实测最大外溢 4.263e-14 度（见段首），1e-12 约为它的
+#   23 倍；再小就有在限位面上误判越界的风险 —— 那正是本段要修的缺陷；
+# - 上界 1e-6：关节编码器分辨率 / 机械回差在 1e-2 度量级，1e-6 度比它小四个数量级，
+#   放到这里仍不可能把「真实越界」判成「在容差内」。
+#
+# 有意把容差调到区间外时，请连同这两条用例与本段注释一起重新论证，而不是直接放宽断言。
+LIMIT_EPS_MIN_DEG = 1e-12
+LIMIT_EPS_MAX_DEG = 1e-6
+
+
+def test_t_ik_17_9_limit_tolerance_absorbs_solver_round_off() -> None:
+    """T-IK-17.9：``LIMIT_EPS_DEG`` 足够大，能盖住实测求解器舍入（量级 1e-14 度）。"""
+    # 鉴别力：容差被设成 0 / 1e-15 / 1e-14 一类量级时本用例红。这些值会让「2*eps 偏移」
+    # 类用例跟着缩小偏移而继续绿，所以必须有一条直接读常量的断言把它们抓住。
+    eps, _clamp = load_limit_clamp()
+
+    assert eps >= LIMIT_EPS_MIN_DEG, (
+        f"LIMIT_EPS_DEG={eps!r} deg is too tight: solver round-off on a limit face measures up to "
+        f"4.263e-14 deg (placo 0.10.1), so the tolerance must stay >= {LIMIT_EPS_MIN_DEG!r}"
+    )
+
+
+def test_t_ik_17_10_limit_tolerance_stays_far_below_physical_deviations() -> None:
+    """T-IK-17.10：``LIMIT_EPS_DEG`` 足够小，放大到它仍不可能掩盖真实越界。"""
+    # 鉴别力：容差被放大到 1e-4 / 1e-3 时本用例红。其中 1e-4 是 T-IK-17.5 抓不到的区间
+    # （它的越界偏移取 2*eps 与 1e-3），只有直接钉上界能覆盖。
+    eps, _clamp = load_limit_clamp()
+
+    assert eps <= LIMIT_EPS_MAX_DEG, (
+        f"LIMIT_EPS_DEG={eps!r} deg is too loose: a real limit violation of 1e-2 deg "
+        f"(encoder / backlash scale) must stay detectable, so the tolerance must stay "
+        f"<= {LIMIT_EPS_MAX_DEG!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# T-IK-17.11 - T-IK-17.12  端到端接线：``within_limits`` 必须真的进 ``ok``
+# ---------------------------------------------------------------------------
+#
+# 为什么需要这两条：真实的 qpmad 求解器在注入限位下几乎不外溢（实测 1e-15 ~ 1e-14
+# 度），所以本段其余端到端用例里 ``JOINT_LIMIT`` 一律由残差分支产生 —— 把 ``solve()``
+# 里的 ``ok = ... and within_limits`` 改成忽略 ``within_limits``，它们仍全绿。限位分类
+# 与最终 ``ok`` 的接线因此没有任何覆盖，这两条用假求解器把它单独钉住。
+#
+# 做法：``monkeypatch`` 掉 ``ArmIK._solve_once``。``solve()`` 会调用它两次 —— 先用 URDF
+# 限位判物理可达性（残差超限就走 RESIDUAL 分支），再用调用方注入的限位做分类。假实现
+# 按「注入字典的对象身份」区分这两次，并让两次的残差都达标：于是任何失败结论都只可能
+# 来自限位分类，不可能来自 RESIDUAL。这也是唯一能确定性制造「残差达标 + 真实越界」的
+# 方式（真实求解器造不出来）。
+#
+# 前提断言 ``calls == {"urdf": 1, "injected": 1}`` 是接线前提：如果 solve() 以后改掉
+# 「两次求解」的结构，或不再把调用方的字典原样透传，本段的失败会明确报「前提破了」，
+# 而不是伪装成分类错误。
+
+
+def solve_with_faked_solver(
+    monkeypatch: pytest.MonkeyPatch,
+    injected_limits: dict[str, tuple[float, float]],
+    q_injected: np.ndarray,
+) -> tuple[Any, dict[str, int]]:
+    """用假 ``_solve_once`` 驱动一次 ``solve()``，返回 (结果, 两次调用的计数)。
+
+    ``q_injected`` 是「注入限位那次」求解要返回的关节解；URDF 限位那次固定返回干净的
+    种子解（残差同样达标），保证流程不会停在 RESIDUAL 分支。
+    """
+    arm_ik, arm = make_arm_ik()
+    q_urdf = np.asarray(SOLVE_SEED_Q, dtype=float)
+    calls = {"urdf": 0, "injected": 0}
+
+    def fake_solve_once(
+        self: Any,
+        q_current_deg: np.ndarray,
+        target_pose: np.ndarray,
+        limits_deg: dict[str, tuple[float, float]],
+        orientation_weight: float,
+    ) -> tuple[np.ndarray, float, float, int, float, np.ndarray]:
+        """返回残差达标的解；按注入字典的对象身份区分 URDF 那次与注入那次。"""
+        del q_current_deg, target_pose, orientation_weight  # 本次只测限位分类接线
+        if limits_deg is injected_limits:
+            calls["injected"] += 1
+            q_deg = q_injected
+        else:
+            calls["urdf"] += 1
+            q_deg = q_urdf
+        # (q_deg, position_error_m, orientation_error_deg, iterations, solve_time_s, pose)
+        return np.asarray(q_deg, dtype=float).copy(), 1e-6, 0.0, 1, 1e-4, np.eye(4)
+
+    monkeypatch.setattr(arm_ik.ArmIK, "_solve_once", fake_solve_once)
+    result = arm.solve(q_urdf, np.eye(4), injected_limits)
+    return result, calls
+
+
+def test_t_ik_17_11_solve_reports_joint_limit_when_solution_leaves_the_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T-IK-17.11：残差达标但某关节真实越限 -> ok=False / JOINT_LIMIT，且被夹回限位面。"""
+    pytest.importorskip("placo", reason="ArmIK 的数值求解需要可选依赖 placo")
+    limits = limits_for(lo=-170.0, hi=170.0)
+    joint = "left_wrist_roll"
+    index = JOINT_NAMES.index(joint)
+    _lo_deg, hi_deg = limits[joint]
+    # 越面幅度 1e-3 度：大于容差允许上界 1e-6 三个数量级，是任何合理实现都必须判越界的
+    # 真实越限（不是浮点最后一位）。
+    q_over = np.asarray(SOLVE_SEED_Q, dtype=float)
+    q_over[index] = hi_deg + 1e-3
+
+    result, calls = solve_with_faked_solver(monkeypatch, limits, q_over)
+
+    # 前提：两次求解都真的走了假实现，且注入限位那次被识别出来了。
+    assert calls == {"urdf": 1, "injected": 1}, calls
+    # 前提：残差本来就达标 —— 下面的失败结论只可能来自限位分类，不是 RESIDUAL。
+    assert result.position_error_m <= SOLVE_RESIDUAL_LIMIT_M, result.position_error_m
+
+    q_deg = np.asarray(result.q_deg, dtype=float)
+    assert result.ok is False, (
+        "a solution outside the injected limits must not report ok=True: "
+        f"q[{joint}]={float(q_deg[index])!r} vs limit hi={hi_deg!r}, reason={result.reason!r}"
+    )
+    assert result.reason == "JOINT_LIMIT", (
+        f"over-limit solution with acceptable residual must be JOINT_LIMIT, got {result.reason!r}"
+    )
+    # 夹紧：返回的该关节逐位等于限位面值（容差只放宽「判内」，不放宽「返回值」）。
+    assert float(q_deg[index]) == hi_deg, (float(q_deg[index]), hi_deg)
+    lo_face, hi_face = limits[joint]
+    assert lo_face <= float(q_deg[index]) <= hi_face, (float(q_deg[index]), (lo_face, hi_face))
+
+
+def test_t_ik_17_12_solve_keeps_ok_when_solution_sits_on_a_limit_face(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T-IK-17.12：残差达标且解恰好停在限位面上 -> ok=True / reason=None（接线不恒 False）。"""
+    # 与 17.11 对称：同一条接线在「容差内」必须给出 ok=True。若实现把 ``ok`` 写成恒
+    # False、或把容差判定写反（内部当越界），本用例红；两条合起来说明 ``ok`` 真正
+    # 依赖限位分类的结果，而不是被某个常量钉死。
+    pytest.importorskip("placo", reason="ArmIK 的数值求解需要可选依赖 placo")
+    limits = limits_for(lo=-170.0, hi=170.0)
+    joint = "left_wrist_roll"
+    index = JOINT_NAMES.index(joint)
+    _lo_deg, hi_deg = limits[joint]
+    q_on_face = np.asarray(SOLVE_SEED_Q, dtype=float)
+    q_on_face[index] = hi_deg
+
+    result, calls = solve_with_faked_solver(monkeypatch, limits, q_on_face)
+
+    assert calls == {"urdf": 1, "injected": 1}, calls
+    q_deg = np.asarray(result.q_deg, dtype=float)
+    assert result.ok is True, (
+        f"a solution sitting exactly on the limit face must keep ok=True: "
+        f"q[{joint}]={float(q_deg[index])!r}, reason={result.reason!r}"
+    )
+    assert result.reason is None, result.reason
+    assert float(q_deg[index]) == hi_deg, (float(q_deg[index]), hi_deg)
