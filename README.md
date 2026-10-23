@@ -207,6 +207,8 @@ deg_per_unit = conversion.deg_per_unit
 
 v0.2.0 把控制层与运动学搬入库内：`control/`（会话与句柄、命令状态机、单臂控制器、`arm_ik`）、`kinematics/`（型号规格表、关节单位适配、`assets/am_arm200/kinematics.urdf`）。版本号从 `0.1.0` 升到 `0.2.0`，核心依赖从空改为 `numpy>=1.26`。行为变更一处：`connect()` 不再在内部 import `lerobot`，未注入 `client_factory` 时抛 `RuntimeUnavailable`。
 
+v0.3.0 做三件事：把 `placo` 声明为 `kinematics` extra（`placo>=0.10.1,<0.11`）并装进开发环境；迁入离线 IK 基准 `benchmarks/alohamini_ik/benchmark_arm_ik.py`；给 IK 判限位加容差，消除边界分类漂移。本轮 `pytest tests` 收集 825 条，823 条通过、2 条跳过。
+
 `benchmarks/alohamini_ik/benchmark_arm_ik.py` 与配套测试 `tests/benchmarks/test_benchmark_arm_ik.py` 已迁入，离线可跑。开发环境已按 `kinematics` extra 装上 `placo`，离线 IK 基准与 IK 数值用例真跑，不再整模块跳过。
 
 本轮 `pytest tests` 结果（本机实测，命令 `.venv/bin/python -m pytest tests -q -o addopts= -p no:cacheprovider`）：`823 passed, 2 skipped`。跳过只剩两个 parity 文件（缺 `lerobot`）。
@@ -244,7 +246,7 @@ alohamini-cartesian-lib/
 ├── docs/decisions.md                 # D1–D8 决策记录
 ├── docs/migration-backlog.md         # 未迁入清单与阻塞条件
 ├── src/alohamini_cartesian/
-│   ├── __init__.py                   # __version__ = "0.2.0"
+│   ├── __init__.py                   # __version__ = "0.3.0"
 │   ├── py.typed
 │   ├── adapter/protocol.py           # 对 lerobot 的唯一接触面（typing.Protocol）
 │   ├── capability/detect.py          # 能力探测与降级、单位换算裁决
