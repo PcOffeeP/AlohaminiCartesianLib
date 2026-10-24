@@ -4,9 +4,9 @@
 
 ## 0 这份文档怎么用
 
-- 先读第 1 节与第 2 节，再动手。第 1 节消除两套 Gate 的撞名，第 2 节给出不满足就不能开始的前置条件。
-- 执行顺序固定：阶段 0 到场核对 → 阶段 1 零运动测量 → 阶段 2 归档 Gate 记录 → 阶段 3 制造一次拒绝记录 → 阶段 4 受控试动 → 阶段 5 配置样例。
-- 拿到非 0 退出码看第 9 节与第 12 节；交回前按第 11 节逐条勾选。
+- 先读第 2 节（硬前置条件）与第 1 节（代码 Gate 清单），再动手。
+- 执行顺序固定：阶段 0 到场核对 → 阶段 1 零运动测量 → 阶段 2 制造拒绝记录 → 阶段 3 受控试动 → 阶段 4 配置样例。
+- 拿到非 0 退出码看第 8 节与第 11 节；交回前按第 10 节逐条勾选。
 
 一页总览：
 
@@ -14,25 +14,15 @@
 | --- | --- | --- | --- | --- |
 | 0 到场核对 | 10 分钟 | 否 | 勾选清单、两条 `--help` 的退出码 | 两条 `--help` 均 exit 0 |
 | 1 零运动测量与指纹 | 本文未设预算 | 否 | `capture/fingerprint-<UTC>.json`、`rtt/rtt-net-<UTC>.csv`、`rtt/rtt-deploy-<UTC>.csv` | 三次运行均 exit 0 |
-| 2 归档 Gate A–E | 本文未设预算 | 否 | `gates/` 下 10 个 `<side>-gate-<letter>.json` | 校验器 `ok` 为 `true` 且 `records_checked` 为 `10` |
-| 3 制造代码 Gate F 拒绝 | 本文未设预算 | 否 | `stdout/` 下 stderr 原文与命令原文 | exit 6，零命令 |
-| 4 Mode B 受控试动 | 本文未设预算 | 是，单臂单关节 | `tracking/tracking-<UTC>.csv` 与 report 原文 | exit 0；exit 8 按第 12 节处置 |
-| 5 配置样例采集 | 本文未设预算 | 否 | 模板 YAML 与现场 YAML 各一份 | 两份文件能一起被 `load_settings` 读通，不抛 `ConfigError` |
+| 2 制造代码 Gate F 拒绝 | 本文未设预算 | 否 | `stdout/` 下 stderr 原文与命令原文 | exit 6，零命令 |
+| 3 Mode B 受控试动 | 本文未设预算 | 是，单臂单关节 | `tracking/tracking-<UTC>.csv` 与 report 原文 | exit 0；exit 8 按第 11 节处置 |
+| 4 配置样例采集 | 本文未设预算 | 否 | 模板 YAML 与现场 YAML 各一份 | 两份文件能一起被 `load_settings` 读通，不抛 `ConfigError` |
 
 只有阶段 0 有时间预算，来源是本次任务的约定。其余阶段的实际耗时记进 `stdout/` 存档，本文不设预算。
 
-## 1 开跑前必须知道的一件事：两套 Gate 撞名
+## 1 代码 Gate A–F 清单（现场要过的六道检查）
 
-「Gate」这个词在本项目里指两套完全不同的东西，字母还撞车。
-
-| 说法 | 指什么 | 在哪 | 数量 |
-| --- | --- | --- | --- |
-| 代码时的「Gate A–F」 | `measure_latency.py` 内的运行时门禁（发命令前的检查） | `benchmarks/alohamini_io/measure_latency.py` | 6 个，A–F |
-| 归档时的「Gate A–E」 | 验收里程碑：几何、映射、FK 点检、离线 IK、受控试动 | 定义只在旧仓库 `docs/alohamini-control/`，本库无 | 5 个，A–E |
-
-两套字母撞车，同一封信里说「Gate A」会产生歧义。本文一律写成「代码 Gate A」与「归档 Gate A」。
-
-代码 Gate 全清单，这就是现场要过的六道：
+本文里的 Gate A–F 指 `benchmarks/alohamini_io/measure_latency.py` 里的运行时门禁，即发命令前的六道检查。
 
 | 代码 Gate | 判什么 | 不通过时 |
 | --- | --- | --- |
@@ -53,10 +43,12 @@
 | P1 | 真机 AlohaMini 2 Pro 在场，物理断电开关可用 | 目视加手测 | 停止 |
 | P2 | Pi 上 Host 进程常驻 | Pi 上 `ps` 与端口 5555/5556 在听 | 起 Host |
 | P3 | PC 与 Pi 同网段 | `ping` 一次 | 修网络 |
-| P4 | 现场授权（谁授权、授权范围、谁在旁） | 口头确认，把结论记进归档 Gate 记录的 `operator` 字段 | 停止 |
+| P4 | 现场授权（谁授权、授权范围、谁在旁） | 口头确认，把结论记进 `"$S4DIR/stdout/"` 的现场记录（时间、人员、授权范围） | 停止 |
 | P5 | 轨迹空间足够：Mode B 累计行程可达 20° | 卷尺与目视确认该关节正向 20° 无干涉 | 减小 `--steps` |
 
 ### P0 阻塞
+
+**这一项本机无法预先确认，只能到现场实测。** `robot_metadata.schema_version` 由 Pi 上的 Host 进程广播，取值取决于 Pi 上的 vendor 代码，要 SSH 连到 Pi 才看得到；本机做不到。
 
 上一次现场（证据目录 `field-run-summary.md` 第 4 节）记录：`capture` 退出码 6，报错原文 `invalid robot metadata: schema_version=1, expected 2.`。这说明 Pi 上的 Host 仍在广播 `schema_version: 1`。
 
@@ -64,10 +56,10 @@
 
 宿主仍是 v1 时，后果是确定的：
 
-- `capture` 必 exit 6，不写盘。
-- 代码 Gate F 必然拒绝，`--mode tracking` 跑不起来，一条命令都发不出。
+- `capture` 必 exit 6，且不写盘。
+- 代码 Gate F 必然拒绝，`--mode tracking` 一条命令都发不出。
 
-结论：本窗口能否做受控试动，取决于 P0 是否先解决。解决方式是把 Pi 上 `/home/pi5/lerobot_alohamini` 更新到与本机 vendor 提交一致的版本。这一步涉及远端 git 操作，需要单独授权。
+结论：本窗口能否做受控试动，取决于 P0 是否先解决。解除方式是把 Pi 上 `/home/pi5/lerobot_alohamini` 更新到与本机 vendor 提交一致的版本。这一步涉及远端 git 操作，需要单独授权。
 
 本文档不提供升级步骤：两仓库文档里找不到 `schema_version` 从 1 升到 2 的步骤。
 
@@ -89,7 +81,7 @@ S4DIR=~/pi-workspace/alohamini-cartesian-teleop/evidence/s4-<UTC日期>
 - [ ] 5555 与 5556 端口在听
 - [ ] `uv run --no-sync python benchmarks/alohamini_io/capture_robot_fingerprint.py --help` exit 0
 - [ ] `uv run --no-sync python benchmarks/alohamini_io/measure_latency.py --help` exit 0
-- [ ] 证据目录已建：`mkdir -p "$S4DIR"/{capture,rtt,tracking,gates,configs,stdout}`
+- [ ] 证据目录已建：`mkdir -p "$S4DIR"/{capture,rtt,tracking,configs,stdout}`
 - [ ] 每条命令都显式传 `--out` 或 `--csv`
 
 默认文件名的坑：两个脚本的默认产物目录是 `artifacts/alohamini-io/`，相对当前工作目录解析，不以仓库根为基准。文件名里的时间戳只到秒（格式 `YYYYmmddTHHMMSSZ`），同一秒内跑两次会静默覆盖前一份（`write_text` 直接盖写）。结论：一律显式传 `--out` / `--csv`，不要依赖默认文件名。
@@ -139,42 +131,7 @@ S4DIR=~/pi-workspace/alohamini-cartesian-teleop/evidence/s4-<UTC日期>
 
 现场最容易把顶层那个 `1` 当成失败原因。脚本只校验 `robot_metadata.schema_version == 2` 与 `motors` 非空映射，不校验每个电机的 8 个字段是否齐全。8 字段是 `id`、`model`、`normalization`、`drive_mode`、`range_min`、`range_max`、`homing_offset`、`resolution`，齐不齐由宿主决定，现场逐电机记录实际覆盖情况。
 
-## 5 阶段 2：归档 Gate A–E 记录（不动机器人时填）
-
-本库没有归档 Gate 的模板与校验器：`docs/` 下只有决策记录、迁移归档与本文件。格式定义、模板、校验器都在旧仓库：
-
-- 格式与检查项：`/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini-cartesian-teleop/docs/alohamini-control/gates/README.md`
-- 模板：同目录 `_template.json`
-- 校验器：`/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini-cartesian-teleop/tools/alohamini_gate_record.py`
-
-下面 11 条是现场照着填的全部规则。
-
-1. 文件命名：`<side>-gate-<letter>.json`。`side` 取 `left`/`right`，`letter` 取 `A`–`E`。一臂一 Gate 一个文件，一臂五个文件，两臂共 10 个。
-2. 模板全文见本文附录 A，照抄后改名。
-3. `checks` 是数组，每项 `{id, description, expected, actual, result}`，`result` 只能取 `pass`/`fail`。`status=not_started` 时 `checks` 必须为空数组；`status=passed` 时 `checks` 非空、每项 `result` 为 `pass`，`evidence` 也非空。
-4. `evidence` 是数组，每项 `{kind, path, note}`。`kind` 只能取 `file`/`command_output`/`measurement`。`path` 非空，且不能是绝对路径：写相对仓库根的路径，或以 `~/` 开头。
-5. `profile_fingerprint` 三个子键齐全：`robot_model`、`robot_id`、`calibration_sha256`（64 位十六进制）。
-6. `calibration_sha256` 现场这样算：
-
-   ```bash
-   shasum -a 256 ~/.cache/huggingface/lerobot/calibration/robots/alohamini/AlohaMiniRobot.json
-   ```
-
-7. `recorded_at` 必须 ISO 8601 且偏移为 0。`Z`、`+00:00`、`+0000`、`z` 都可；带非零偏移或无时区会被拒。
-8. 校验命令与判据：
-
-   ```bash
-   python /Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini-cartesian-teleop/tools/alohamini_gate_record.py validate "$S4DIR/gates/" --json
-   ```
-
-   要求 `ok` 为 `true` 且 `records_checked` 为 `10`。小于 10 视为归档不完整。校验器只用标准库，本机任何 Python 都能跑，不需要 `lerobot`，也不改任何文件。
-9. 跨 Gate 规则：同一侧归档 Gate E 为 `passed` 要求 A–D 均存在且均 `passed`，否则校验器 exit 3。
-10. `calibration_sha256` 变化即该侧此前记录作废。三种情况会触发：重标定、换电机、改 `robot_id`。作废后须重跑重录。
-11. 每道 Gate 该填哪些检查项，见本文附录 B 的 A1–A3 / B1–B4 / C1–C3 / D1–D3 / E1–E3。
-
-红线：Gate 记录是准入证据，不是安全保证。记录通过不代表该侧可未经授权试动。
-
-## 6 阶段 3：制造一次代码 Gate F 的真实拒绝记录
+## 5 阶段 2：制造一次代码 Gate F 的真实拒绝记录
 
 代码 Gate F 在第一条 `send_action` 之前执行，所以它的拒绝路径结构上零命令，可以安全地制造。
 
@@ -184,15 +141,15 @@ S4DIR=~/pi-workspace/alohamini-cartesian-teleop/evidence/s4-<UTC日期>
 uv run --no-sync python benchmarks/alohamini_io/measure_latency.py --host 10.34.170.98 --mode tracking --enable-motion --joint arm_left_shoulder_pan.pos --steps 1 --csv "$S4DIR/tracking/f-gate-refusal-<UTC>.csv"
 ```
 
-代码 Gate A–E 都会过，拒绝点落在 F 的版本判断，得到 exit 6、零命令。拒绝时脚本不生成任何 CSV，命令里的 `--csv` 只是为了把命令写完整：跑之前不传它，默认路径同样用不上。
+代码 Gate 里前五道 A、B、C、D、E 都会过，拒绝点落在 F 的版本判断，得到 exit 6、零命令。拒绝时脚本不生成任何 CSV，命令里的 `--csv` 只是为了把命令写完整：跑之前不传它，默认路径同样用不上。
 
 宿主已经是 v2 时，改用「换算不可解析的关节」触发 F 的第二段。前提是先确认该关节真的不可换算，否则命令会真发出去。确认不了就不做这一步，宁缺记录不冒风险。
 
-记录要求：保存 stderr 原文、命令原文、退出码三项，写进对应归档 Gate 记录的 `evidence`，`kind` 取 `command_output`。
+记录要求：保存 stderr 原文、命令原文、退出码三项，三项一并存进 `"$S4DIR/stdout/"`，文件名带步骤号与退出码。
 
 不要为了制造 F 的拒绝去改标定文件。
 
-## 7 阶段 4：Mode B 受控试动（唯一动机器人的阶段）
+## 6 阶段 3：Mode B 受控试动（唯一动机器人的阶段）
 
 开跑前再确认，逐条勾选：
 
@@ -201,7 +158,6 @@ uv run --no-sync python benchmarks/alohamini_io/measure_latency.py --host 10.34.
 - [ ] 空场：人物离场
 - [ ] 无负载：末端无负载
 - [ ] 断电开关在手边，可随时按下
-- [ ] 该臂归档 Gate A–D 均 `passed`（这是归档 Gate 的准入规则，与代码 Gate 无关）
 
 命令：
 
@@ -231,9 +187,9 @@ uv run --no-sync python benchmarks/alohamini_io/measure_latency.py --host 10.34.
 - 收尾 hold 从 `finally` 发，正常结束、命令被拒、反馈死、Ctrl-C 都会发。只有一次 `*.pos` 都没测到时才不发。
 - hold 是就地冻结：把实测 `*.pos` 当目标，三轴速度钉 0，反馈带高度就回写实测高度。报告里只写 `hold_issued`，不写「sent」，因为 action socket 是 PUSH/CONFLATE 无确认。
 
-exit 8 表示 hold 被拒，也就是停命令没到。这一条按「机器可能仍在动」处置：先断电，再排查。判定与处置见第 12 节。
+exit 8 表示 hold 被拒，也就是停命令没到。这一条按「机器可能仍在动」处置：先断电，再排查。判定与处置见第 11 节。
 
-## 8 阶段 5：配置样例采集（两份 YAML）
+## 7 阶段 4：配置样例采集（两份 YAML）
 
 按 D2 的「模板文件 → 现场文件」两层产出：一份模板（不含现场敏感取值的通用默认），一份现场（真实端口、相机节点、超时与频率）。取值只能来自现场实测。
 
@@ -286,7 +242,7 @@ uv run --no-sync python -c "from pathlib import Path; from alohamini_cartesian.c
 
 模板随包分发的落点（`configs/` 是否进仓库）不在本次窗口决定。两份文件本次都落在证据目录。
 
-## 9 退出码对照表
+## 8 退出码对照表
 
 **一码两义**：`6` 在 `capture` 里表示宿主 metadata 不可用、主动不写盘；在 `measure` 里表示运动门禁拒绝、零命令。现场拿到 6，先看是哪个脚本。
 
@@ -306,7 +262,7 @@ uv run --no-sync python -c "from pathlib import Path; from alohamini_cartesian.c
 | measure | 7 | rtt 模式样本不足 |
 | measure | 8 | 收尾 hold 被拒，停命令没到 |
 
-## 10 产物与归档
+## 9 产物与归档
 
 证据目录按 `AGENTS.md` 第 8 节约定落在 `/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/` 下。本次建一个 `s4-<UTC日期>/` 子目录：
 
@@ -316,7 +272,6 @@ uv run --no-sync python -c "from pathlib import Path; from alohamini_cartesian.c
     ├── capture/
     ├── rtt/
     ├── tracking/
-    ├── gates/
     ├── configs/
     └── stdout/
 ```
@@ -325,12 +280,9 @@ uv run --no-sync python -c "from pathlib import Path; from alohamini_cartesian.c
 | --- | --- |
 | `capture/` | 阶段 1.1 的 `fingerprint-<UTC>.json`；P0 未解决时放失败运行的 stderr 原文，文件名带退出码 |
 | `rtt/` | 阶段 1.2 与 1.3 的两份 CSV（`rtt-net-*`、`rtt-deploy-*`） |
-| `tracking/` | 阶段 4 的 `tracking-<UTC>.csv` 与 report 原文 |
-| `gates/` | 阶段 2 的 10 个 `<side>-gate-<letter>.json` |
-| `configs/` | 阶段 5 的 `template.yaml` 与 `site.yaml` |
-| `stdout/` | 每条命令的 stdout、stderr 原文、退出码、命令原文；阶段 3 的拒绝记录也放这里 |
-
-`gates/` 里每份记录的 `evidence[].path` 写成 `~/pi-workspace/alohamini-cartesian-teleop/evidence/s4-<UTC日期>/...` 形式，不要写 `/Users/...` 绝对路径，校验器拒绝绝对路径。
+| `tracking/` | 阶段 3 的 `tracking-<UTC>.csv` 与 report 原文 |
+| `configs/` | 阶段 4 的 `template.yaml` 与 `site.yaml` |
+| `stdout/` | 每条命令的 stdout、stderr 原文、退出码、命令原文；阶段 2 的拒绝记录也放这里 |
 
 ### rtt 模式 CSV：18 列
 
@@ -378,7 +330,7 @@ uv run --no-sync python -c "from pathlib import Path; from alohamini_cartesian.c
 | `settled` | 是否在容差内稳住 |
 | `note` | `ok`、`settle budget exhausted`、`interrupted` 或 `aborted: <原因>` |
 
-## 11 验收标准
+## 10 验收标准
 
 每条一个判据，不写「看起来正常」。
 
@@ -387,112 +339,34 @@ uv run --no-sync python -c "from pathlib import Path; from alohamini_cartesian.c
 - [ ] 两组 rtt 各 500 样本、各 exit 0，且报告里 `achieved_rate_hz` 与请求率的差距有记录
 - [ ] 代码 Gate F 至少有一次真实拒绝记录（stderr 原文 + 命令原文 + 退出码）
 - [ ] Mode B 若执行：每步的 `error_deg`、`overshoot_deg`、`settled` 齐全；`rise_90_time_s` 非空；若为空，说明是容差设置问题并写明原因；收尾 `hold_issued` 在报告里
-- [ ] 10 份归档 Gate 记录齐备，校验器 `ok` 为 `true` 且 `records_checked` 为 `10`
 - [ ] 两份 YAML 样例（模板 + 现场）落盘，字段名与 `config/overlay.py` 一致，且能被 `load_settings` 读通
 
-## 12 失败与中止处置
+## 11 失败与中止处置
 
 | 现象 | 判据 | 处置 |
 | --- | --- | --- |
 | exit 6（capture） | stderr 含 `schema_version=` | 记录原文，转 P0 分支，不要重试 |
-| exit 6（measure） | 拒绝发生在首帧后 | 记录是哪道代码 Gate，写进归档记录 |
+| exit 6（measure） | 拒绝发生在首帧后 | 记录是哪道代码 Gate，写进 `"$S4DIR/stdout/"` |
 | exit 8 | 报告里 hold 被拒 | 先断电，再排查；按「仍在动」处置 |
 | exit 1 加反馈失联 | 连续 3 次序号不涨 | 检查网络与 Host 负载 |
 | 网络中断 | `ping` 丢包 | 重跑该阶段，不复用旧产物 |
 
-## 13 已知缺口与未验证项
+## 12 已知缺口与未验证项
 
 - Mode B 从未在真机跑过。
 - 收尾 hold 的实际效果无证据。
 - exit 8 的真实触发路径无记录。
 - Action socket 无确认，`hold_issued` 不等于送达。
 - 脚本不检查关节限位。
-- 本库没有归档 Gate 的模板与校验器，只有旧仓库有。
 - `schema_version` 升到 2 的步骤两仓库文档都没有。
 
-## 14 待裁决事项
+## 13 待裁决事项
 
-两条，均未定，不阻塞现场零运动阶段。
+一条，未定，不阻塞现场零运动阶段。
 
-1. 归档 Gate 的模板与校验器是否从旧仓库迁入本库？校验器只用标准库，可以直接搬；模板 21 行。不迁就只能引用旧仓库路径。
-2. 证据目录是否长期固定在 `/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/`？还是本库内另立 `evidence/`？
+1. 证据目录是否长期固定在 `/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/`？还是本库内另立 `evidence/`？
 
-## 附录 A：Gate 归档模板原文
-
-来源：旧仓库 `docs/alohamini-control/gates/_template.json`。21 行，一字未改。
-
-```json
-{
-  "_comment": "Gate 归档记录模板。复制为 <side>-gate-<letter>.json 后填写，格式说明见 docs/alohamini-control/gates/README.md。以 _ 开头的键被校验器忽略。",
-  "_comment_placeholders": "必须替换的占位：gate（A–E）、side（left/right）、profile_fingerprint.robot_model 与 profile_fingerprint.robot_id（此处填的是 Pi 现场默认值，现场不同须改）、profile_fingerprint.calibration_sha256（64 个 0 是占位，换成实测 64 位十六进制度值）、recorded_at（1970-01-01T00:00:00Z 是占位，换成 ISO 8601 UTC 实际时刻）、operator。",
-  "_comment_rules": "status=not_started 允许 checks 与 evidence 为空，本模板可原样通过结构校验。status=passed 要求 checks 非空且全部 result 为 pass，evidence 非空。同一侧 Gate E 为 passed 要求 A–D 均已 passed。",
-  "_comment_checks": "checks 元素形状：{id, description, expected, actual, result}。id 用 A1、B2 式短标识；expected 写可判定值；actual 写实测值；result 取 pass 或 fail。示例见 README 第 8 节。",
-  "_comment_evidence": "evidence 元素形状：{kind, path, note}。kind 取 file、command_output、measurement；path 写相对仓库根的路径或以 ~/ 开头的现场路径。",
-  "schema_version": 1,
-  "gate": "A",
-  "side": "left",
-  "status": "not_started",
-  "profile_fingerprint": {
-    "robot_model": "alohamini2pro",
-    "robot_id": "AlohaMiniRobot",
-    "calibration_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
-  },
-  "recorded_at": "1970-01-01T00:00:00Z",
-  "operator": "",
-  "checks": [],
-  "evidence": [],
-  "notes": ""
-}
-```
-
-这里的 `schema_version` 是 `1`（归档格式版本），与宿主 metadata 的 `2` 是两套东西。
-
-## 附录 B：Gate A–E 检查项清单
-
-来源：旧仓库 `docs/alohamini-control/gates/README.md` 第 8 节。逐字照抄。
-
-归档 Gate A 几何：
-
-| id | description | expected / actual 写法 |
-| --- | --- | --- |
-| `A1` | 六关节中心与轴向与派生模型一致 | expected 写「与 `am_arm200/kinematics.urdf` 一致」；actual 写逐关节比对结论 |
-| `A2` | 末端 frame 为 `left_Fixed_Jaw` / `right_Fixed_Jaw` 输出系 | expected 写 frame 名；actual 写实际取到的 frame 名 |
-| `A3` | 固定变换（肩底座原点）与安装位置一致 | expected 写三轴偏移量（米）；actual 写实测值 |
-
-归档 Gate B 映射：
-
-| id | description | expected / actual 写法 |
-| --- | --- | --- |
-| `B1` | 逐关节 `sign` 与实机方向一致 | expected 写每个关节的符号；actual 写实测方向表结论（逐关节 pass 或 fail） |
-| `B2` | 逐关节 `zero` 与实机零位一致 | expected 写零位定义；actual 写实测零位偏差（度） |
-| `B3` | 标定指纹录入齐全 | expected 写「18 个电机齐全，8 个字段齐全」；actual 写实际覆盖数 |
-| `B4` | 标定 JSON 与 EEPROM 双存储对照 | expected 写「`range_min`、`range_max`、`homing_offset` 逐电机相等」；actual 写不一致的电机清单，无则写「0 个不一致」 |
-
-归档 Gate C FK 点检：
-
-| id | description | expected / actual 写法 |
-| --- | --- | --- |
-| `C1` | 不少于 5 个参考姿态覆盖工作空间 | expected 写「5 个姿态」；actual 写实际姿态数与姿态说明 |
-| `C2` | 理论 FK 与实测位置误差在门限内 | expected 写门限（毫米）；actual 写各姿态误差（毫米） |
-| `C3` | 符号错误的排除：各轴单关节小角度正向运动方向与模型同号 | expected 写「六关节同号」；actual 写异常关节清单 |
-
-归档 Gate D 离线 IK：
-
-| id | description | expected / actual 写法 |
-| --- | --- | --- |
-| `D1` | 安全姿态下 ±X/±Y/±Z 小步求解连续 | expected 写步数与每步最大关节变化（度）；actual 写实测值 |
-| `D2` | 位置残差在门限内 | expected 写「残差不超过 5.0 mm」；actual 写 max_residual（米） |
-| `D3` | 求解限位用 adapter 交集限位而非 URDF 占位限位 | expected 写交集限位来源；actual 写实际生效的限位区间 |
-
-归档 Gate E 受控试动：
-
-| id | description | expected / actual 写法 |
-| --- | --- | --- |
-| `E1` | 试动条件：单臂、空场、无负载 | expected 写「另一臂不参与、人物离场、末端无负载」；actual 写现场确认结论 |
-| `E2` | 极低速小步运动，方向与指令一致，单次总行程不超过 20 度 | expected 写步长与总行程上限；actual 写实测方向与行程 |
-| `E3` | 保护触发：触发后停止及时，停止后不自动续动 | expected 写触发条件与停发时限；actual 写触发记录与停止耗时 |
-
-## 附录 C：两个脚本的完整参数表
+## 附录 A：两个脚本的完整参数表
 
 ### capture（6 个参数加 `-h`）
 

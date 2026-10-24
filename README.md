@@ -216,7 +216,7 @@ v0.4.0 把旧仓库 `benchmarks/alohamini_io` 的两个现场基准脚本与配�
 
 本轮 `pytest tests` 结果（本机实测，命令 `uv run --no-sync python -m pytest tests -o addopts="" -p no:cacheprovider`）：`999 passed, 2 skipped`。迁移前是 `823 passed, 2 skipped`，增量 176 条 = 23 条（capture 测试参数化展开）+ 153 条（measure 测试参数化展开）。跳过仍是那两个 parity 文件（缺 `lerobot`）。`tests/benchmarks` 子集 190 条通过 = 14（`test_benchmark_arm_ik.py`）+ 23 + 153。`ruff check .` 报 `All checks passed!`，`ruff format --check .` 报 `34 files already formatted`。
 
-- S4（剩余）：只做真机侧的现场验证——两个脚本对着真机 Host 跑一遍，产出 Gate A–E 归档与配置样例。脚本迁移与离线测试在 v0.4.0 已完成，不属 S4。前置条件、逐条命令与验收判据见 [docs/s4-field-smoke.md](docs/s4-field-smoke.md)。
+- S4（剩余）：只做真机侧的现场验证——两个脚本对着真机 Host 跑一遍，产出配置样例。脚本迁移与离线测试在 v0.4.0 已完成，不属 S4。前置条件、逐条命令与验收判据见 [docs/s4-field-smoke.md](docs/s4-field-smoke.md)。
 
 ## 已知限制
 
@@ -244,12 +244,13 @@ uv run --no-sync ruff check .             # 代码风格
 alohamini-cartesian-lib/
 ├── pyproject.toml                    # 包元数据、extras、dev 组、pytest 与 ruff 配置
 ├── README.md
+├── TODO.md                          # 待办清单，Agent 与人都要维护
 ├── .gitignore
 ├── benchmarks/alohamini_ik/benchmark_arm_ik.py           # FK 与数值 IK 基准脚本
 ├── benchmarks/alohamini_io/capture_robot_fingerprint.py  # 现场采集对端 metadata 指纹，lerobot 惰性 import
 ├── benchmarks/alohamini_io/measure_latency.py            # 现场测时延，Mode B tracking 会真动机器人
 ├── docs/ADR.md                       # D1–D9 决策记录
-├── docs/s4-field-smoke.md            # S4 现场实施：命令、判据、产物、退出码、Gate 归档
+├── docs/s4-field-smoke.md            # S4 现场实施：命令、判据、产物、退出码
 ├── docs/archive/migration-backlog.md # 迁移待办，已归档（迁移在 v0.4.0 完成）
 ├── src/alohamini_cartesian/
 │   ├── __init__.py                   # __version__ = "0.4.0"

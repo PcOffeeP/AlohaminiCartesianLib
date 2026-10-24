@@ -31,6 +31,7 @@
 - 不修改厂商仓库 `/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini-cartesian-teleop`。
 - 不自动推送远程、不改写历史（不 amend、不 force push）。
 - 提交只用显式路径，禁止 `git add -A`。
+- 待办清单在仓库根 `TODO.md`。开工前先读它；发现自己没做完的、或发现新缺口，当场追加一行，不要只在对话里记；完成一项就改状态并写上提交哈希。
 
 ## 5 怎么自检
 
@@ -61,12 +62,12 @@ git log --oneline -3                    # 最近提交
 1. `placo` 依赖形态——已决：声明 `kinematics` extra（`placo>=0.10.1,<0.11`）并装进开发环境，接受 numpy 落到 2.3.x，见 `docs/ADR.md` D8
 2. `benchmarks/` 迁移时机——已迁完（`benchmarks/alohamini_ik` 在 v0.3.0，`benchmarks/alohamini_io` 在 v0.4.0），剩现场验证：真机 metadata 取值、Mode A/B 测量、Gate F 拒绝路径、配置样例采集。见 `docs/ADR.md` D3 与 D9、`docs/s4-field-smoke.md`
 3. 旧仓库那 49 例线上协议测试是否搬入（测的是厂商侧模块，本库不包含）——已决：不迁，见 D7
-4. 限位表倒置（`lo > hi`）没有校验也没有用例守护，`solve()` 入口不检查
 
 ## 8 相关位置
 
 - 决策记录：`docs/ADR.md`（D1–D9）
 - 现场实施：`docs/s4-field-smoke.md`（S4 到现场的逐条命令、判据与产物）
 - 迁移归档：`docs/archive/migration-backlog.md`（迁移已在 v0.4.0 完成）
+- 待办清单：`TODO.md`
 - 实测数据：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/`
 - 旧仓库（只读参考）：`/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini-cartesian-teleop`
