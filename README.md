@@ -216,14 +216,14 @@ v0.4.0 把旧仓库 `benchmarks/alohamini_io` 的两个现场基准脚本与配�
 
 本轮 `pytest tests` 结果（本机实测，命令 `uv run --no-sync python -m pytest tests -o addopts="" -p no:cacheprovider`）：`999 passed, 2 skipped`。迁移前是 `823 passed, 2 skipped`，增量 176 条 = 23 条（capture 测试参数化展开）+ 153 条（measure 测试参数化展开）。跳过仍是那两个 parity 文件（缺 `lerobot`）。`tests/benchmarks` 子集 190 条通过 = 14（`test_benchmark_arm_ik.py`）+ 23 + 153。`ruff check .` 报 `All checks passed!`，`ruff format --check .` 报 `34 files already formatted`。
 
-- S4（剩余）：只做真机侧的现场验证——两个脚本对着真机 Host 跑一遍，产出 Gate A–E 归档与配置样例。脚本迁移与离线测试在 v0.4.0 已完成，不属 S4。阻塞条件与计划见 [docs/migration-backlog.md](docs/migration-backlog.md)。
+- S4（剩余）：只做真机侧的现场验证——两个脚本对着真机 Host 跑一遍，产出 Gate A–E 归档与配置样例。脚本迁移与离线测试在 v0.4.0 已完成，不属 S4。前置条件、逐条命令与验收判据见 [docs/s4-field-smoke.md](docs/s4-field-smoke.md)。
 
 ## 已知限制
 
 - 未装 `kinematics` extra 时，`tests/test_arm_ik.py` 的数值参数实例、`tests/test_control_controller.py` 的 2 条真 IK 用例与 `tests/benchmarks/test_benchmark_arm_ik.py` 因缺 `placo` 跳过。开发环境已装该 extra，本机这部分真跑。
 - 缺 `lerobot` 时，`tests/test_kinematics_lerobot_parity.py` 与 `tests/test_control_api_lerobot_parity.py` 在收集期整体跳过。这两个文件用真实 `FeetechMotorsBus` 与 `AlohaMiniClient` 作 oracle 做差分对照，所以与真实总线的整环对照未在最小环境执行。
 - `connect(...)` 必须注入 `client_factory`。默认工厂恒抛 `RuntimeUnavailable`，没有内部 import `lerobot` 的退路。
-- `benchmarks/alohamini_io` 的两个脚本已入库，配套测试离线跑通 176 条用例，但从未对着真机 Host 跑过。缺三样证据：`schema_version == 2` 的实际取值没有样本；`measure_latency.py` 的 Mode B `tracking` 会真动机器人，未跑过；Gate F（运行时门禁，决定这次测量能不能发命令）的真实拒绝路径未跑过。见 [docs/migration-backlog.md](docs/migration-backlog.md)。
+- `benchmarks/alohamini_io` 的两个脚本已入库，配套测试离线跑通 176 条用例，但从未对着真机 Host 跑过。缺三样证据：`schema_version == 2` 的实际取值没有样本；`measure_latency.py` 的 Mode B `tracking` 会真动机器人，未跑过；Gate F（运行时门禁，决定这次测量能不能发命令）的真实拒绝路径未跑过。现场怎么补齐这些证据见 [docs/s4-field-smoke.md](docs/s4-field-smoke.md)。
 
 ## 开发与测试
 
@@ -249,7 +249,8 @@ alohamini-cartesian-lib/
 ├── benchmarks/alohamini_io/capture_robot_fingerprint.py  # 现场采集对端 metadata 指纹，lerobot 惰性 import
 ├── benchmarks/alohamini_io/measure_latency.py            # 现场测时延，Mode B tracking 会真动机器人
 ├── docs/ADR.md                       # D1–D9 决策记录
-├── docs/migration-backlog.md         # 迁移进度、剩余事项与阻塞条件
+├── docs/s4-field-smoke.md            # S4 现场实施：命令、判据、产物、退出码、Gate 归档
+├── docs/archive/migration-backlog.md # 迁移待办，已归档（迁移在 v0.4.0 完成）
 ├── src/alohamini_cartesian/
 │   ├── __init__.py                   # __version__ = "0.4.0"
 │   ├── py.typed
