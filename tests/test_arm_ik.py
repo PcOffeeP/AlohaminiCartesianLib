@@ -2771,3 +2771,112 @@ def test_t_ik_18_13_numpy_bool_joint_limit_is_not_accepted_as_a_number(
             f"the np.bool_ limit error must echo the offending side as {fragment!r}; "
             f"missing from: {message!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# T-IK-18.14 / 18.15 —— 上一段结尾上报的两处缺口，本轮裁决为「写进回归网」
+#
+# 18.12 / 18.13 的小节注释当时把 ``memoryview(b"ab")`` 记为「实现缺口、留作待裁决项上报」
+# 而没有写成用例；本轮裁决是把它钉成契约（T-IK-18.14），并补上大整数在 ``np.deg2rad``
+# 抛裸 ``TypeError`` 的同类缺口（T-IK-18.15）。两条都是**当下实跑为红**的红阶段用例。
+#
+# 现状实测（未改实现，种子 ``SOLVE_SEED_Q`` + ``elbow_bend`` 冻结位姿，只改
+# ``LIMIT_VALIDATION_JOINT`` 的限位，命令与原文见交付报告）：
+# - ``memoryview(b"ab")``   -> **不抛**：``memoryview`` 是 ``collections.abc.Sequence``、
+#   ``len() == 2``、元素是 ``int``（97 / 98），依次穿过形态 / 实数 / 有限性 / ``lo < hi``
+#   四道判据，被当成「97 deg – 98 deg」这个荒谬限位继续求解，返回 ``ok=False`` /
+#   ``reason='JOINT_LIMIT'``（``q[left_elbow_flex]`` 实测被夹到 97.0）——
+#   调用方看到的是「机器人到不了」，而不是「我把限位写错了」。
+# - ``memoryview(b"abcd")`` -> 已被拦住：``len() != 2`` 落回「形态不对」这一支
+#   （``arm_ik.py`` 第 357 / 360 行），实测 ValueError: ... must be a (lo, hi) pair,
+#   got <memory at 0x...>；本轮只核对，不新增用例。
+# - ``bytearray(b"ab")``    -> 已被拦住：``isinstance(limit, (str, bytes, bytearray))``
+#   （``arm_ik.py`` 第 355 行）落回同一支，实测 ValueError: ... must be a (lo, hi) pair,
+#   got bytearray(b'ab')；同样只核对，既有用例是 T-IK-18.8。
+# - ``(2**63, 2**64)``       -> 四道判据全过（``math.isfinite(2**64)`` 为 ``True``），随后在
+#   ``_solve_once`` 的 ``np.deg2rad``（``arm_ik.py`` 第 228 行）抛裸
+#   ``TypeError: loop of ufunc does not support argument 0 of type int which has no
+#   callable deg2rad method``，直接穿出 ``solve()``。
+# ---------------------------------------------------------------------------
+
+
+def test_t_ik_18_14_memoryview_joint_limit_rejected_as_mis_shaped() -> None:
+    """T-IK-18.14：``memoryview(b"ab")`` 不是限位序列，抛 ValueError 并回显收到的对象。
+
+    契约：限位是「长度 2 的实数序列」，而「序列」在这里的含义是**限位的两个端点**，不是
+    「任何恰好有长度 2 的可下标对象」。``memoryview`` 与 ``str`` / ``bytes`` / ``bytearray``
+    一样是「恰好也长得像长度 2 序列」的非限位类型：它被注册进
+    ``collections.abc.Sequence``，``len(memoryview(b"ab")) == 2``，元素是 ``int``
+    （97 / 98），因此能依次穿过形态 / 实数 / 有限性 / ``lo < hi`` 四道判据，被静默当成
+    ``(97, 98)`` 这个合法但荒谬的限位继续求解——现状返回 ``ok=False`` /
+    ``reason='JOINT_LIMIT'``，把「调用方把限位写错成了二进制缓冲」伪装成一次正常的求解
+    失败（与 T-IK-18.2 的退化限位同一类错误）。
+
+    断言三件事：抛 ``ValueError``（不是静默求解、不是 ``ok=False`` 结果，也不是 placo 的裸
+    ``RuntimeError``）；消息点名关节 ``left_elbow_flex``；消息属于「形态不对」这一支
+    （``must be a (lo, hi) pair``）并把收到的对象按 repr 回显。
+
+    回显断言只钉 ``repr`` 的稳定前缀 ``got <memory at 0x``：``memoryview`` 的 repr 里带
+    进程内地址，写全等于把随机地址钉进断言（与 T-IK-18.12 不对迭代器 ``repr`` 断言的
+    理由相同）；``<memory at 0x`` 这个前缀已经是「回显的是 memoryview 本身，而不是
+    ``(97, 98)`` 之类的解包结果」的判别点。
+    """
+    pytest.importorskip("placo", reason="ArmIK 的数值求解需要可选依赖 placo")
+    # 长度 2 的 memoryview：元素恰好是两个 int，形态判据（含 len == 2）挡不住它。
+    limits = limits_replacing(LIMIT_VALIDATION_JOINT, memoryview(b"ab"))
+
+    # NOT a returned ok=False / reason='JOINT_LIMIT', NOT silent acceptance as (97, 98).
+    with pytest.raises(ValueError) as excinfo:
+        solve_with_limits(limits)
+
+    message = str(excinfo.value)
+    assert LIMIT_VALIDATION_JOINT in message, (
+        f"the memoryview-limit error must name {LIMIT_VALIDATION_JOINT!r}, got: {message!r}"
+    )
+    # 分支专属字样：「形态不对」这一支，而不是「实数值」或「有限性」那两支。
+    assert "must be a (lo, hi) pair" in message, (
+        f"a memoryview limit must be rejected by the (lo, hi)-pair shape branch, got: {message!r}"
+    )
+    assert "got <memory at 0x" in message, (
+        f"the error must echo the received memoryview (repr prefix 'got <memory at 0x'), "
+        f"not an unpacked value; missing from: {message!r}"
+    )
+
+
+def test_t_ik_18_15_huge_integer_joint_limit_never_raises_type_error() -> None:
+    """T-IK-18.15：``(2**63, 2**64)`` 限位不得让裸 ``TypeError`` 逃出 ``solve()``。
+
+    ``2**63`` / ``2**64`` 是合法的 Python ``int``，``math.isfinite(2**64)`` 为 ``True``，
+    ``2**63 < 2**64`` 也成立——入口的四道判据全部放行。真正出问题的地方在数值路径：
+    ``_solve_once`` 里的 ``np.deg2rad(lo_deg)``（``arm_ik.py`` 第 228 行）对这个量级的
+    ``int`` 抛裸 ``TypeError: loop of ufunc does not support argument 0 of type int which
+    has no callable deg2rad method``，于是「调用方把限位写成了天文数字」以一个既不是
+    :class:`IKResult` 也不是 ``ValueError`` 的异常穿出 ``solve()``。调用方按「限位非法 =
+    ``ValueError``」统一捕获的代码漏掉这个输入，看到的是一条来自 ufunc 内部的类型错误
+    （与 T-IK-18.9 的 ``OverflowError``、T-IK-18.11 的 ``Fraction`` ``TypeError`` 同一类
+    逃逸路径）。
+
+    本用例只钉「不许有 ``TypeError`` 逃出」这一条，不钉定位修复后的具体结局：
+    ``ValueError``（入口按非法限位拒绝）、placo 的 ``RuntimeError``（``QPError:
+    Infeasible QP``）、以及正常返回（``ok`` 为 ``True`` 或 ``False`` 均可，``reason`` 不限）
+    都算通过。这样写的理由是这个输入的「正确结局」是待裁决的设计选择，红阶段只钉住
+    已经确定的契约面——异常类型不许是 ``TypeError``。
+    """
+    pytest.importorskip("placo", reason="ArmIK 的数值求解需要可选依赖 placo")
+    limits = limits_replacing(LIMIT_VALIDATION_JOINT, (2**63, 2**64))
+
+    try:
+        result = solve_with_limits(limits)
+    except TypeError as exc:
+        # np.deg2rad 的裸 TypeError 从这里逃出 solve()：本轮要钉住的缺口本身。
+        pytest.fail(f"limit validation must not let TypeError escape solve(): {exc!r}")
+    except (ValueError, RuntimeError):
+        # ValueError：入口按「限位非法」拒绝（首选）。
+        # RuntimeError：placo 的 QPError，可接受的次选结局。
+        return
+
+    # 正常返回同样可接受：ok / reason 取值不限，只要求返回的是 IKResult 而不是异常。
+    for field in ("q_deg", "ok", "reason"):
+        assert hasattr(result, field), (
+            f"solve() must return an IKResult (missing {field!r}): {result!r}"
+        )

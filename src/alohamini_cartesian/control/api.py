@@ -223,6 +223,38 @@ class ArmHandle:
         Before the first action is dispatched the straight line from the
         current FK pose to the target is lazily pre-checked: every sampled
         waypoint must be IK-reachable and inside the joint limits.
+
+        Raises:
+            MotionNotEnabled: The handle is not attached to a session, or the
+                session holds no controller for this side.
+            MotionTimeout: No arrival within ``timeout_s``; the exception's
+                ``moved`` field carries the measured distance so far.
+            FeedbackLost: No new feedback sample arrived within
+                ``session._feedback_timeout_s``.
+            OutOfRange: The lazy whole-path precheck found a waypoint that is
+                IK-unreachable or outside the joint limits; the rejected target
+                travels on the exception's ``target`` field.
+            MotionBlocked: The session state machine reported BLOCKED or FAULT,
+                or the adapter failed on three consecutive controller ticks.
+            ValueError: The injected adapter reports illegal joint limits.  The
+                ``ValueError`` raised by ``ArmIK.solve`` during its entry
+                validation propagates out of ``move_to`` unchanged from the
+                whole-path precheck that runs before the first dispatch: an
+                illegal limit is a configuration error, not an unreachable
+                path, so this library deliberately does not translate it into
+                :class:`OutOfRange` or ``MotionBlocked``.  When ``q_current`` is
+                ``None`` that precheck is skipped, and the same configuration
+                error surfaces as :class:`MotionTimeout` instead, because
+                ``controller._tick_arm_pose`` wraps ``solve()`` in a
+                ``try/except Exception`` and turns it into a
+                ``CycleOutcome(error_code=IK_FAILED)``.
+            RuntimeError: The injected adapter's limits pass the entry validation
+                but make the QP infeasible, for example endpoints far beyond the
+                magnitude ``float`` can represent.  The placo ``QPError`` is not
+                wrapped and propagates out of ``move_to`` unchanged:
+                ``_precheck_straight_path`` has no ``try/except`` around
+                ``solve()``, so limits like ``(2**63, 2**64)`` reach the caller
+                as ``RuntimeError: QPError: Problem: Infeasible QP``.
         """
         session = self._session
         if session is None:

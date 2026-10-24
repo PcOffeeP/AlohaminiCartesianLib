@@ -232,14 +232,14 @@ S3 要把旧仓库的 `control/` 与运动学搬进本库。旧代码在 `contro
 
 `solve()` 在 F2 那道键检查的同一个循环里、任何数值工作（构造 placo 机器人、首次求解）之前，对 `self.profile.joint_names` 里的 6 个必需关节逐个校验限位取值：
 
-1. 取值是长度 2 的序列（`collections.abc.Sequence`；`str` / `bytes` / `bytearray`、迭代器与生成器一律不算），否则报 `ValueError`；
+1. 取值是长度 2 的序列（`collections.abc.Sequence`；`str` / `bytes` / `bytearray` / `memoryview`、迭代器与生成器一律不算，实现见 `arm_ik.py:367` 的 `isinstance(limit, (str, bytes, bytearray, memoryview))`），否则报 `ValueError`；
 2. 两个元素的类型在显式白名单里——Python `int` / `float`，以及 numpy 数值标量（`np.integer` / `np.floating`）；**`bool` 与 `np.bool_` 一律拒绝**（`bool` 是 `int` 的子类，`(True, False)` 会被数值比较放行成 `(1.0, 0.0)`）。白名单之外的类型全部拒绝，两种代表性输入已实测：`Fraction` 是 `numbers.Real` 的子类（实测 `isinstance(Fraction(1, 2), numbers.Real)` 为 `True`），能过 `numbers.Real` 检查，却让 `np.deg2rad(Fraction(1, 2))` 抛裸 `TypeError: loop of ufunc does not support argument 0 of type Fraction ...`；`Decimal` **不是** `numbers.Real` 的子类（实测 `isinstance(Decimal("0.5"), numbers.Real)` 为 `False`），走的是同一个「不在白名单」分支。两者都被 `ValueError` 拒绝，而不是让下游 `np.deg2rad` 抛裸 `TypeError`；
-3. 两个元素都有限（`math.isfinite`，排除 `NaN` 与 `±inf`）；
+3. 两个元素都有限（`math.isfinite`，排除 `NaN` 与 `±inf`）。`±inf` 继续被拒绝、**不为它写特例代码**，依据是默认路径撞不上这组取值：`connect()` 的 `adapter` 默认是 `None`（不给适配器就不会有 `(-inf, inf)` 这类限位）；`src/` 内零个 `JointKinematicAdapter(` 构造点（全库 `grep -rn "JointKinematicAdapter(" --include=*.py .` 命中 8 处，全部在 `tests/` 下，`src/` 内除 `kinematics/joint_adapter.py` 自身的类定义/文档外计数为 0）；真实 Host 默认 `use_degrees=False`，臂关节 `normalization` 取 `range_m100_100`（缺省值，`capability/detect.py:20`），现场实测限位 `±174.07°`。反证：若放行 `(-inf, inf)`，`_clamp_to_joint_limits` 的 `within_limits`（`arm_ik.py:138`、`arm_ik.py:142`）会恒真、`JOINT_LIMIT` 永不触发，限位校验整条失效；
 4. 满足 `lo < hi`（倒置与退化都拒绝）。
 
 限位值限定为上面第 2 条那份白名单（`bool`、`np.bool_`、`Fraction`、`Decimal` 与其余一切非白名单类型一律拒绝），`solve()` 不修改调用方传入的限位字典：不复制、不写回，取值按调用方给的原始类型只流向**第二次**求解，也就是注入调用方限位那次（`arm_ik.py:431`）。`solve()` 里的第一次求解（`arm_ik.py:408`）用的是内部按 URDF 构造的 `urdf_limits_deg`（`arm_ik.py:397-400`），调用方给的取值不参与。
 
-违反上述四条的一律抛 `ValueError`，消息点名关节并给出实际取值（`joint_limits_deg['left_elbow_flex'] must satisfy lo < hi, got lo=90.0, hi=-90.0`）。第 3 条「有限」覆盖超出 `float` 范围的整数：`math.isfinite` 先转 `float`（`arm_ik.py:379`），`(10**400, 10**401)` 会在那里抛 `OverflowError: int too large to convert to float`，入口把它并进既有的 `must be finite` 分支（`arm_ik.py:378-385`），实测 `(10**400, 10**401)` 抛 `ValueError`、消息为 `joint_limits_deg['left_elbow_flex'] must be finite, got lo=<10**400>, hi=<10**401>`（`repr` 回显的是这两个值的十进制写法，不作位数口径的换算）、抛出位置 `arm_ik.py:383`。这只覆盖「调用方把参数写错」这一类，属于入参错误，不是求解失败。
+违反上述四条的一律抛 `ValueError`，消息点名关节并给出实际取值（`joint_limits_deg['left_elbow_flex'] must satisfy lo < hi, got lo=90.0, hi=-90.0`）。第 3 条「有限」覆盖超出 `float` 范围的整数：`math.isfinite` 先转 `float`（`arm_ik.py:391`），`(10**400, 10**401)` 会在那里抛 `OverflowError: int too large to convert to float`，入口把它并进既有的 `must be finite` 分支（`arm_ik.py:390-397`），实测 `(10**400, 10**401)` 抛 `ValueError`、消息为 `joint_limits_deg['left_elbow_flex'] must be finite, got lo=<10**400>, hi=<10**401>`（`repr` 回显的是这两个值的十进制写法，不作位数口径的换算）、抛出位置 `arm_ik.py:395`（消息在 `arm_ik.py:396`）。这只覆盖「调用方把参数写错」这一类，属于入参错误，不是求解失败。
 
 多余的键（不在 `profile.joint_names` 里的关节）**明确忽略**：校验只遍历必需关节，不遍历整个字典。这条契约由两条用例共同守护——`T-IK-18.4`（多余键取值合法时，7 键与 6 键的求解结果逐字段一致）与 `T-IK-18.7`（多余键取值**非法**时仍被忽略，`solve()` 正常返回、`ok is True`，且与 6 键基线逐字段一致）。只有 18.4 杀不动「遍历整个字典校验」这类错误实现：它给多余键填的是合法值，全表校验照样通过，判别落在 18.7。
 
@@ -263,4 +263,6 @@ S3 要把旧仓库的 `control/` 与运动学搬进本库。旧代码在 `contro
 
 已知代价之三：校验只做「形状 + 类型白名单 + 有限 + `lo < hi`」四条，不做语义合理性检查（例如限位是否宽于真实机械行程、是否与 URDF 一致），这类越界仍靠求解结果与 `JOINT_LIMIT` 分类体现。
 
-已知代价之四：`memoryview` 等 buffer 形态不被拒绝，会被当成一对整数放行。实测 `memoryview(b"ab")` 是 `collections.abc.Sequence`、`len == 2`、元素是 `int`（值为 `(97, 98)`），因此绕过形态检查与类型白名单；`memoryview(array.array("d", [1.0, 2.0]))` 同样是 `Sequence`、元素是 `float`。实测把 `joint_limits_deg['left_elbow_flex']` 换成 `memoryview(b"ab")` 时，`solve()` 不抛 `ValueError`，返回 `IKResult(ok=False, reason='JOINT_LIMIT')`。这与本决策「非法限位在入口暴露」的取向不一致，属已知缺口，**本轮不修实现**（不扩排除清单，`str` / `bytes` / `bytearray` 之外不新增排除项），后续另案处理，与上文「残差失败被归类成 `JOINT_LIMIT`」的问题并列。
+已知代价之四（已修复）：`memoryview` 等 buffer 形态曾被当成一对整数放行（`memoryview(b"ab")` 是 `collections.abc.Sequence`、`len == 2`、元素是 `int`），绕过形态检查与类型白名单；本轮已把它与 `str` / `bytes` / `bytearray` 同列排除（`arm_ik.py:367`，`isinstance(limit, (str, bytes, bytearray, memoryview))`）。`memoryview(b"ab")` 现在抛 `ValueError`，消息落 `must be a (lo, hi) pair` 一支并回显收到的对象（`got <memory at 0x...>`，即该对象的 `repr`）；`memoryview(b"abcd")`（`len() != 2`）与 `bytearray(b"ab")` 行为不变，仍走同一条拒绝路径。由 `T-IK-18.14` 守护（把 `memoryview(b"ab")` 作为 `left_elbow_flex` 的限位传入，断言抛 `ValueError`、消息点名关节、落在形态分支并回显 `repr`）。
+
+已知代价之五：入口校验通过后，限位两端在 `_solve_once` 里先统一 `float` 归一，再进 `np.deg2rad`（`arm_ik.py:234-236`，即 `robot.set_joint_limits` 那几行），因此「极大但有限」的整数不再以裸 `TypeError: loop of ufunc does not support argument 0 of type int ...` 穿出——`(2**63, 2**64)` 这般输入能过入口校验。代价是这类输入会以 placo 的 `RuntimeError: QPError: Problem: Infeasible QP` 收场，**属求解不可行，不是入参校验覆盖范围**；真实限位的量级（≤ 若干百度）不会触到。由 `T-IK-18.15` 守护（断言「不得有 `TypeError` 逃出 `solve()`」，允许 `ValueError` / placo `RuntimeError` / 正常返回）。

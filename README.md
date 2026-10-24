@@ -34,6 +34,7 @@ AlohaMini 笛卡尔遥操作的产品侧库：对机器人运行时的适配协�
 | D7 | 迁移边界 | 厂商侧协议测试不迁入，本库对厂商内部协议不负回归责任 |
 | D8 | `placo` 依赖形态 | 声明 `kinematics` extra（`placo>=0.10.1,<0.11`），接受 numpy 落到 2.3.x |
 | D9 | 现场基准脚本迁移时机 | `benchmarks/alohamini_io` 两脚本与配套测试在 v0.4.0 迁入，不等 S4；语义零改动，`lerobot` 保持函数体内惰性导入 |
+| D10 | 关节限位取值在 `ArmIK.solve()` 入口校验 | 违规抛 `ValueError`，多余键忽略；`±inf` 不放行（默认路径撞不上），`memoryview` 已排除 |
 
 每条的背景、决定与代价见 [docs/ADR.md](docs/ADR.md)。
 
@@ -236,7 +237,7 @@ uv run --no-sync ruff check .             # 代码风格
 
 本仓库没有 `uv.lock`，所以一律带 `--no-sync`：不带它的 `uv run` 会自行解析依赖并新写一个 `uv.lock`。`addopts = "-q"` 已经生效，自己再加 `-q` 会变成 `-qq` 并隐藏 `N passed` 汇总行；看不到汇总行时用 `-o addopts=""`。
 
-当前 `pytest tests` 报 `999 passed, 2 skipped`。跳过项只剩两个 parity 文件缺 `lerobot`，构成见「已知限制」。测试不依赖真实设备，不联网。
+当前 `pytest tests` 报 `1025 passed, 2 skipped`。跳过项只剩两个 parity 文件缺 `lerobot`，构成见「已知限制」。测试不依赖真实设备，不联网。
 
 ## 目录结构
 
@@ -249,11 +250,11 @@ alohamini-cartesian-lib/
 ├── benchmarks/alohamini_ik/benchmark_arm_ik.py           # FK 与数值 IK 基准脚本
 ├── benchmarks/alohamini_io/capture_robot_fingerprint.py  # 现场采集对端 metadata 指纹，lerobot 惰性 import
 ├── benchmarks/alohamini_io/measure_latency.py            # 现场测时延，Mode B tracking 会真动机器人
-├── docs/ADR.md                       # D1–D9 决策记录
+├── docs/ADR.md                       # D1–D10 决策记录
 ├── docs/s4-field-smoke.md            # S4 现场实施：命令、判据、产物、退出码
 ├── docs/archive/migration-backlog.md # 迁移待办，已归档（迁移在 v0.4.0 完成）
 ├── src/alohamini_cartesian/
-│   ├── __init__.py                   # __version__ = "0.4.0"
+│   ├── __init__.py                   # __version__ = "0.5.0"
 │   ├── py.typed
 │   ├── adapter/protocol.py           # 对 lerobot 的唯一接触面（typing.Protocol）
 │   ├── capability/detect.py          # 能力探测与降级、单位换算裁决

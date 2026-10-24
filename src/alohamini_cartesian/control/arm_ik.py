@@ -225,7 +225,15 @@ class ArmIK:
 
         for name in self.profile.joint_names:
             lo_deg, hi_deg = limits_deg[name]
-            robot.set_joint_limits(name, float(np.deg2rad(lo_deg)), float(np.deg2rad(hi_deg)))
+            # T-IK-18.15: normalise both endpoints to ``float`` before ``np.deg2rad``.  An
+            # ``int`` endpoint beyond the ``int64`` range (e.g. ``(2**63, 2**64)``) is still
+            # a finite, ordered real, so it passes the entry validation in :meth:`solve`,
+            # yet ``np.deg2rad`` cannot even build the array for it and raises a bare
+            # ``TypeError`` -- an escape route past the ``ValueError`` contract, from
+            # inside the solver.
+            lo_rad = float(np.deg2rad(float(lo_deg)))
+            hi_rad = float(np.deg2rad(float(hi_deg)))
+            robot.set_joint_limits(name, lo_rad, hi_rad)
 
         q_seed_rad = np.deg2rad(q_current_deg)
         for name, value in zip(self.profile.joint_names, q_seed_rad, strict=True):
@@ -333,6 +341,10 @@ class ArmIK:
         # here, then a bare ``ValueError`` inside :meth:`_clamp_to_joint_limits`)
         # and turned ``b"ab"`` into ``(97, 98)``; ``str``/``bytes``/``bytearray`` and
         # iterators are therefore rejected here, before any numerical work.
+        # ``memoryview`` is rejected alongside them (T-IK-18.14): it is registered as a
+        # ``Sequence``, ``memoryview(b"ab")`` has ``len() == 2`` and yields the ``int``
+        # elements ``97``/``98``, so every shape check passes and it would be accepted as
+        # a ``(97, 98)`` degree pair.
         # Each side is then checked against an explicit type whitelist: Python
         # ``int``/``float`` and numpy numeric scalars (``np.integer``/
         # ``np.floating``) pass, everything else is a caller-side typo -- ``bool``
@@ -352,7 +364,7 @@ class ArmIK:
                 raise ValueError(f"joint_limits_deg missing required joint: {name}")
             limit = joint_limits_deg[name]
             if (
-                isinstance(limit, (str, bytes, bytearray))
+                isinstance(limit, (str, bytes, bytearray, memoryview))
                 or not isinstance(limit, Sequence)
                 or len(limit) != 2
             ):
