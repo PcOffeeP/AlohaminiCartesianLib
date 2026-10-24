@@ -1,6 +1,6 @@
 # 架构决策记录（ADR）
 
-本文记录 `alohamini-cartesian` 自 v0.1.0 起沿用的决策，编号 D1–D9。每条按背景、决定、后果三段记录，后果同时写正面收益与已知代价。状态写作「已接受（自 vX.Y.Z 起）」，不记具体日期。新的重大取舍按顺序追加编号，已接受的条目不回改。
+本文记录 `alohamini-cartesian` 自 v0.1.0 起沿用的决策，编号 D1–D10。每条按背景、决定、后果三段记录，后果同时写正面收益与已知代价。状态写作「已接受（自 vX.Y.Z 起）」，不记具体日期。新的重大取舍按顺序追加编号，已接受的条目不回改。
 
 ## 索引
 
@@ -15,6 +15,7 @@
 | D7 | 迁移边界：厂商侧协议测试不迁入 | 已接受（自 v0.2.0 起） |
 | D8 | placo 依赖形态：声明 kinematics extra，接受 numpy 2.3.x | 已接受（自 v0.2.0 起） |
 | D9 | 现场基准脚本迁移时机：`benchmarks/alohamini_io` 两脚本与配套测试在 v0.4.0 迁入 | 已接受（自 v0.4.0 起） |
+| D10 | 关节限位取值在 `ArmIK.solve()` 入口校验：违规抛 `ValueError`，多余键忽略 | 已接受（自 v0.5.0 起） |
 
 ## D1 依赖形态：独立包，lerobot 作为可选 extra
 
@@ -206,3 +207,60 @@ S3 要把旧仓库的 `control/` 与运动学搬进本库。旧代码在 `contro
 正面：130 个测试函数（静态计数，20 + 110）进入本库测试集，参数化展开后是 176 条用例。`pytest tests` 从 `823 passed, 2 skipped` 变为 `999 passed, 2 skipped`，跳过的仍是两个 parity 文件（缺 `lerobot`）。`tests/benchmarks` 子集 190 条通过 = 14（`test_benchmark_arm_ik.py`）+ 23 + 153。这套采集与测量逻辑此后由本库回归网守着，不再依赖旧仓库。
 
 已知代价：迁入的是「有测试、无实测」的代码。两个脚本从未对着真机 Host 跑过，`schema_version == 2` 的实际取值、Mode B 的真实运动、Gate F 的真实拒绝路径都还没有证据。per-file-ignores 让这四份文件在 docstring、类型注解与行宽三条规则上不受本库标准约束，长期看是风格例外。
+
+## D10 关节限位取值在 `ArmIK.solve()` 入口校验：违规抛 `ValueError`，多余键忽略
+
+状态：已接受（自 v0.5.0 起）
+
+### 背景
+
+`ArmIK.solve()` 的入参 `joint_limits_deg` 是「关节名 → `(min, max)` 度」的字典。v0.4.0 及之前，入口只检查每个必需关节**有没有这个键**（F2，「必需关节缺键就报错」这道检查），对键对应的**取值**不做任何校验，直接 `np.deg2rad` 后交给 placo。于是调用方把限位写错时，失败路径取决于错法：
+
+| 写错的方式 | v0.4.0 实测行为 |
+| --- | --- |
+| 倒置 `(90.0, -90.0)` | `RuntimeError('QPError: Problem: Infeasible QP ...')`，栈顶 `arm_ik.py:242`（v0.4.0 文件行号，语句为 `solver.solve(True)`） |
+| 退化 `(0.0, 0.0)` | 不抛，返回 `ok=False` / `reason='JOINT_LIMIT'` |
+| 含 `NaN` | `RuntimeError('QPError: ... NaN in the QP solution')` |
+| 含 `inf` | 不抛，返回 `ok=True`——上界被静默忽略 |
+| 长度不是 2 | 元组解包抛 `ValueError: not enough/too many values to unpack`，消息不含关节名 |
+| 非实数 `("a","b")` | `np.deg2rad` 抛 `TypeError: ufunc 'deg2rad' not supported ...` |
+| `bool`（`(True, False)`） | 被当成 `(1.0, 0.0)`，于是 `RuntimeError('QPError: ...')` |
+
+`IKResult` 是求解结果（成功/失败）的出口契约，两种结果都写进 `ok` / `reason` 字段；入参错误走 `ValueError`，这两条之外不该有第三种异常形态（本决策收敛的是**入参错误**这一个来源；在限位合法且有限时，求解过程本身对越界/退化的目标位姿仍抛 placo 的裸 `RuntimeError`，实测见「后果」）。裸 `RuntimeError` 直接从求解器内部穿出来，调用方拿到的既不是 `IKResult` 也不是 `ValueError`，而是一个未包装的求解器异常（QPError 是 placo 底层二次规划求解器的报错，指「这组约束无解」），于是「限位写反了」被伪装成「这个目标解不出来」。而 `FAILURE_REASONS`（`src/alohamini_cartesian/control/arm_ik.py:36`）里只有 `NON_FINITE` / `JOINT_LIMIT` / `RESIDUAL` 三类，没有「限位非法」这一类——限位本身是调用方给的常量，不是一次求解的结果，本来就不该占用失败原因。
+
+### 决定
+
+`solve()` 在 F2 那道键检查的同一个循环里、任何数值工作（构造 placo 机器人、首次求解）之前，对 `self.profile.joint_names` 里的 6 个必需关节逐个校验限位取值：
+
+1. 取值是长度 2 的序列（`collections.abc.Sequence`；`str` / `bytes` / `bytearray`、迭代器与生成器一律不算），否则报 `ValueError`；
+2. 两个元素的类型在显式白名单里——Python `int` / `float`，以及 numpy 数值标量（`np.integer` / `np.floating`）；**`bool` 与 `np.bool_` 一律拒绝**（`bool` 是 `int` 的子类，`(True, False)` 会被数值比较放行成 `(1.0, 0.0)`）。白名单之外的类型全部拒绝，两种代表性输入已实测：`Fraction` 是 `numbers.Real` 的子类（实测 `isinstance(Fraction(1, 2), numbers.Real)` 为 `True`），能过 `numbers.Real` 检查，却让 `np.deg2rad(Fraction(1, 2))` 抛裸 `TypeError: loop of ufunc does not support argument 0 of type Fraction ...`；`Decimal` **不是** `numbers.Real` 的子类（实测 `isinstance(Decimal("0.5"), numbers.Real)` 为 `False`），走的是同一个「不在白名单」分支。两者都被 `ValueError` 拒绝，而不是让下游 `np.deg2rad` 抛裸 `TypeError`；
+3. 两个元素都有限（`math.isfinite`，排除 `NaN` 与 `±inf`）；
+4. 满足 `lo < hi`（倒置与退化都拒绝）。
+
+限位值限定为上面第 2 条那份白名单（`bool`、`np.bool_`、`Fraction`、`Decimal` 与其余一切非白名单类型一律拒绝），`solve()` 不修改调用方传入的限位字典：不复制、不写回，取值按调用方给的原始类型只流向**第二次**求解，也就是注入调用方限位那次（`arm_ik.py:431`）。`solve()` 里的第一次求解（`arm_ik.py:408`）用的是内部按 URDF 构造的 `urdf_limits_deg`（`arm_ik.py:397-400`），调用方给的取值不参与。
+
+违反上述四条的一律抛 `ValueError`，消息点名关节并给出实际取值（`joint_limits_deg['left_elbow_flex'] must satisfy lo < hi, got lo=90.0, hi=-90.0`）。第 3 条「有限」覆盖超出 `float` 范围的整数：`math.isfinite` 先转 `float`（`arm_ik.py:379`），`(10**400, 10**401)` 会在那里抛 `OverflowError: int too large to convert to float`，入口把它并进既有的 `must be finite` 分支（`arm_ik.py:378-385`），实测 `(10**400, 10**401)` 抛 `ValueError`、消息为 `joint_limits_deg['left_elbow_flex'] must be finite, got lo=<10**400>, hi=<10**401>`（`repr` 回显的是这两个值的十进制写法，不作位数口径的换算）、抛出位置 `arm_ik.py:383`。这只覆盖「调用方把参数写错」这一类，属于入参错误，不是求解失败。
+
+多余的键（不在 `profile.joint_names` 里的关节）**明确忽略**：校验只遍历必需关节，不遍历整个字典。这条契约由两条用例共同守护——`T-IK-18.4`（多余键取值合法时，7 键与 6 键的求解结果逐字段一致）与 `T-IK-18.7`（多余键取值**非法**时仍被忽略，`solve()` 正常返回、`ok is True`，且与 6 键基线逐字段一致）。只有 18.4 杀不动「遍历整个字典校验」这类错误实现：它给多余键填的是合法值，全表校验照样通过，判别落在 18.7。
+
+「类型白名单」这条契约由两条用例共同守护——`T-IK-18.10`（numpy 数值标量被接受，`np.float64`/`np.float32` 与 `np.int64` 两组取值各一条：`solve()` 正常返回 `ok is True`，且 `q_deg` / `position_error_m` / `iterations` 与同值 Python `float` 基线一致）与 `T-IK-18.11`（`Fraction` / `Decimal` 抛 `ValueError` 而**不是** `TypeError`，消息属于 `must hold real numbers` 那一支并把收到的对象 repr 回显）。前者钉住白名单不能收窄成 `(int, float)`（收窄后 `np.int64` / `np.float64` 被误拒），后者钉住白名单不能放宽成 `numbers.Real`（放宽后 `Fraction` 会走到 `np.deg2rad` 抛裸 `TypeError`）。`np.bool_` 的拒绝由 `T-IK-18.13` 单独守护（`(np.bool_(True), np.bool_(False))` 与 `(np.float64(-90), np.bool_(True))` 两组：抛 `ValueError`，消息落在 `must hold real numbers` 这一支并带 `got lo=` / `got hi=` 前缀；后一组是鉴别点——只按数值比 `lo < hi` 的实现会接受 `-90.0 < 1.0` 并照常求解；`T-IK-18.6` 只覆盖 Python `bool`，守不住白名单放宽到 `np.bool_` 这一刀）。
+
+「迭代器/生成器不算序列」这条契约由 `T-IK-18.12` 守护：迭代器 / 生成器 / `None` / `dict` / 裸标量五组输入一律抛 `ValueError`，消息点名关节并落在 `must be a (lo, hi) pair` 这一支（形态不对），而不是「非实数」或「有限性」那两支。删掉 `not isinstance(limit, Sequence)` 后，前几组会先撞 `len()` 的裸 `TypeError: object of type '...' has no len()`，而两键 `dict` 会因 `len() == 2` 通过形态检查、解包成键 `("lo", "hi")` 再落进「非实数」那一支——异常类型与消息分支都不对。
+
+残差失败被归类成 `JOINT_LIMIT`（`arm_ik.py` 的 `ok = position_error_m <= residual_limit_m and within_limits` 之后那段 `IKResult(... reason="JOINT_LIMIT")`）是另一个独立问题，**不在本决策范围**，另案处理。
+
+### 后果
+
+正面：配置错误在入口暴露，调用方不必为「限位取值写错」去兜 placo 的异常——限位取值这类**入参错误**收敛为 `ValueError`（你给的参数不对，改参数），求解没成功走 `IKResult(ok=False, reason=...)`（看原因）；在限位合法且有限时，求解过程本身仍抛 placo 的裸 `RuntimeError`，调用方仍需保留兜底（实测：`target_pose` 平移 `1e300` m 抛 `RuntimeError: QPError: Problem: Infeasible QP (check your hard inequality constraints)`，`target_pose = np.zeros((4, 4))` 抛 `RuntimeError: QPError: Problem: NaN in the QP solution`，两者抛出位置都是 `solver.solve(True)`，当前行号 `arm_ik.py:244`）。`inf` 限位不再被静默接受，`NaN` 不再等求解器报错，`bool` 不再被当 1/0；报错消息带关节名与实际取值，现场改配置时不必再从一段 QP 报错里猜是哪个关节。
+
+已知代价之一：这是对外行为变更——同样的错误输入，以前炸 `RuntimeError`（或根本不炸），现在炸 `ValueError`，按异常类型分流的调用方需要调整捕获类型。实测既有用例零改动即全绿（`tests/test_arm_ik.py` 115 条 = 89 条既有 + 26 条新增 T-IK-18，无一条依赖旧行为、无需逐条豁免；全库 `1025 passed, 2 skipped`）。
+
+本库内部**有**承载旧行为的调用路径，不是「只在入口加校验、内部调用不受影响」：`kinematics/joint_adapter.py` 的 `JointKinematicAdapter(urdf_limits=None)`（默认不注入 URDF 限位，`joint_adapter.py:144`、`joint_adapter.py:152`）配合六关节 `normalization == "degrees"` 时，`_effective_q_range` 返回 `(-inf, inf)`（`joint_adapter.py:431`），`effective_limits_deg()`（`joint_adapter.py:443`）在这组配置下返回六个 `(-inf, inf)`（实测：`JointKinematicAdapter(signs=…, zeros=…)` + 六关节 `"degrees"` metadata → 六个 `(-inf, inf)`）。这组限位在 v0.4.0 下让 `solve()` 返回 `ok=True`（实测），现在会在入口抛 `ValueError: joint_limits_deg['left_shoulder_pan'] must be finite, got lo=-inf, hi=inf`（实测，抛出位置 `arm_ik.py:383`）。两个内部调用点会把这个值交给 `solve()`：`control/controller.py:472` 取限位、`controller.py:482` 调 `solve()`，外层的 `except Exception` 把它转成 `ControlError.IK_FAILED`（`controller.py:492`，`sent=False`，不发送动作）；`control/api.py:184` 的路径预检取限位后直接调 `solve()`，这个 `ValueError` 穿出 `_precheck_straight_path`（`api.py:158`，调用点在 `api.py:332`，该处无 `try/except`），到达 `ArmHandle.move_to` 的调用方。
+
+取向：**限位必须有限是本决策的前提**，不因这条路径放宽。`effective_limits_deg()` 给出 `(-inf, inf)` 属于「未注入 URDF 限位」的配置缺口，应由调用方构造 `JointKinematicAdapter` 时注入有限限位解决；不改 adapter 现有行为，不在本决策范围内。
+
+已知代价之二：合法调用形态被收窄——`np.ndarray` 限位对（如 `np.array([-90.0, 90.0])`）在 v0.4.0 可用（实测 `solve()` 返回 `ok=True`），现在因 `ndarray` 不是 `collections.abc.Sequence` 而被 `ValueError` 拒绝（实测消息 `joint_limits_deg['left_shoulder_pan'] must be a (lo, hi) pair, got array([-90.,  90.])`，抛出位置 `arm_ik.py:359`）。这是有意的收窄：契约只接受长度 2 的序列（元组/列表），代价是偶尔用数组传限位的调用方需要改成 `tuple(...)`。
+
+已知代价之三：校验只做「形状 + 类型白名单 + 有限 + `lo < hi`」四条，不做语义合理性检查（例如限位是否宽于真实机械行程、是否与 URDF 一致），这类越界仍靠求解结果与 `JOINT_LIMIT` 分类体现。
+
+已知代价之四：`memoryview` 等 buffer 形态不被拒绝，会被当成一对整数放行。实测 `memoryview(b"ab")` 是 `collections.abc.Sequence`、`len == 2`、元素是 `int`（值为 `(97, 98)`），因此绕过形态检查与类型白名单；`memoryview(array.array("d", [1.0, 2.0]))` 同样是 `Sequence`、元素是 `float`。实测把 `joint_limits_deg['left_elbow_flex']` 换成 `memoryview(b"ab")` 时，`solve()` 不抛 `ValueError`，返回 `IKResult(ok=False, reason='JOINT_LIMIT')`。这与本决策「非法限位在入口暴露」的取向不一致，属已知缺口，**本轮不修实现**（不扩排除清单，`str` / `bytes` / `bytearray` 之外不新增排除项），后续另案处理，与上文「残差失败被归类成 `JOINT_LIMIT`」的问题并列。

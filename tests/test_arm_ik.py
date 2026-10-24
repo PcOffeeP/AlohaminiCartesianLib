@@ -80,7 +80,9 @@ import importlib.abc
 import inspect
 import shutil
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from decimal import Decimal
+from fractions import Fraction
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -2071,3 +2073,701 @@ def test_t_ik_17_12_solve_keeps_ok_when_solution_sits_on_a_limit_face(
     )
     assert result.reason is None, result.reason
     assert float(q_deg[index]) == hi_deg, (float(q_deg[index]), hi_deg)
+
+
+# ===========================================================================
+# T-IK-18  joint-limit VALUE validation at the ``solve()`` entry
+# ===========================================================================
+#
+# 为什么需要这一段：``solve()`` 目前只检查「每个必需关节都有一个键」（T-IK-2.3），对限位
+# 的**取值**不做任何校验，直接 ``np.deg2rad`` 后交给 placo。于是调用方把限位写错（倒置、
+# 退化、非有限、类型不对、bool 当数字）时，失败要么来自求解器内部（不可包装的
+# ``RuntimeError('QPError: ...')``），要么被伪装成一次正常的求解失败（``ok=False`` /
+# ``reason='JOINT_LIMIT'``），要么根本不报错。本段要求入口一律给出 ``ValueError``，并在
+# 消息里点名出问题的关节 —— 与 D017「冻结数据 + 显式 ValueError，绝不静默」一致。
+#
+# 契约（本段钉住的语义）：
+# - 每个必需关节的限位必须是「长度 2 的实数序列」，且 ``lo < hi``；
+# - ``NaN`` / ``inf`` 不是合法取值（``lo``、``hi`` 任一都必须有限）；
+# - ``bool`` 不算数字，``True`` / ``False`` 一律拒绝；
+# - 违规一律 ``ValueError``，消息含该关节名与该侧取值；
+# - 多余的键（不属于 ``profile.joint_names``）被忽略，不改变求解结果。
+#
+# Current behaviour probed before writing this binding (RED evidence，v0.4.0)，
+# 种子 ``q = (10, -20, 30, -40, 20, -10)``、目标取 ``SOLVE_REACHABLE_CASES['elbow_bend']``
+# 的冻结位姿、六个关节合法限位 ``(-90, 90)``，只改一个关节：
+# - ``(90.0, -90.0)``        -> RuntimeError: QPError: Problem: Infeasible QP ...（未包装）
+# - ``(0.0, 0.0)``           -> 不抛，返回 ok=False / reason='JOINT_LIMIT'
+# - ``(nan, 90.0)``          -> RuntimeError: QPError: Problem: NaN in the QP solution
+# - ``(-90.0, inf)``         -> 不抛，返回 ok=True / reason=None（inf 被静默接受）
+# - ``(90.0,)``              -> ValueError: not enough values to unpack (expected 2, got 1)
+#                              （是 ValueError，但消息不含关节名）
+# - ``(0.0, 1.0, 2.0)``      -> ValueError: too many values to unpack (expected 2)
+#                              （同样不含关节名）
+# - ``("a", "b")``           -> TypeError: ufunc 'deg2rad' not supported ...
+# - ``(True, False)``        -> RuntimeError: QPError: Problem: Infeasible QP ...
+# - 多余键 ``left_extra_joint`` -> 静默忽略（现状已符合契约，T-IK-18.4 红阶段即绿）
+#
+# 追加取证（在当前工作区实现上实跑，不是 v0.4.0）：
+# - ``b"ab"`` / ``bytearray(b"ab")`` -> ValueError: ... must be a (lo, hi) pair, got b'ab'
+#   （工作区已含文本类型排除；把 ``isinstance(limit, (str, bytes, bytearray))`` 拿掉后
+#   变回「静默当成 ``(97, 98)`` 继续求解」，见 T-IK-18.8 的判别意图）
+# - ``(10**400, 10**401)``   -> 加 ``OverflowError`` 兜底**之前**的中间态是
+#   ``OverflowError: int too large to convert to float``（从 ``math.isfinite`` 裸逃出，
+#   不是 ValueError）。**当前实现已不再抛 ``OverflowError``**：溢出被捕获后落回「有限性」
+#   这一支，实测抛 ``ValueError: joint_limits_deg['left_elbow_flex'] must be finite, got
+#   lo=<401 位十进制>, hi=<402 位十进制>``（``arm_ik.py`` 约 383 行），由 T-IK-18.9 钉住。
+#
+# Discriminative intent（一个「看起来合理但错」的实现必须失败）：
+# - 只查键存在、不查取值 -> 18.1 / 18.2 直接失败；
+# - 用 ``float(x)`` 做转换后只比 ``lo < hi`` -> false / "" 之类会被 float() 拒绝但
+#   ``True`` / ``False`` 会被接受成 1.0 / 0.0，18.6 失败；
+# - 只查 ``np.isfinite`` 不查类型 -> 18.5 的类型实例失败；
+# - 校验时按字典顺序在必需关节之前报错 -> 18.4 失败；
+# - 把校验从 ``profile.joint_names`` 蔓延到整个 ``joint_limits_deg`` 字典（多余键也校验）
+#   -> 18.4 仍绿（它给多余键填的是合法值），必须靠 18.7 才杀得动；
+# - 错误消息只写「哪一类错」而不带收到的取值 -> 18.3 / 18.5 / 18.6 失败；
+# - 把校验放在 placo 调用之后 -> 18.1 / 18.3 仍然抛 RuntimeError，失败。
+#
+# 断言纪律：18.3 必须钉「有限性」这一支（消息含 ``finite``），不能只断言关节名与取值——
+# 删掉 ``math.isfinite`` 后 ``NaN`` 会被后面的 ``not lo < hi`` 拦住并照样抛 ValueError，
+# 且消息里照样有 ``nan``；只有分支专属字样能区分。本段不含恒真断言。
+
+# 被破坏限位的关节。取 ``left_elbow_flex``：目标位姿要求它到 40 deg（seed 为 30 deg），
+# 因此它同时落在「解必须动」与「动到限位之外」两边，倒置/退化/超窄都真的会与求解冲突。
+LIMIT_VALIDATION_JOINT = "left_elbow_flex"
+# 复用 T-IK-2.1 已有的冻结外部参考位姿（elbow_bend 的目标，配 SOLVE_SEED_Q 物理可达），
+# 保证这些用例走到 solve() 的限位校验，而不是停在「不可达 -> RESIDUAL」这类更早的分支。
+LIMIT_VALIDATION_TARGET_POSE = SOLVE_REACHABLE_CASES["elbow_bend"][3]
+
+
+def limits_replacing(joint: str, limit_value: object) -> dict[str, object]:
+    """六个必需关节都给合法 ``(-90, 90)``，再把 ``joint`` 的限位换成 ``limit_value``。"""
+    limits: dict[str, object] = limits_for()
+    limits[joint] = limit_value
+    return limits
+
+
+def solve_with_limits(limits: dict[str, object]) -> Any:
+    """用 T-IK-2.1 的种子/目标位姿调一次 ``solve()``。"""
+    _arm_ik, arm = make_arm_ik()
+    return arm.solve(np.asarray(SOLVE_SEED_Q, dtype=float), LIMIT_VALIDATION_TARGET_POSE, limits)
+
+
+def test_t_ik_18_1_inverted_joint_limit_rejected_naming_joint_and_both_values() -> None:
+    """T-IK-18.1：倒置限位 ``(90, -90)`` 抛 ValueError，消息点名关节并给出两侧取值。
+
+    不得是 placo 的裸 ``RuntimeError('QPError: Problem: Infeasible QP ...')``：未包装的
+    求解器异常把「调用方把限位写反了」伪装成「这次求解无解」。
+    """
+    pytest.importorskip("placo", reason="ArmIK 的数值求解需要可选依赖 placo")
+    limits = limits_replacing(LIMIT_VALIDATION_JOINT, (90.0, -90.0))
+
+    # NOT placo's raw RuntimeError / pybind11 QPError: lo > hi is a caller error.
+    with pytest.raises(ValueError) as excinfo:
+        solve_with_limits(limits)
+
+    message = str(excinfo.value)
+    assert LIMIT_VALIDATION_JOINT in message, (
+        f"the inverted-limit error must name {LIMIT_VALIDATION_JOINT!r}, got: {message!r}"
+    )
+    # 精确片段，不做子串重叠：``"90" in message`` 同时被 ``hi=-90.0`` 满足（``"90"`` 是
+    # ``"-90"`` 的子串），只报一侧的实现也能双双通过。``lo=`` / ``hi=`` 前缀把两侧钉开。
+    assert "lo=90.0" in message, f"the error must show the lo side as 'lo=90.0', got: {message!r}"
+    assert "hi=-90.0" in message, f"the error must show the hi side as 'hi=-90.0', got: {message!r}"
+
+
+def test_t_ik_18_2_degenerate_joint_limit_rejected_naming_joint() -> None:
+    """T-IK-18.2：退化限位 ``(0, 0)``（``lo == hi``）抛 ValueError，消息点名关节。
+
+    现状是不抛、返回 ``ok=False`` / ``reason='JOINT_LIMIT'``——把「限位区间退化成一点」这个
+    调用方构造错误伪装成一次正常的求解失败，调用方无法区分「机器人到不了」与「我把限位写错了」。
+    """
+    pytest.importorskip("placo", reason="ArmIK 的数值求解需要可选依赖 placo")
+    limits = limits_replacing(LIMIT_VALIDATION_JOINT, (0.0, 0.0))
+
+    with pytest.raises(ValueError) as excinfo:
+        solve_with_limits(limits)
+
+    message = str(excinfo.value)
+    assert LIMIT_VALIDATION_JOINT in message, (
+        f"the degenerate-limit error must name {LIMIT_VALIDATION_JOINT!r}, got: {message!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("limit_value", "expected_fragments"),
+    [
+        ((float("nan"), 90.0), ("finite", "lo=nan", "hi=90.0")),
+        ((-90.0, float("inf")), ("finite", "lo=-90.0", "hi=inf")),
+    ],
+    ids=["nan_lo", "inf_hi"],
+)
+def test_t_ik_18_3_non_finite_joint_limit_rejected_naming_joint(
+    limit_value: tuple, expected_fragments: tuple[str, ...]
+) -> None:
+    """T-IK-18.3：限位含 ``NaN`` 或 ``inf`` 时抛 ValueError，消息点名关节并给出两侧取值。
+
+    NaN 现状是求解器抛 ``RuntimeError('QPError: ... NaN in the QP solution')``；``inf`` 更
+    糟——被静默接受，求解照常返回 ``ok=True``，等于没有上界。
+
+    断言里必须有 ``finite`` 这个分支专属字样：删掉 ``math.isfinite`` 判断后，``NaN`` 不会
+    走到求解器，而是被后面的 ``not lo < hi`` 拦住（``nan < 90.0`` 为 False），照样抛
+    ValueError，消息里也照样出现 ``nan``——只断言「关节名 + 取值」的实现会漏掉这个变异。
+    而 ``inf`` 在那一支里反而不抛（``-90 < inf`` 成立），会在 ``pytest.raises`` 处失败。
+    """
+    pytest.importorskip("placo", reason="ArmIK 的数值求解需要可选依赖 placo")
+    limits = limits_replacing(LIMIT_VALIDATION_JOINT, limit_value)
+
+    with pytest.raises(ValueError) as excinfo:
+        solve_with_limits(limits)
+
+    message = str(excinfo.value)
+    assert LIMIT_VALIDATION_JOINT in message, (
+        f"the non-finite-limit error must name {LIMIT_VALIDATION_JOINT!r}, got: {message!r}"
+    )
+    for fragment in expected_fragments:
+        assert fragment in message, (
+            f"the non-finite-limit error must report {fragment!r} (branch marker + both sides); "
+            f"missing from: {message!r}"
+        )
+
+
+def test_t_ik_18_4_extra_joint_limit_key_is_ignored() -> None:
+    """T-IK-18.4：多余的限位键被忽略，结果与只有 6 个必需键时逐字段一致。
+
+    比较字段：``ok`` / ``reason`` / ``position_error_m`` / ``orientation_error_deg`` /
+    ``iterations`` / ``q_deg``（``q_deg`` 逐位比较，与 T-IK-11.2 的确定性比较同一风格）。
+    ``solve_time_s`` 天然不等，不参与比较。
+    """
+    pytest.importorskip("placo", reason="ArmIK 的数值求解需要可选依赖 placo")
+    extra_key = "left_extra_joint"
+    assert extra_key not in JOINT_NAMES, "fixture drift: the extra key must not be a real joint"
+
+    reference = solve_with_limits(limits_for())
+    # 前提：没有多余键时这次求解确实成功，否则「一致」可能只是两条相同的失败。
+    assert reference.ok is True, (
+        f"test premise broken: the reference solve must succeed, got reason={reference.reason!r}"
+    )
+
+    with_extra = limits_for()
+    with_extra[extra_key] = (SOLVE_LIMITS_DEG[0], SOLVE_LIMITS_DEG[1])
+    result = solve_with_limits(with_extra)
+
+    assert result.ok is reference.ok, (
+        f"an extra limit key must not change ok: {result.ok!r} vs {reference.ok!r} "
+        f"(compared: ok / reason / position_error_m / orientation_error_deg / iterations / q_deg)"
+    )
+    assert result.reason == reference.reason, (
+        f"an extra limit key must not change reason: {result.reason!r} vs {reference.reason!r} "
+        f"(compared: ok / reason / position_error_m / orientation_error_deg / iterations / q_deg)"
+    )
+    assert result.position_error_m == reference.position_error_m, (
+        f"position_error_m drifted with an extra key: {result.position_error_m!r} vs "
+        f"{reference.position_error_m!r} (compared: ok / reason / position_error_m / "
+        f"orientation_error_deg / iterations / q_deg)"
+    )
+    assert result.orientation_error_deg == reference.orientation_error_deg, (
+        f"orientation_error_deg drifted with an extra key: {result.orientation_error_deg!r} vs "
+        f"{reference.orientation_error_deg!r} (compared: ok / reason / position_error_m / "
+        f"orientation_error_deg / iterations / q_deg)"
+    )
+    assert result.iterations == reference.iterations, (
+        f"iterations drifted with an extra key: {result.iterations!r} vs "
+        f"{reference.iterations!r} (compared: ok / reason / position_error_m / "
+        f"orientation_error_deg / iterations / q_deg)"
+    )
+    assert np.array_equal(np.asarray(result.q_deg), np.asarray(reference.q_deg)), (
+        f"q_deg drifted with an extra key: {result.q_deg} vs {reference.q_deg} "
+        f"(compared: ok / reason / position_error_m / orientation_error_deg / iterations / q_deg)"
+    )
+
+
+@pytest.mark.parametrize(
+    ("limit_value", "expected_fragments"),
+    [
+        ((90.0,), ("got (90.0,)",)),
+        ((0.0, 1.0, 2.0), ("got (0.0, 1.0, 2.0)",)),
+        (("a", "b"), ("lo='a'", "hi='b'")),
+    ],
+    ids=["single_element", "three_elements", "non_numeric_elements"],
+)
+def test_t_ik_18_5_malformed_joint_limit_rejected_naming_joint(
+    limit_value: tuple, expected_fragments: tuple[str, ...]
+) -> None:
+    """T-IK-18.5：限位不是「长度 2 的实数序列」时抛 ValueError，消息含收到的坏形态。
+
+    现状：单元素 / 三元组由元组解包抛 ValueError（消息是
+    ``not enough / too many values to unpack``，不含关节名，调用方看不出是哪个关节）；
+    非实数元素由 ``np.deg2rad`` 抛 TypeError。
+
+    除了关节名，还必须断言消息里带上收到的坏形态原样（``got (90.0,)`` /
+    ``got (0.0, 1.0, 2.0)`` / ``lo='a', hi='b'``）：删掉取值后，调用方只能看到
+    「限位不对」而看不到「不对成什么样」。
+    """
+    pytest.importorskip("placo", reason="ArmIK 的数值求解需要可选依赖 placo")
+    limits = limits_replacing(LIMIT_VALIDATION_JOINT, limit_value)
+
+    with pytest.raises(ValueError) as excinfo:  # NOT np.deg2rad's TypeError
+        solve_with_limits(limits)
+
+    message = str(excinfo.value)
+    assert LIMIT_VALIDATION_JOINT in message, (
+        f"the malformed-limit error must name {LIMIT_VALIDATION_JOINT!r}, got: {message!r}"
+    )
+    for fragment in expected_fragments:
+        assert fragment in message, (
+            f"the malformed-limit error must echo the received value as {fragment!r}; "
+            f"missing from: {message!r}"
+        )
+
+
+@pytest.mark.parametrize(
+    ("limit_value", "bad_side_fragment"),
+    [
+        ((True, False), "lo=True"),
+        ((0.0, True), "hi=True"),
+    ],
+    ids=["bool_pair", "bool_mixed_with_number"],
+)
+def test_t_ik_18_6_bool_joint_limit_is_not_accepted_as_a_number(
+    limit_value: tuple, bad_side_fragment: str
+) -> None:
+    """T-IK-18.6：bool 不被当数字放行，抛 ValueError 并点名关节与坏取值。
+
+    ``bool`` 是 ``int`` 的子类，``isinstance(x, (int, float))`` 和 ``np.deg2rad`` 都会放行：
+    ``(True, False)`` 变成 ``(1.0, 0.0)``（倒置），``(0.0, True)`` 变成 ``(0.0, 1.0)``（顺序
+    合法但语义荒谬）。后者是真正的鉴别点：只按数值比 ``lo < hi`` 的实现会接受它。
+
+    注意：这里**刻意不写** ``assert isinstance(True, int)`` 之类的断言——那在任何解释器上
+    都恒为真，只会给测试加噪音。陷阱在于 CPython 里 ``bool`` 是 ``int`` 的子类，因此任何
+    仅做数值比较（``isinstance(x, (int, float))`` / ``lo < hi`` / ``np.deg2rad``）的实现都
+    会放行 ``True`` / ``False``；真正的鉴别点是本用例要求它被当作「非实数」拒绝，并且
+    消息里带上坏的那一侧取值。
+    """
+    pytest.importorskip("placo", reason="ArmIK 的数值求解需要可选依赖 placo")
+    limits = limits_replacing(LIMIT_VALIDATION_JOINT, limit_value)
+
+    with pytest.raises(ValueError) as excinfo:
+        solve_with_limits(limits)
+
+    message = str(excinfo.value)
+    assert LIMIT_VALIDATION_JOINT in message, (
+        f"the bool-limit error must name {LIMIT_VALIDATION_JOINT!r}, got: {message!r}"
+    )
+    # 「非实数」这一支，而不是被后面的 ``not lo < hi`` 拦住（``(True, False)`` 当数字看是
+    # 1.0 > 0.0，同样会抛 ValueError）。
+    assert "real numbers" in message, (
+        f"the bool limit must be rejected as a non-real number, got: {message!r}"
+    )
+    assert bad_side_fragment in message, (
+        f"the bool-limit error must echo the offending side as {bad_side_fragment!r}; "
+        f"missing from: {message!r}"
+    )
+
+
+def assert_solve_results_match(actual: Any, reference: Any, context: str) -> None:
+    """逐字段断言两次 ``solve()`` 结果一致（与 T-IK-18.4 比较的字段集相同）。
+
+    ``solve_time_s`` 天然不等，不参与比较；``q_deg`` 逐位比较，与 T-IK-11.2 的确定性比较
+    同一风格。
+    """
+    compared = "ok / reason / position_error_m / orientation_error_deg / iterations / q_deg"
+    assert actual.ok is reference.ok, (
+        f"{context} must not change ok: {actual.ok!r} vs {reference.ok!r} (compared: {compared})"
+    )
+    assert actual.reason == reference.reason, (
+        f"{context} must not change reason: {actual.reason!r} vs {reference.reason!r} "
+        f"(compared: {compared})"
+    )
+    assert actual.position_error_m == reference.position_error_m, (
+        f"position_error_m drifted ({context}): {actual.position_error_m!r} vs "
+        f"{reference.position_error_m!r} (compared: {compared})"
+    )
+    assert actual.orientation_error_deg == reference.orientation_error_deg, (
+        f"orientation_error_deg drifted ({context}): {actual.orientation_error_deg!r} vs "
+        f"{reference.orientation_error_deg!r} (compared: {compared})"
+    )
+    assert actual.iterations == reference.iterations, (
+        f"iterations drifted ({context}): {actual.iterations!r} vs {reference.iterations!r} "
+        f"(compared: {compared})"
+    )
+    assert np.array_equal(np.asarray(actual.q_deg), np.asarray(reference.q_deg)), (
+        f"q_deg drifted ({context}): {actual.q_deg} vs {reference.q_deg} (compared: {compared})"
+    )
+
+
+def test_t_ik_18_7_extra_joint_limit_key_with_invalid_value_is_ignored() -> None:
+    """T-IK-18.7：多余键即使填**非法**限位也完全不参与校验，求解结果与 6 键基线一致。
+
+    本用例钉的是「多余键完全不参与校验」——校验只覆盖 ``profile.joint_names``。
+
+    为什么必须单独一条：T-IK-18.4 给多余键填的是合法值 ``(-90, 90)``，所以「遍历整个
+    ``joint_limits_deg`` 字典做校验」这类错误实现同样能通过 18.4。把多余键
+    ``left_extra_joint`` 填成倒置的 ``(90, -90)``，它就是个判别点：错误实现会抛
+    ``ValueError``，正确实现根本不看它，``solve()`` 正常返回且结果与基线逐字段一致。
+
+    比较字段同 T-IK-18.4：``ok`` / ``reason`` / ``position_error_m`` /
+    ``orientation_error_deg`` / ``iterations`` / ``q_deg``（``solve_time_s`` 天然不等，
+    不参与比较）。
+    """
+    pytest.importorskip("placo", reason="ArmIK 的数值求解需要可选依赖 placo")
+    extra_key = "left_extra_joint"
+    assert extra_key not in JOINT_NAMES, "fixture drift: the extra key must not be a real joint"
+
+    # Arrange：6 个必需键的基线求解（无多余键）。
+    reference = solve_with_limits(limits_for())
+    # 前提：没有多余键时这次求解确实成功，否则「一致」可能只是两条相同的失败。
+    assert reference.ok is True, (
+        f"test premise broken: the reference solve must succeed, got reason={reference.reason!r}"
+    )
+
+    # Arrange：多一个不属于任何必需关节的键，且填的是倒置（非法）限位。
+    with_extra = limits_for()
+    with_extra[extra_key] = (SOLVE_LIMITS_DEG[1], SOLVE_LIMITS_DEG[0])
+
+    # Act：若校验蔓延到多余键，这一行就会抛 ValueError。
+    result = solve_with_limits(with_extra)
+
+    # Assert：正常返回，且与 6 键基线逐字段一致。
+    assert result.ok is True, (
+        f"an illegal limit on an extra (non-joint) key must be ignored, so the solve must "
+        f"still succeed; got ok={result.ok!r} reason={result.reason!r}"
+    )
+    assert_solve_results_match(result, reference, "an extra limit key (even with an illegal value)")
+
+
+@pytest.mark.parametrize(
+    ("limit_value", "expected_repr_fragment"),
+    [
+        ("90, -90", "'90, -90'"),
+        (b"ab", "b'ab'"),
+        (bytearray(b"ab"), "bytearray(b'ab')"),
+    ],
+    ids=["str", "bytes", "bytearray"],
+)
+def test_t_ik_18_8_text_joint_limit_rejected_as_mis_shaped(
+    limit_value: object, expected_repr_fragment: str
+) -> None:
+    """T-IK-18.8：``str`` / ``bytes`` / ``bytearray`` 不是限位序列，抛 ValueError 并回显收到的对象。
+
+    契约：限位是「长度 2 的实数序列」。文本类型在 Python 里恰好也是 ``Sequence``，且
+    ``len(b"ab") == 2``、可下标取值、元素是 ``int``——所以只做「长度 2 的序列 + 实数取值」
+    的实现会把 ``b"ab"`` 静默当成 ``(97, 98)``（一个合法但荒谬的限位）继续求解；
+    ``bytearray(b"ab")`` 同理。``str`` 的 ``"90, -90"`` 长度不是 2，会落到同一条「形态不对」
+    分支，但它的判别力来自「文本类型必须被显式排除」这一意图的回归网（删掉排除后它仍会
+    被 ``len != 2`` 拦住，此点已在报告的 M-a 变异里实测）。
+
+    断言三件事：抛 ``ValueError``（不是 placo 的裸 ``RuntimeError``，也不是静默求解）；消息点名
+    关节；消息属于「形态不对」这一支（``must be a (lo, hi) pair``）并把收到的对象原样 repr
+    回显（``b'ab'`` / ``bytearray(b'ab')`` / ``'90, -90'``）——否则调用方只看到「限位不对」
+    而看不到「不对成什么样」。
+    """
+    pytest.importorskip("placo", reason="ArmIK 的数值求解需要可选依赖 placo")
+    limits = limits_replacing(LIMIT_VALIDATION_JOINT, limit_value)
+
+    with pytest.raises(ValueError) as excinfo:  # NOT placo's RuntimeError, NOT silent acceptance
+        solve_with_limits(limits)
+
+    message = str(excinfo.value)
+    assert LIMIT_VALIDATION_JOINT in message, (
+        f"the mis-shaped-limit error must name {LIMIT_VALIDATION_JOINT!r}, got: {message!r}"
+    )
+    # 分支专属字样：「形态不对」这一支，而不是「实数值」或「有限性」那两支。
+    assert "must be a (lo, hi) pair" in message, (
+        f"a text-type limit must be rejected by the (lo, hi)-pair shape branch, got: {message!r}"
+    )
+    assert expected_repr_fragment in message, (
+        f"the error must echo the received object as {expected_repr_fragment!r}; "
+        f"missing from: {message!r}"
+    )
+
+
+def test_t_ik_18_9_overflowing_integer_joint_limit_stays_a_value_error() -> None:
+    """T-IK-18.9：超出 ``float`` 范围的整数限位不得以 ``OverflowError`` 逃出 ``solve()``。
+
+    ``10**400`` 类型上通得过 ``int`` 白名单（``math.isfinite`` 之前的类型检查放行），但
+    ``math.isfinite(10**400)`` 本身抛 ``OverflowError: int too large to convert to float``，
+    于是这个「调用方把限位写成了天文数字」的输入以一个既不是 :class:`IKResult` 也不是
+    ``ValueError`` 的异常穿出 ``solve()``，破坏契约：调用方既不能用 ``IKResult`` 处理，也
+    无法按「限位非法」这一类 ``ValueError`` 统一捕获。
+
+    断言：仍然抛 ``ValueError``（不是 ``OverflowError``），且消息点名关节。消息正文里那串
+    400 位数字不作断言，只钉「仍然是 ValueError + 点名关节」这个契约面。
+    """
+    pytest.importorskip("placo", reason="ArmIK 的数值求解需要可选依赖 placo")
+    limits = limits_replacing(LIMIT_VALIDATION_JOINT, (10**400, 10**401))
+
+    with pytest.raises(ValueError) as excinfo:  # NOT OverflowError
+        solve_with_limits(limits)
+
+    message = str(excinfo.value)
+    assert LIMIT_VALIDATION_JOINT in message, (
+        f"the out-of-float-range-limit error must name {LIMIT_VALIDATION_JOINT!r}, got: "
+        f"{message[:200]!r}..."
+    )
+
+
+@pytest.mark.parametrize(
+    "numpy_limits",
+    [
+        (np.float64(-90), np.float32(90)),
+        (np.int64(-90), np.int64(90)),
+    ],
+    ids=["np_float64_np_float32", "np_int64_np_int64"],
+)
+def test_t_ik_18_10_numpy_numeric_scalar_joint_limits_accepted(
+    numpy_limits: tuple[object, object],
+) -> None:
+    """T-IK-18.10：numpy 数值标量（``np.float*`` / ``np.int*``）限位被接受，且不改变求解结果。
+
+    契约：限位可以是 Python ``int`` / ``float``，也可以是 numpy 数值标量——调用方从
+    ``np.array`` / ``np.rad2deg(...)`` 里直接切片取值是常态。白名单因此写成
+    ``(int, float, np.integer, np.floating)``；收窄成 ``(int, float)`` 会把 ``np.int64`` /
+    ``np.float64`` 当成「调用方写错了限位」而误拒，本用例就是那一刀的分辨点。
+
+    断言两件事：
+
+    1. ``solve()`` 正常返回且 ``ok is True``——不是抛 ``ValueError``，不是返回失败结果；
+    2. 与「同值 Python ``float`` 限位」的基线逐字段一致：``q_deg`` 用 ``np.allclose``，
+       ``position_error_m`` 与 ``iterations`` 精确相等（``solve_time_s`` 天然不等，不比）。
+       「接受」不等于「行为等价」；本用例同时钉住「numpy 标量走的是同一条数值路径」。
+
+    注意 ``np.float32`` 一侧：实现内部用 ``float(np.deg2rad(value))`` 转换，``np.float32(90)``
+    会先算成 float32 的 ``1.5707964``（与 float64 的 ``1.5707963267948966`` 差约 4e-8 rad）。
+    本用例实测该差异不改变本次求解的 ``q_deg`` / ``position_error_m`` / ``iterations``，因此
+    精确相等可写；若换目标位姿使 QP 更敏感，这里会先红，届时按数值容差处理而不是放宽断言。
+    """
+    pytest.importorskip("placo", reason="ArmIK 的数值求解需要可选依赖 placo")
+
+    # Arrange：6 个关节都用 Python float 的合法限位，作为同值基线。
+    reference = solve_with_limits(limits_for())
+    assert reference.ok is True, (
+        f"test premise broken: the reference solve must succeed, got reason={reference.reason!r}"
+    )
+    # Arrange：只把 LIMIT_VALIDATION_JOINT 的限位换成同值的 numpy 数值标量。
+    limits = limits_replacing(LIMIT_VALIDATION_JOINT, numpy_limits)
+
+    # Act：白名单收窄成 (int, float) 时，这一行会抛 ValueError。
+    result = solve_with_limits(limits)
+
+    # Assert：numpy 标量被当实数接受，且求解走的是同一条数值路径。
+    assert result.ok is True, (
+        f"numpy numeric scalars are real numbers and must be accepted as limits; got "
+        f"ok={result.ok!r} reason={result.reason!r} for {numpy_limits!r}"
+    )
+    assert np.allclose(np.asarray(result.q_deg), np.asarray(reference.q_deg)), (
+        f"numpy scalar limits must not change q_deg: {result.q_deg} vs {reference.q_deg} "
+        f"(limits: {numpy_limits!r})"
+    )
+    assert result.position_error_m == reference.position_error_m, (
+        f"position_error_m drifted with numpy scalar limits: {result.position_error_m!r} vs "
+        f"{reference.position_error_m!r} (limits: {numpy_limits!r})"
+    )
+    assert result.iterations == reference.iterations, (
+        f"iterations drifted with numpy scalar limits: {result.iterations!r} vs "
+        f"{reference.iterations!r} (limits: {numpy_limits!r})"
+    )
+
+
+@pytest.mark.parametrize(
+    ("limit_value", "expected_repr_fragment"),
+    [
+        ((Fraction(-90, 1), Fraction(90, 1)), "Fraction(-90, 1)"),
+        ((Decimal("-90"), Decimal("90")), "Decimal('-90')"),
+    ],
+    ids=["fraction", "decimal"],
+)
+def test_t_ik_18_11_fraction_and_decimal_joint_limits_rejected_as_value_error(
+    limit_value: tuple[object, object], expected_repr_fragment: str
+) -> None:
+    """T-IK-18.11：``Fraction`` / ``Decimal`` 限位抛 ``ValueError``，**不是** ``TypeError``。
+
+    契约：限位白名单是「Python ``int`` / ``float`` + numpy 数值标量」。``Fraction`` 是
+    ``numbers.Real`` 的子类但不是 ``int`` / ``float``，``Decimal`` 连 ``numbers.Real`` 都不是：
+    两者都得走同一条「非实数」``ValueError`` 分支。
+
+    为什么必须钉住异常类型：把白名单换成 ``isinstance(value, numbers.Real)`` 会放行
+    ``Fraction``，随后 ``np.deg2rad(Fraction)`` 抛裸 ``TypeError``——调用方按「限位非法」
+    捕获 ``ValueError`` 的代码就漏掉了这个输入，看到的是一条来自求解器内部的类型错误。
+    因此本用例的 ``pytest.raises(ValueError)`` 是判别点本身：``TypeError`` 不是
+    ``ValueError`` 的子类，漏出时本用例直接红。
+
+    断言四件事：
+
+    1. 抛 ``ValueError``（不是 ``TypeError``、不是 placo 的裸异常、不是静默求解）；
+    2. 消息点名关节 ``left_elbow_flex``；
+    3. 消息属于「类型白名单」这一支（``must hold real numbers``），而不是「形态不对」
+       （``must be a (lo, hi) pair``）或「有限性」那两支；
+    4. 消息把收到的对象原样 repr 回显（``Fraction(-90, 1)`` / ``Decimal('-90')``）。
+    """
+    pytest.importorskip("placo", reason="ArmIK 的数值求解需要可选依赖 placo")
+    limits = limits_replacing(LIMIT_VALIDATION_JOINT, limit_value)
+
+    # NOT TypeError (what a numbers.Real whitelist lets np.deg2rad raise), NOT silent
+    # acceptance of a non-int/float real-looking number.
+    with pytest.raises(ValueError) as excinfo:
+        solve_with_limits(limits)
+
+    message = str(excinfo.value)
+    assert LIMIT_VALIDATION_JOINT in message, (
+        f"the non-real-limit error must name {LIMIT_VALIDATION_JOINT!r}, got: {message!r}"
+    )
+    # 分支专属字样：「类型白名单」这一支，而不是形态 / 有限性 / lo < hi 那三支。
+    assert "must hold real numbers" in message, (
+        f"a non-int/float numeric limit must be rejected by the real-number whitelist "
+        f"branch, got: {message!r}"
+    )
+    assert expected_repr_fragment in message, (
+        f"the error must echo the received value as {expected_repr_fragment!r}; "
+        f"missing from: {message!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# T-IK-18.12 / 18.13 —— 补 T-IK-18 回归网的两处空洞
+#
+# 变异实测（在本工作区实现上实跑）暴露了两个契约没有用例守着：
+# - 删掉实现里 ``not isinstance(limit, Sequence)`` 后 T-IK-18 全部 19 条仍全绿
+#   （``108`` 是当时**整文件**的条数，不是 T-IK-18 的条数；补上 18.12 / 18.13 之后
+#   T-IK-18 现为 26 条），
+#   而迭代器 / 生成器会漏出 ``TypeError: object of type 'list_iterator' has no len()``
+#   （``len()`` 的裸 TypeError 逃出 ``solve()``）——见 T-IK-18.12；
+# - ADR 声称 ``np.bool_`` 也被拒绝，但只覆盖了 Python ``bool``——把白名单扩成包含
+#   ``np.bool_`` 后无用例变红——见 T-IK-18.13。
+#
+# 现状实测（未改实现，命令与原文见交付报告）：
+# - ``iter([-90.0, 90.0])`` / ``(x for x in (-90.0, 90.0))`` / ``None`` /
+#   ``{"lo": -90.0, "hi": 90.0}`` / ``40.0``
+#   -> ValueError: ... must be a (lo, hi) pair, got <...>
+# - ``(np.bool_(True), np.bool_(False))``
+#   -> ValueError: ... must hold real numbers, got lo=np.True_ (full entry: ...)
+# - ``(np.float64(-90), np.bool_(True))``
+#   -> ValueError: ... must hold real numbers, got hi=np.True_ (full entry: ...)
+# - ``memoryview(b"ab")`` -> **不抛**：``memoryview`` 在 ``collections.abc.Sequence`` 里，
+#   被静默当成 ``(97, 98)`` 继续求解，返回 ``ok=False`` / ``reason='JOINT_LIMIT'``。
+#   这是实现缺口而不是已满足的契约，因此**不**写进参数化列表（不写当下必红的用例），
+#   留作待裁决项上报。
+# ---------------------------------------------------------------------------
+
+
+def _mis_shaped_iterator_limit() -> object:
+    """迭代器形态的「限位」：不是 ``Sequence``，``len()`` 会抛 ``TypeError``。"""
+    return iter([-90.0, 90.0])
+
+
+def _mis_shaped_generator_limit() -> object:
+    """生成器形态的「限位」：不是 ``Sequence``，``len()`` 会抛 ``TypeError``。"""
+    return (x for x in (-90.0, 90.0))
+
+
+def _mis_shaped_none_limit() -> object:
+    """``None`` 作为「限位」：既不是序列，也没有长度。"""
+    return None
+
+
+def _mis_shaped_dict_limit() -> object:
+    """两键 ``dict`` 作为「限位」：``len() == 2``、可迭代出键，但不是 ``Sequence``。"""
+    return {"lo": -90.0, "hi": 90.0}
+
+
+def _mis_shaped_scalar_limit() -> object:
+    """裸 ``float`` 作为「限位」：既没有长度，也不能解包。"""
+    return 40.0
+
+
+@pytest.mark.parametrize(
+    "limit_factory",
+    [
+        _mis_shaped_iterator_limit,
+        _mis_shaped_generator_limit,
+        _mis_shaped_none_limit,
+        _mis_shaped_dict_limit,
+        _mis_shaped_scalar_limit,
+    ],
+    ids=["iterator", "generator", "none", "dict", "float_scalar"],
+)
+def test_t_ik_18_12_non_sequence_joint_limit_rejected_as_mis_shaped(
+    limit_factory: Callable[[], object],
+) -> None:
+    """T-IK-18.12：非序列限位（迭代器 / 生成器 / ``None`` / ``dict`` / 裸标量）抛 ValueError。
+
+    契约：限位是「长度 2 的实数序列」。实现先用 ``not isinstance(limit, Sequence)`` 把它们
+    挡在数值工作之前；删掉这条判据后，``len(limit)`` 会对迭代器 / 生成器 / ``None`` /
+    ``float`` 抛裸 ``TypeError: object of type '...' has no len()``，而两键 ``dict`` 会通过
+    ``len() == 2`` 并被解包成键 ``("lo", "hi")``，随后落到「非实数」那一支——异常类型或
+    消息分支都不对。调用方按「限位非法 = ValueError」捕获，看到的是上述三种错法之一。
+
+    参数用工厂函数而不是裸对象：生成器 / 迭代器是一次性的，若把对象直接放进
+    ``parametrize`` 列表（模块导入时构造一次），同一参数的重跑（``--count``、重复收集）
+    会拿到已被抽干的实例，变成依赖执行顺序的测试。
+
+    断言三件事：抛 ``ValueError``（不是 ``len()`` 的 ``TypeError``、不是静默求解）；消息点名
+    关节；消息属于「形态不对」这一支（``must be a (lo, hi) pair``），而不是「非实数」或
+    「有限性」那两支。迭代器 / 生成器的 ``repr`` 带进程内地址，不作断言。
+    """
+    pytest.importorskip("placo", reason="ArmIK 的数值求解需要可选依赖 placo")
+    limits = limits_replacing(LIMIT_VALIDATION_JOINT, limit_factory())
+
+    with pytest.raises(ValueError) as excinfo:  # NOT len()'s TypeError, NOT silent solve
+        solve_with_limits(limits)
+
+    message = str(excinfo.value)
+    assert LIMIT_VALIDATION_JOINT in message, (
+        f"the non-sequence-limit error must name {LIMIT_VALIDATION_JOINT!r}, got: {message!r}"
+    )
+    # 分支专属字样：「形态不对」这一支，而不是「实数值」或「有限性」那两支。
+    assert "must be a (lo, hi) pair" in message, (
+        f"a non-sequence limit must be rejected by the (lo, hi)-pair shape branch, got: {message!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("limit_value", "expected_fragments"),
+    [
+        ((np.bool_(True), np.bool_(False)), ("got lo=np.True_", "hi=np.False_")),
+        ((np.float64(-90), np.bool_(True)), ("got hi=np.True_",)),
+    ],
+    ids=["np_bool_pair", "np_bool_mixed_with_number"],
+)
+def test_t_ik_18_13_numpy_bool_joint_limit_is_not_accepted_as_a_number(
+    limit_value: tuple[object, object], expected_fragments: tuple[str, ...]
+) -> None:
+    """T-IK-18.13：``np.bool_`` 不被当数字放行，抛 ValueError 并点名关节与坏取值。
+
+    ``np.bool_`` 既不是 ``int`` 的子类（与 Python ``bool`` 不同），也不在
+    ``(int, float, np.integer, np.floating)`` 白名单里，所以当前实现把它挡在「非实数」这一支。
+    风险在另一侧：``np.bool_`` 是 numpy 标量，白名单一旦为了「宽容 numpy 标量」扩成
+    ``(..., np.bool_)``，``(np.bool_(True), np.bool_(False))`` 会变成 ``(1.0, 0.0)``（倒置，
+    随后被 ``lo < hi`` 拦住、消息换了分支），``(np.float64(-90), np.bool_(True))`` 会变成
+    ``(-90.0, 1.0)``（顺序合法，求解照常返回）——两个都不该发生。T-IK-18.6 只覆盖 Python
+    ``bool``，守不住这一刀；本条是它的 numpy 补充。
+
+    断言四件事：抛 ``ValueError``（不是 placo 的裸 ``RuntimeError``，也不是静默求解）；消息
+    点名关节；消息属于「类型白名单」这一支（``must hold real numbers``），而不是顺序 / 有限性
+    那两支；消息把坏的那一侧以 ``got <侧>=<repr>`` 前缀原样回显，并带上 ``np.True_`` /
+    ``np.False_`` 的 repr（numpy 2.x 的标量 repr；见交付报告的遗留一节）。
+    ``got lo=`` / ``got hi=`` 前缀把「哪一侧坏了」钉开：只回显整个条目的实现漏掉前缀就红。
+
+    ``(np.float64(-90), np.bool_(True))`` 的参数是真正的鉴别点：只按数值比 ``lo < hi`` 的实现
+    会接受它（``-90.0 < 1.0``）。
+    """
+    pytest.importorskip("placo", reason="ArmIK 的数值求解需要可选依赖 placo")
+    limits = limits_replacing(LIMIT_VALIDATION_JOINT, limit_value)
+
+    with pytest.raises(ValueError) as excinfo:  # NOT silent acceptance of np.bool_ as a number
+        solve_with_limits(limits)
+
+    message = str(excinfo.value)
+    assert LIMIT_VALIDATION_JOINT in message, (
+        f"the np.bool_ limit error must name {LIMIT_VALIDATION_JOINT!r}, got: {message!r}"
+    )
+    # 分支专属字样：「类型白名单」这一支，而不是顺序 / 有限性那两支。
+    assert "must hold real numbers" in message, (
+        f"an np.bool_ limit must be rejected by the real-number whitelist branch, got: {message!r}"
+    )
+    for fragment in expected_fragments:
+        assert fragment in message, (
+            f"the np.bool_ limit error must echo the offending side as {fragment!r}; "
+            f"missing from: {message!r}"
+        )

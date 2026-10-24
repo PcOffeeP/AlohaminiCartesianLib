@@ -25,6 +25,8 @@ numerical solver is only needed when calling :meth:`ArmIK.fk` or
 
 from __future__ import annotations
 
+import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
@@ -320,9 +322,71 @@ class ArmIK:
         # F2: validate that every required joint has an explicit limit entry
         # before any numerical work, surfacing a clear ValueError instead of a
         # bare KeyError deep in the solver.
+        # T-IK-18: also validate the *value* of each required limit here, before
+        # any numerical work.  An inverted, degenerate, non-finite, mis-shaped or
+        # boolean limit used to leave through placo's bare
+        # ``RuntimeError('QPError: ...')`` (or was silently accepted), escaping the
+        # :class:`IKResult` contract; a caller-side typo is a ``ValueError``.
+        # Only ``profile.joint_names`` is inspected -- extra keys are ignored.
+        # The shape test is an explicit "length-2 sequence" check instead of
+        # ``lo, hi = limit``: unpacking accepted a 2-element generator (drained
+        # here, then a bare ``ValueError`` inside :meth:`_clamp_to_joint_limits`)
+        # and turned ``b"ab"`` into ``(97, 98)``; ``str``/``bytes``/``bytearray`` and
+        # iterators are therefore rejected here, before any numerical work.
+        # Each side is then checked against an explicit type whitelist: Python
+        # ``int``/``float`` and numpy numeric scalars (``np.integer``/
+        # ``np.floating``) pass, everything else is a caller-side typo -- ``bool``
+        # and ``np.bool_`` (``bool`` is an ``int`` subclass), ``Fraction`` (a
+        # ``numbers.Real`` subclass that passes a ``numbers.Real`` check yet makes
+        # ``np.deg2rad`` raise a bare ``TypeError``), and ``Decimal`` (not a
+        # ``numbers.Real`` subclass at all), which takes the same whitelist branch
+        # as any other non-number.  All of them are rejected here rather than
+        # allowed to raise a bare ``TypeError`` from ``np.deg2rad`` deeper in the
+        # solver.  The caller's mapping is only read: it is neither copied nor
+        # written back, and the very same object flows into the *second*
+        # :meth:`_solve_once` call (the first one solves with the URDF limits built
+        # internally above) -- T-IK-17.11/17.12 pin that pass-through by object
+        # identity.
         for name in self.profile.joint_names:
             if name not in joint_limits_deg:
                 raise ValueError(f"joint_limits_deg missing required joint: {name}")
+            limit = joint_limits_deg[name]
+            if (
+                isinstance(limit, (str, bytes, bytearray))
+                or not isinstance(limit, Sequence)
+                or len(limit) != 2
+            ):
+                raise ValueError(
+                    f"joint_limits_deg[{name!r}] must be a (lo, hi) pair, got {limit!r}"
+                )
+            lo, hi = limit
+            for side, value in (("lo", lo), ("hi", hi)):
+                # bool is an int subclass, and np.bool_ is a numpy scalar but not a
+                # number: neither True/False may pass as a limit.
+                if isinstance(value, bool) or not isinstance(
+                    value, (int, float, np.integer, np.floating)
+                ):
+                    raise ValueError(
+                        f"joint_limits_deg[{name!r}] must hold real numbers, got "
+                        f"{side}={value!r} (full entry: lo={lo!r}, hi={hi!r})"
+                    )
+            # ``math.isfinite`` converts to ``float`` first, so an ``int`` beyond the
+            # float range (``10**400``) raises ``OverflowError`` instead of answering.
+            # Such a value is not a finite float limit either: it belongs to the same
+            # branch, as a ``ValueError`` rather than an ``OverflowError`` escaping
+            # ``solve()``.
+            try:
+                sides_are_finite = math.isfinite(lo) and math.isfinite(hi)
+            except (OverflowError, TypeError):
+                sides_are_finite = False
+            if not sides_are_finite:
+                raise ValueError(
+                    f"joint_limits_deg[{name!r}] must be finite, got lo={lo!r}, hi={hi!r}"
+                )
+            if not lo < hi:
+                raise ValueError(
+                    f"joint_limits_deg[{name!r}] must satisfy lo < hi, got lo={lo!r}, hi={hi!r}"
+                )
 
         # T-IK-4 classification: first solve with the URDF limits to establish
         # whether the target is physically reachable at all.  If the best

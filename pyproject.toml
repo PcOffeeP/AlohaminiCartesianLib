@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "alohamini-cartesian"
-version = "0.4.0"
+version = "0.5.0"
 description = "AlohaMini 笛卡尔遥操作的独立库：机器人运行时适配协议、能力探测与配置覆盖。"
 readme = "README.md"
 requires-python = ">=3.12"
