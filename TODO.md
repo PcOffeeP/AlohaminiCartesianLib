@@ -8,8 +8,8 @@
 
 | 状态 | 事项 | 判据 | 备注 |
 | --- | --- | --- | --- |
-| 待办 | `src/alohamini_cartesian/control/arm_ik.py` 的 `solve()` 增加限位校验：有限性、`lo > hi`、`lo == hi`，违规抛 `ValueError` | 三条新用例通过，且合法限位下的既有用例不变红 | 与 `joint_adapter.py:262` 的 `Inverted URDF limit` 做法对齐；对外契约变更，需追加 ADR D10 |
-| 待办 | 多余关节键的处理定为「忽略」，并加用例钉住 | 一条用例通过，声明多余键不参与求解 | 现状已是忽略，缺的是契约与用例 |
+| 已完成 | `src/alohamini_cartesian/control/arm_ik.py` 的 `solve()` 增加限位校验：有限性、`lo > hi`、`lo == hi`，违规抛 `ValueError` | 三条新用例通过，且合法限位下的既有用例不变红 | 与 `joint_adapter.py:262` 的 `Inverted URDF limit` 做法对齐；对外契约变更，需追加 ADR D10；已完成，提交 57d4e6d |
+| 已完成 | 多余关节键的处理定为「忽略」，并加用例钉住 | 一条用例通过，声明多余键不参与求解 | 现状已是忽略，缺的是契约与用例；已完成，提交 57d4e6d |
 | 待办 | `JOINT_LIMIT` 失败分类误标：残差超标的失败被标成 `JOINT_LIMIT`（`arm_ik.py:376-391`） | 分类矩阵用例（在限位内/外 × 残差达标/超标）逐格通过 | 先定「两者同时成立」时 `JOINT_LIMIT` 优先，再改实现；会改既有用例期望值 |
 
 ## 2 现场
