@@ -209,7 +209,7 @@ S3 要把旧仓库的 `control/` 与运动学搬进本库。旧代码在 `contro
 
 正面：130 个测试函数（静态计数，20 + 110）进入本库测试集，参数化展开后是 176 条用例。`pytest tests` 从 `823 passed, 2 skipped` 变为 `999 passed, 2 skipped`，跳过的仍是两个 parity 文件（缺 `lerobot`）。`tests/benchmarks` 子集 190 条通过 = 14（`test_benchmark_arm_ik.py`）+ 23 + 153。这套采集与测量逻辑此后由本库回归网守着，不再依赖旧仓库。
 
-已知代价：迁入的是「有测试、无实测」的代码。两个脚本从未对着真机 Host 跑过，`schema_version == 2` 的实际取值、Mode B 的真实运动、Gate F 的真实拒绝路径都还没有证据。per-file-ignores 让这四份文件在 docstring、类型注解与行宽三条规则上不受本库标准约束，长期看是风格例外。
+迁入时的状态是「有测试、无实测」。2026-10-25 已在真机上补上三项证据：`schema_version = 2` 的指纹（18 个电机、换算字段齐全）、Mode B 受控试动五次（腕部达成 87.9%，肩部两轴未跟随）、Gate F 第一段真实拒绝（退出码 6、零命令）。仍未取到的：Gate F 第二段、跨机 RTT、右臂试动、相机非空帧。汇总见 `docs/field-results.md`。per-file-ignores 让这四份文件在 docstring、类型注解与行宽三条规则上不受本库标准约束，长期看是风格例外。
 
 ## D10 关节限位取值在 `ArmIK.solve()` 入口校验：违规抛 `ValueError`，多余键忽略
 

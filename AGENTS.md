@@ -62,7 +62,7 @@ git log --oneline -3                    # 最近提交
 ## 7 待决事项
 
 1. `placo` 依赖形态——已决：声明 `kinematics` extra（`placo>=0.10.1,<0.11`）并装进开发环境，接受 numpy 落到 2.3.x，见 `docs/ADR.md` D8
-2. `benchmarks/` 迁移时机——已迁完（`benchmarks/alohamini_ik` 在 v0.3.0，`benchmarks/alohamini_io` 在 v0.4.0），剩现场验证：真机 metadata 取值、Mode A/B 测量、Gate F 拒绝路径、配置样例采集。见 `docs/ADR.md` D3 与 D9、`docs/s4-field-smoke.md`
+2. `benchmarks/` 迁移时机——已迁完（`benchmarks/alohamini_ik` 在 v0.3.0，`benchmarks/alohamini_io` 在 v0.4.0），现场验证的进度：真机 metadata 取值、Mode B 试动、Gate F 第一段拒绝、配置样例采集均已完成（2026-10-25）；仍缺 Gate F 第二段、跨机 RTT、右臂试动、相机非空帧。逐条见 `docs/field-results.md`，迁移决策见 `docs/ADR.md` D3 与 D9，现场步骤见 `docs/s4-field-smoke.md`
 3. 旧仓库那 49 例线上协议测试是否搬入（测的是厂商侧模块，本库不包含）——已决：不迁，见 D7
 
 ## 8 相关位置
