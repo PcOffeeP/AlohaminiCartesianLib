@@ -1,0 +1,18 @@
+# AlohaMini 笛卡尔控制库的配置模板（随库分发的默认值）。
+# 覆盖顺序：默认值 → template → site → 环境变量（ALOHAMINI_*）。
+# 键集合必须与 alohamini_cartesian.config.overlay.SETTINGS_FIELDS 完全一致，多键或少键都会抛 ConfigError。
+
+# 机器人型号。合法取值：alohamini1 / alohamini2 / alohamini2pro。
+robot_model: alohamini1
+# 左臂串口设备节点。
+left_port: /dev/ttyUSB0
+# 右臂串口设备节点。
+right_port: /dev/ttyUSB1
+# 相机名 → 设备路径的映射；不接相机时留空映射。
+cameras: {}
+# 观测请求窗口大小（整数，必须 >= 1）。
+observation_request_window: 1
+# 看门狗超时（毫秒，整数，必须 >= 1）。
+watchdog_timeout_ms: 500
+# 控制循环最高频率（赫兹，整数，必须 >= 1）。
+max_loop_freq_hz: 50

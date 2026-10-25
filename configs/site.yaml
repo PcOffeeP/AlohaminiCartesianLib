@@ -1,0 +1,18 @@
+# 本机（AlohaMini 2 Pro）的现场配置：覆盖 template.yaml，再被环境变量 ALOHAMINI_* 覆盖。
+# 已实测事实只用于下方对应字段：双臂设备路径 /dev/am_arm_follower_left → ttyACM0、
+# /dev/am_arm_follower_right → ttyACM1；标定文件在厂商仓库 robots/alohamini/AlohaMiniRobot.json。
+
+# 这台机器是 AlohaMini 2 Pro，型号名取自 kinematics/model_specs.py 的合法取值。
+robot_model: alohamini2pro
+# 已实测：左臂设备路径，指向 ttyACM0。
+left_port: /dev/am_arm_follower_left
+# 已实测：右臂设备路径，指向 ttyACM1。
+right_port: /dev/am_arm_follower_right
+# 未实测，留默认值：本机有 20 个 /dev/video* 节点，但没有「相机名 → 设备路径」的实测映射。
+cameras: {}
+# 未实测，留默认值：尚未在真机上量过观测请求窗口。
+observation_request_window: 1
+# 未实测，留默认值：尚未在真机上量过看门狗超时。
+watchdog_timeout_ms: 500
+# 未实测，留默认值：尚未在真机上量过控制循环频率。
+max_loop_freq_hz: 50
