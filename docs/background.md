@@ -34,7 +34,7 @@
 | 项 | 值 |
 | --- | --- |
 | 版本 | `0.7.0`（`src/alohamini_cartesian/__init__.py`） |
-| 测试 | `1074 passed, 2 skipped` |
+| 测试 | `1108 passed, 2 skipped` |
 | 跳过的两条 | `tests/test_control_api_lerobot_parity.py`、`tests/test_kinematics_lerobot_parity.py`，需要 `lerobot` 做对照；**不等于全部通过** |
 | 核心依赖与 `lerobot` 引用位置 | 核心只依赖 numpy；`lerobot` 只在 `adapter/protocol.py` 被 import，由 `tests/test_capability.py` 的 AST 断言守着 |
 | 决策记录 | `docs/ADR.md` 现有 D1–D13 |
@@ -64,7 +64,7 @@
 | 设计条目 | 实现位置 / 状态 |
 | --- | --- |
 | Python 控制库 SDK（`connect` · `move_to` · `move_by` · `lift` · `base`） | 已实现：`src/alohamini_cartesian/control/api.py` |
-| KeyboardTeleop（可选上层调试示例） | 未实现：本库无 `examples/`，无键盘层 |
+| KeyboardTeleop（可选上层调试示例） | 部分：离线示例 `examples/minimal_dry_run.py` 已入库（dry-run 全链路，零发送）；键盘调试层未实现 |
 | 通用抽象命令（选臂 · 速度向量 · 夹爪 · 停 · 恢复） | 已实现：`src/alohamini_cartesian/control/commands.py` |
 | 控制状态与阶段互锁（`stop()` 锁定 · `resume()` 恢复 · base/lift 与 arm 互斥） | 已实现：`src/alohamini_cartesian/control/commands.py`（`ControlStateMachine`） |
 | Base / Lift action | 已实现：`src/alohamini_cartesian/control/api.py`（`BaseHandle`、`LiftHandle`）与 `src/alohamini_cartesian/control/controller.py`（`_tick_base_command`、`_tick_base_gap`） |
@@ -77,6 +77,8 @@
 | 反馈与 metadata（位置 · 时效 · 保护状态） | 已实现：`capability/detect.py` 解析 metadata；`control/api.py` 的 `_resolve_feedback` 用 `sample_sequence` 判时效并把 `settled`/`valid` fail-closed；`control/controller.py` 按 `_control_status.joint_holds` 做过流退让。`_host_timing` 只探测存在，控制层不用它做门禁 |
 
 ### 4.4 实机现状
+
+本节与本文其余部分的现场日期与钟点都是 UTC，本地时间为 UTC+8（UTC 07:00 对应本地 15:00，UTC 09:33 对应本地 17:33）。
 
 | 阶段 | 状态 | 依据 |
 | --- | --- | --- |

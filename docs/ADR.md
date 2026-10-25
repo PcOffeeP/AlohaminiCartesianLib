@@ -17,7 +17,7 @@
 | D9 | 现场基准脚本迁移时机：`benchmarks/alohamini_io` 两脚本与配套测试在 v0.4.0 迁入 | 已接受（自 v0.4.0 起） |
 | D10 | 关节限位取值在 `ArmIK.solve()` 入口校验：违规抛 `ValueError`，多余键忽略 | 已接受（自 v0.5.0 起） |
 | D11 | 失败原因分类：解越限报 JOINT_LIMIT，未越限的残差超标报 RESIDUAL | 已接受（自 v0.6.0 起） |
-| D12 | 基准脚本客户端能力探测：缺 `latest_request_timing` 时 rtt 中止并返回退出码 9，采集脚本相关字段记 `null` | 已接受（自 v0.7.0 起） |
+| D12 | 基准脚本客户端能力探测：计时面不存在或填不满时 rtt 中止并返回退出码 9，采集脚本相关字段记 `null` | 已接受（自 v0.7.0 起） |
 | D13 | 离线基准的预算判据抽成纯函数 `within_budget()`，测试不再对真实墙钟断言 | 已接受（自 v0.7.0 起） |
 
 ## D1 依赖形态：独立包，lerobot 作为可选 extra
@@ -300,7 +300,7 @@ S3 要把旧仓库的 `control/` 与运动学搬进本库。旧代码在 `contro
 
 已知代价之二：真实 qpmad 在注入限位下几乎不外溢（实测 1e-15 度级），所以端到端用真实求解器已经造不出 `JOINT_LIMIT`；该分类的覆盖现在依赖按对象身份区分两次 `_solve_once` 的假求解器用例（`T-IK-17.11`、`T-IK-19.1`、`T-IK-19.2`）。这是构造性限制，非覆盖遗漏，但 `_solve_once` 若被重构，这组用例会以「前提破了」的形式成片失败。
 
-## D12 基准脚本客户端能力探测：缺 `latest_request_timing` 时 rtt 中止并返回退出码 9，采集脚本相关字段记 `null`
+## D12 基准脚本客户端能力探测：计时面不存在或填不满时 rtt 中止并返回退出码 9，采集脚本相关字段记 `null`
 
 状态：已接受（自 v0.7.0 起）
 
@@ -314,7 +314,17 @@ Pi 上跑的 vendor 是 `main` 分支（`ec65318f`）。它的 `AlohaMiniClient`
 
 两个脚本在 `connect()` 返回后探测客户端有没有要用的属性，按探测结果决定继续还是中止，不按假设直读。
 
-`measure_latency.py --mode rtt`：探测点放在 `connect()` 返回之后、`_prime_state_only_window()` 之前。缺 `latest_request_timing` 时打印说明，返回新增的 `EXIT_CLIENT_UNSUPPORTED = 9`，不写 CSV，连表头都不写。放在预热之前是有意的：预热本身会发出一整个窗口的 state-only 请求，跑完再拒绝等于白放一窗请求。
+`measure_latency.py --mode rtt`：探测分两处。第一道在 `connect()` 返回之后、`_prime_state_only_window()` 之前，问的是「客户端有没有 `latest_request_timing` 这个属性」；第二道在采样循环里问「有的那一面填满了没有」，判据是 `REQUIRED_REQUEST_TIMING_KEYS`（`token`、`sent_monotonic_s`、`received_monotonic_s`、`age_s`）逐键可用，缺一个就拒。放在预热之前是有意的：预热本身会发出一整个窗口的 state-only 请求，跑完再拒绝等于白放一窗请求。
+
+退出码 `9` 因此有三种形态，三者都是 `9`、都不写 CSV，连表头都不写：
+
+| 形态 | 何时触发 | 是否发过请求 |
+| --- | --- | --- |
+| 属性不存在 | `connect()` 返回后、窗口预热之前 | 没发过 |
+| 属性存在但从未填充（整轮是空 dict，`observation_sequence` 不增长） | 窗口预热之后，采样循环放弃那一刻才判，要等满 `--timeout-s` | 发过 1 次 state-only 窗口预热，并至少观测 1 帧 |
+| 半填充（缺 `token` / `sent_monotonic_s` / `received_monotonic_s` / `age_s` 任一） | 写行之前逐帧复查，`observation_sequence` 每次增长都查一次 | 已发过请求，并在该帧拒绝 |
+
+stderr 文案区分形态，并点名缺的键：属性不存在时是 `it publishes no latest_request_timing` 那一支；属性存在但填不满时是 `it publishes latest_request_timing but never fills it completely`，后跟 `missing key(s): …` 列出缺的键。现场只靠退出码分不出这三种，要读 stderr 那一段。
 
 `capture_robot_fingerprint.py`：缺 `latest_request_timing` 时继续采集，把 `age_s`、`sent_monotonic_s`、`received_monotonic_s` 记为 `null`，每次调用只打一行警告并点名缺失的属性；缺 `latest_control_status` 时 `control_status` 记 `null`。
 
@@ -331,13 +341,13 @@ Pi 上跑的 vendor 是 `main` 分支（`ec65318f`）。它的 `AlohaMiniClient`
 
 用户可见契约有三处变化：
 
-1. 新增退出码 `9`（`EXIT_CLIENT_UNSUPPORTED`）。在缺 `latest_request_timing` 的客户端上，rtt 模式以 `9` 结束，不产出 CSV。
+1. 新增退出码 `9`（`EXIT_CLIENT_UNSUPPORTED`）。在缺 `latest_request_timing` 的客户端上，rtt 模式以 `9` 结束，不产出 CSV；属性存在但填不满（整轮为空或半填充）同样以 `9` 结束，也不产出 CSV。三种形态的触发点与是否发过请求见「决定」那张表。
 2. `capture` 的 payload 在缺面时出现 `null` 字段（`samples[].age_s`、`samples[].sent_monotonic_s`、`samples[].received_monotonic_s` 与 `control_status`）。10 个顶层键与 `PAYLOAD_SCHEMA_VERSION = 1` 不变。
 3. 版本号从 `0.6.0` 升到 `0.7.0`。
 
-已知代价：探测只验属性存在、不验内容。客户端有该属性但值是空的 dict 时，探测放行，两个脚本随后按空值处理。真实路径上 `connect()` 已经填充该属性，这条分支当前不可达，已登记为待办。
+已知代价：第二道探测做得严格，代价有三处。① 整轮为空的面要到采样循环放弃那一刻才拒，所以冻结形态的 `9` 要等满 `--timeout-s`，期间没有任何提前提示；半填充面则在写行前那一帧拒，代价小。② 首帧未计时即被拒：探测在它看的那一帧上分不清「这台宿主从不给请求计时」与「这台宿主还没计时」，等下一帧再判会重新打开运行开局，因此选择拒，可能拒掉一个合法客户端；真实 vendor 是否出现该形态未验证。③ 逐帧复查隐含假定 `observation_sequence` 增长与计时面填充在同一次 `get_observation` 里原子完成；若真实客户端由后台线程先加序号再写计时面，逐帧严格探测会偶发误拒，该原子性未验证。
 
-相关提交：实现 `c919fef`；探测前移到窗口预热之前 `a0d82b3`；测试 `36445e1`、`1c2d1fd`；措辞修正 `acc6912`。
+相关提交：实现 `c919fef`；探测前移到窗口预热之前 `a0d82b3`；测试 `36445e1`、`1c2d1fd`；措辞修正 `acc6912`；第二道探测与 Gate F 第二段端到端测试 `4e6b5c5`；半填充面同样拒绝、冻结加空面改报 `9` 并消除空转 `dc5356ae`。
 
 ## D13 离线基准的预算判据抽成纯函数 `within_budget()`，测试不再对真实墙钟断言
 

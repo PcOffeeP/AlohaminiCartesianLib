@@ -467,6 +467,7 @@ run 2.2-refusal-v2 uv run --no-sync python benchmarks/alohamini_io/measure_laten
 - [ ] 单臂：另一臂不参与本次运动
 - [ ] 空场：人物离场
 - [ ] 无负载：末端无负载
+- [ ] 行程按「1° × 更多步」规划：常量 `MAX_STEP_DELTA_DEG = 1.0`（`benchmarks/alohamini_io/measure_latency.py:392`）把每步压回 `1.0°`，请求更大值无效；stdout 会同时打印两者，原文 `delta_deg=1.000 (requested 2.000)`。要更大总行程只能加 `--steps`，加大 `--delta-deg` 不产生更大位移
 - [ ] 断电开关在手边，可随时按下
 
 命令：
@@ -489,7 +490,7 @@ run 3.1-tracking uv run --no-sync python benchmarks/alohamini_io/measure_latency
 | `--settle-timeout-s` | `2.0` | 默认 `1.0` s，20 ms 命令节奏下每步预算偏紧 |
 | `--timeout-s` | `60` | 默认 `30` s 对多步加 settle 偏紧，中途超时会以 exit 1 结束 |
 
-`--delta-deg` 的硬上限与 stdout 表现：常量 `MAX_STEP_DELTA_DEG = 1.0`（`benchmarks/alohamini_io/measure_latency.py:347`，`resolve_delta_deg` 用 `min(delta_deg, MAX_STEP_DELTA_DEG)`）。请求 `--delta-deg 2.0` 时实际按 1.0 执行，report 首部把两者都打印出来，原文形如 `delta_deg=1.000 (requested 2.000)`（格式在 `measure_latency.py:1989` 与 `:1990`）。要凑更大总行程，只能改成「1° × 更多步」，加大 `--delta-deg` 无效。
+`--delta-deg` 的硬上限与 stdout 表现：常量 `MAX_STEP_DELTA_DEG = 1.0`（`benchmarks/alohamini_io/measure_latency.py:392`，`resolve_delta_deg` 用 `min(delta_deg, MAX_STEP_DELTA_DEG)`）。请求 `--delta-deg 2.0` 时实际按 1.0 执行，report 首部把两者都打印出来，原文形如 `delta_deg=1.000 (requested 2.000)`（格式在 `measure_latency.py:2341-2342`）。要凑更大总行程，只能改成「1° × 更多步」，加大 `--delta-deg` 无效。
 
 关于 `rise_90_time_s` 为空：源码的说法是这一列 can be empty，即**可能**为空。是否为空取决于该关节是否在同一次轮询里越过 90% 线，不是「容差取小了就一定空、取大了就一定不空」。
 
@@ -664,7 +665,7 @@ run 4.4b-load-check-deploy uv run --no-sync python -c "from pathlib import Path;
 
 | 脚本 | 码 | 含义 |
 | --- | --- | --- |
-| 两者 | 2 | 参数解析失败（`--samples < 1`、`--rate-hz <= 0`、`--control-hz` 非有限或小于 1、`--delta-deg <= 0`、`--settle-tolerance-deg` 不小于有效 delta 等），不经过任何 `EXIT_*` 常量 |
+| 两者 | 2 | 参数解析失败（`--samples < 1`、`--rate-hz <= 0`、`--control-hz` 非有限或小于 1、`--delta-deg <= 0`、`--settle-tolerance-deg` 不小于有效 delta 等），不经过任何 `EXIT_*` 常量；其中 `--rate-hz`、`--timeout-s`、`--control-hz` 三项在 `measure` 里除符号检查外，非有限值（`nan` / `inf`）同样落退出码 `2` |
 | capture | 0 | payload 已写盘 |
 | capture | 3 | 建客户端、`connect()` 或观测传输失败 |
 | capture | 4 | `--timeout-s` 到期仍不够 `--samples` |
@@ -677,9 +678,19 @@ run 4.4b-load-check-deploy uv run --no-sync python -c "from pathlib import Path;
 | measure | 6 | 代码 Gate A–F 拒绝 |
 | measure | 7 | rtt 模式样本不足 |
 | measure | 8 | 收尾 hold 被拒，停命令没到 |
-| measure | 9 | 客户端不发布 rtt 模式所测量的能力（`latest_request_timing`）。连上后立即拒绝，未发请求、未采样、不写 CSV |
+| measure | 9 | 客户端不发布 rtt 模式所测量的能力（`latest_request_timing`），或发布了但内容填不满。三种形态都返回 `9`、都不写 CSV，形态与触发点见表下小表 |
 
 `capture_robot_fingerprint.py` 不产生 `9`：缺 `latest_request_timing` 时它继续采集并把计时字段记 `null`，见第 13 节。
+
+### 退出码 `9` 的三种形态
+
+| 形态 | 何时触发 | 是否发过请求 |
+| --- | --- | --- |
+| 属性不存在 | `connect()` 返回后、窗口预热之前 | 没发过 |
+| 属性存在但从未填充（整轮是空 dict，`observation_sequence` 不增长） | 窗口预热之后，采样循环放弃那一刻才判，要等满 `--timeout-s` | 发过 1 次 state-only 预热，并至少观测 1 帧 |
+| 半填充（缺 `token` / `sent_monotonic_s` / `received_monotonic_s` / `age_s` 任一） | 写行之前逐帧复查，`observation_sequence` 每次增长都查一次 | 已发过请求，并在该帧拒绝 |
+
+三种都不写 CSV，连表头都不写。stderr 分得开：第一种是 `it publishes no latest_request_timing`，后两种是 `it publishes latest_request_timing but never fills it completely`，并跟一句 `missing key(s): …` 点名缺的键。只看退出码分不出这三种，要读 stderr。
 
 退出码同时写在每步的 `$S4DIR/stdout/<步骤号>-$STAMP.exit` 里，查表前先看这个文件。
 
@@ -893,7 +904,7 @@ payload 的 10 个顶层键与 `schema_version = 1` 不变；缺能力不改变 
 | `--port` | 否 | `5556` | 无 | 宿主观测端口 |
 | `--robot-model` | 否 | `alohamini2pro` | 无 | 传给客户端的模型名；代码 Gate C 拿它与宿主 metadata 的 `robot_model` 比对，取值按阶段 1.1 JSON 里的值填 |
 | `--samples` | 否 | `5` | 小于 1 报参数错误 exit 2 | 要采到的观测请求数 |
-| `--timeout-s` | 否 | `30.0` | 无 | 采样本的总时间预算 |
+| `--timeout-s` | 否 | `30.0` | 无 | 采样本的总时间预算；无校验，`nan` 形态会导致不终止与空转，见 `TODO.md` 工程债 |
 | `--out` | 否 | `artifacts/alohamini-io/fingerprint-<UTC>.json`，解析参数时算时间戳 | 父目录自动创建 | JSON 落盘位置 |
 
 ### measure（17 个参数加 `-h`）
@@ -907,7 +918,7 @@ payload 的 10 个顶层键与 `schema_version = 1` 不变；缺能力不改变 
 | `--rate-hz` | 否 | `30.0` | 必须大于 0；小于 200 打警告 | 观测采样率，与 `--control-hz` 独立 |
 | `--control-hz` | 否 | `50.0` | 必须有限且不小于 1 | 命令最小间隔的倒数 |
 | `--samples` | 否 | `500` | 不小于 1，仅 rtt 用 | 要采到的观测帧数 |
-| `--timeout-s` | 否 | `30.0` | 无 | 整次运行的时间预算 |
+| `--timeout-s` | 否 | `30.0` | 非有限或非正 → 退出码 2 | 整次运行的时间预算 |
 | `--csv` | 否 | `artifacts/alohamini-io/<mode>-<UTC>.csv` | 无 | CSV 落盘位置 |
 | `--request-window` | 否 | `1` | 不小于 1 | 在飞观测请求数；1 是 RTT 形态，3 是部署形态 |
 | `--host-loop-hz` | 否 | `50.0` | 大于 0 | 宿主主循环频率，决定相位项与排队项 |

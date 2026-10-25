@@ -2,7 +2,7 @@
 
 这份文档给出 13 条准入基线，逐条写清要求、软件证据、实机证据与通过判据。基线回答一个问题：这项能力现在算不算可用。
 
-每格的软件证据都点到具体测试文件与用例名，打开文件能核对到同名函数。没有对应测试的地方直接写「无对应测试」，不写含糊的「已覆盖」。实机证据按现状填写，未取就是「未取」。
+每格的软件证据都点到具体测试文件与用例名，打开文件能核对到同名函数。没有对应测试的地方直接写「无对应测试」，不写含糊的「已覆盖」。实机证据按现状填写，未取就是「未取」。本文出现的现场日期与钟点是 UTC，本地时间为 UTC+8。
 
 ## 1 主表
 
@@ -53,7 +53,7 @@
 
 「部分」的含义：有专项用例或现场记录，但只覆盖该条要求的一部分，缺口在对应格子里写明了。
 
-软件侧整体快照：`uv run --no-sync python -m pytest tests` 报 `1074 passed, 2 skipped`。跳过的 2 条是两个 `lerobot` parity 文件（`tests/test_control_api_lerobot_parity.py`、`tests/test_kinematics_lerobot_parity.py`），原因是本机没装 `lerobot`。这 2 条跳过不等于全部通过。
+软件侧整体快照：`uv run --no-sync python -m pytest tests` 报 `1108 passed, 2 skipped`。跳过的 2 条是两个 `lerobot` parity 文件（`tests/test_control_api_lerobot_parity.py`、`tests/test_kinematics_lerobot_parity.py`），原因是本机没装 `lerobot`。这 2 条跳过不等于全部通过。
 
 实机侧已取的三条都只是部分：
 
