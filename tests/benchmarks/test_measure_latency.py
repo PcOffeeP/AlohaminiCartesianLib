@@ -85,7 +85,11 @@ must turn this file red):
 * **capability probe after the window prime** — moving the rtt probe back behind
   ``_prime_state_only_window`` must fail the ``prime_calls == []`` assertion of
   the exit-9 test, and dropping the prime from the tracking path must fail
-  section ``S``.
+  section ``S``;
+* **one-shot capability probe** — a ``probed`` latch that checks the timing face
+  only at the first growth of ``observation_sequence`` must fail R11 (a face that
+  empties from row 3 on would otherwise be written out as empty cells and the
+  run would exit 0).
 
 .. warning::
    ``send_action`` may only be *called* inside a tracking function of the module
@@ -355,6 +359,14 @@ class _FakeClient:
     script.  ``prime_calls`` records every window prime the script issues (the
     ``include_cameras`` flag per call), so a test can see *whether* and *how* the
     in-flight window was refilled and, crucially, *when*.
+
+    ``empty_timing_from`` / ``empty_timing_until`` script the *later* shapes of
+    the second capability defect (see R11-R13): with ``empty_timing_from=N``
+    every call ``i >= N`` leaves ``latest_request_timing`` as ``{}`` -- frames
+    that were timed, then a host that stops timing them; with
+    ``empty_timing_until=N`` every call ``i < N`` leaves it ``{}`` -- an empty
+    first frame, timed from frame ``N`` on.  Both default to ``None``, i.e. every
+    frame is timed, so no existing test changes shape.
     """
 
     def __init__(
@@ -366,6 +378,8 @@ class _FakeClient:
         host_unix_ns: list[Any] | None = None,
         connect_error: Exception | None = None,
         interrupt_at: int | None = None,
+        empty_timing_from: int | None = None,
+        empty_timing_until: int | None = None,
     ) -> None:
         self._sequences = sequences
         self._ages = ages
@@ -373,6 +387,8 @@ class _FakeClient:
         self._host_unix_ns = host_unix_ns
         self._connect_error = connect_error
         self._interrupt_at = interrupt_at
+        self._empty_timing_from = empty_timing_from
+        self._empty_timing_until = empty_timing_until
         self._sequence = 0
         self.is_connected = False
         self.get_observation_calls = 0
@@ -429,6 +445,10 @@ class _FakeClient:
             "received_monotonic_s": started_s + age_s,
             "age_s": age_s,
         }
+        if self._empty_timing_from is not None and index >= self._empty_timing_from:
+            self.latest_request_timing = {}
+        if self._empty_timing_until is not None and index < self._empty_timing_until:
+            self.latest_request_timing = {}
         host_timing: dict = {
             "state_sample_started_monotonic_s": started_s,
             "state_sample_finished_monotonic_s": started_s + duration_s,
@@ -3634,3 +3654,752 @@ def test_main_should_prime_the_state_only_window_in_tracking_mode(
         f"the tracking run primed with include_cameras={client.prime_calls[0]!r}, "
         "so the camera frames the prime exists to drop would still be sampled"
     )
+
+
+# ===========================================================================
+# T. Capability, second probe: the timing face exists but is never filled
+# ===========================================================================
+#
+# Section R asked ``hasattr``: does the client publish ``latest_request_timing``?
+# That question has a blind spot.  A client can publish the attribute and never
+# put anything in it -- ``{}`` in ``__init__`` and nothing afterwards, a
+# half-implemented vendor build, or a frame the host did not time.
+# ``_request_row`` reads it as ``dict(client.latest_request_timing or {})``
+# (benchmarks/alohamini_io/measure_latency.py:1124), so an always-empty dict
+# becomes an all-empty timing row: ``""``/``NaN`` cells that read like a
+# measurement of zero.  So the capability probe needs a second question next to
+# ``missing_client_capabilities`` (measure_latency.py:881): *is the face it found
+# actually filled?*  ``missing_client_capabilities`` itself stays a pure
+# ``hasattr`` check -- R2-R4 freeze that -- and the second probe is pinned below
+# from the outside, through ``main()``.
+
+# The words that mark the *empty* refusal.  None of them occurs in the
+# absent-attribute message of section R ("publishes no latest_request_timing",
+# "reports no per-request timing"), which is what makes the two refusals
+# tellable apart on stderr alone.  Checked against the lowered stderr, so the
+# implementation may capitalise them.  Permissive by design: today's message
+# says "never fills it", so only ``empty`` matches -- the other three entries are
+# tolerated spellings, not words the implementation promises to print.
+_EMPTY_TIMING_WORDS = ("empty", "never filled", "not filled", "no timing")
+
+
+class _ClientWithEmptyTiming(_FakeClient):
+    """The timing face exists, but every value it ever holds is ``{}``.
+
+    Same shape as ``_ClientWithoutRequestTiming`` one section up, with the
+    opposite defect: ``get_observation`` re-creates ``latest_request_timing`` on
+    every frame (as ``_FakeClient`` does) and then empties it again, so
+    ``hasattr`` answers ``True`` for the whole run while the timing face never
+    carries a token, a stamp or an age.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.latest_request_timing = {}
+
+    def get_observation(self, include_cameras: bool = True) -> dict:
+        state = super().get_observation(include_cameras=include_cameras)
+        self.latest_request_timing = {}
+        return state
+
+
+def test_main_should_refuse_rtt_when_the_timing_face_is_never_filled(
+    latency, tmp_path, capsys
+) -> None:
+    """R8: the attribute exists but stays ``{}`` → exit 9, no CSV.
+
+    Locked assertions, and why each one is here:
+
+    * exit ``EXIT_CLIENT_UNSUPPORTED`` (9), not 0: at the time of writing the run
+      reports success and writes a CSV whose ``token`` / ``sent_monotonic_s`` /
+      ``received_monotonic_s`` cells are empty and whose ``age_s`` is ``NaN`` --
+      a file that reads like a measurement.
+    * stderr names ``latest_request_timing``: the operator has to know *which*
+      face is at fault.
+    * stderr also says the face is empty, i.e. contains one of
+      ``_EMPTY_TIMING_WORDS``.  That tuple is a *permissive* matcher -- four
+      tolerated spellings, not four promised words: today's message reads
+      "publishes ... but never fills it", so only ``empty`` from the tuple
+      matches it, and ``never filled`` / ``not filled`` / ``no timing`` do not.
+      What is frozen is that the empty refusal and the absent-attribute refusal
+      have to be tellable apart on stderr alone; the exact wording is the
+      implementation's choice, and R10 below locks the negative side of it.
+      "The client has no such attribute" and "the client has it but nothing is in
+      it" have different fixes (upgrade the vendor client vs. find out why the
+      host stopped timing requests).
+    * the CSV path does not exist: a refused run writes nothing, not even a
+      header.
+
+    Deliberately *not* asserted: the number of ``get_observation`` calls.  A
+    probe that decides "filled?" may legitimately take one frame first (the
+    absent-attribute probe could decide without sampling, this one cannot), so
+    freezing the count here would forbid a correct implementation.
+    """
+    client = _ClientWithEmptyTiming()
+    out = tmp_path / "empty-timing.csv"
+
+    code = latency.main(
+        [
+            "--host",
+            "127.0.0.1",
+            "--mode",
+            "rtt",
+            "--samples",
+            "5",
+            "--csv",
+            str(out),
+        ],
+        client_factory=_Factory(client),
+    )
+    captured = capsys.readouterr()
+
+    assert code == latency.EXIT_CLIENT_UNSUPPORTED, (
+        f"a client whose timing face is never filled must exit 9, got {code}; "
+        f"stderr: {captured.err!r}"
+    )
+    assert "latest_request_timing" in captured.err, (
+        f"stderr does not name the empty attribute: {captured.err!r}"
+    )
+    lowered = captured.err.lower()
+    assert any(word in lowered for word in _EMPTY_TIMING_WORDS), (
+        "stderr does not say the timing face is empty / never filled, so it cannot be "
+        f"told apart from the absent-attribute refusal (looked for {_EMPTY_TIMING_WORDS}): "
+        f"{captured.err!r}"
+    )
+    assert not out.exists(), f"a refused run wrote {out}"
+
+
+def test_main_should_measure_rtt_when_the_timing_face_is_filled(latency, tmp_path) -> None:
+    """R9: the filled face keeps measuring -- the second probe must not refuse it.
+
+    Named explicitly (``_FakeClient`` fills ``latest_request_timing`` on every
+    ``get_observation``) so that R8/R9 read as one rule: refuse the empty face,
+    keep measuring the filled one.  The row count equals ``--samples`` and the
+    ``token`` / ``age_s`` cells are non-empty -- those are exactly the cells the
+    empty face leaves blank.
+    """
+    client = _FakeClient(ages=[0.030, 0.031, 0.032, 0.033])
+    out = tmp_path / "filled-timing.csv"
+
+    code = latency.main(
+        [
+            "--host",
+            "127.0.0.1",
+            "--mode",
+            "rtt",
+            "--samples",
+            "4",
+            "--rate-hz",
+            "200",
+            "--csv",
+            str(out),
+        ],
+        client_factory=_Factory(client),
+    )
+
+    assert code == latency.EXIT_OK, (
+        f"a client that fills its timing face must still be measurable, got {code}"
+    )
+    assert out.is_file(), f"the rtt run wrote no CSV at {out}"
+    with out.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 4, f"expected one row per requested sample, got {len(rows)}"
+    for row in rows:
+        assert row["token"] != "", f"row {row['sample_index']} has an empty token: {row}"
+        assert row["age_s"] != "", f"row {row['sample_index']} has an empty age_s: {row}"
+
+
+def test_main_should_refuse_rtt_with_the_absent_wording_when_the_face_is_missing(
+    latency, tmp_path, capsys
+) -> None:
+    """R10: the absent-attribute refusal is unchanged, and it is not the empty one.
+
+    R6 already locks this path end to end (exit 9, attribute named, zero
+    observations, no CSV, no window prime); this test adds the one thing R6 could
+    not state before R8 existed: the two refusals are mutually exclusive on
+    stderr.  Without that, an implementation could satisfy R8 by reusing the
+    "publishes no ..." wording for both cases and leave the operator unable to
+    tell "upgrade the client" from "the host stopped timing requests".
+    """
+    client = _ClientWithoutRequestTiming()
+    out = tmp_path / "absent-timing.csv"
+
+    code = latency.main(
+        [
+            "--host",
+            "127.0.0.1",
+            "--mode",
+            "rtt",
+            "--samples",
+            "5",
+            "--csv",
+            str(out),
+        ],
+        client_factory=_Factory(client),
+    )
+    captured = capsys.readouterr()
+
+    assert code == latency.EXIT_CLIENT_UNSUPPORTED, (
+        f"the absent timing face still exits 9, got {code}: {captured.err!r}"
+    )
+    assert "latest_request_timing" in captured.err, (
+        f"stderr no longer names the absent attribute: {captured.err!r}"
+    )
+    lowered = captured.err.lower()
+    assert not any(word in lowered for word in _EMPTY_TIMING_WORDS), (
+        "the absent-attribute refusal uses the empty-timing wording, so the two "
+        f"defects are no longer distinguishable on stderr: {captured.err!r}"
+    )
+    assert not out.exists(), f"a refused run wrote {out}"
+
+
+# ---------------------------------------------------------------------------
+# R11-R18: the second probe runs on *every* growth, and it is a pure function
+# ---------------------------------------------------------------------------
+#
+# R8 pins the *always*-empty face, and one implementation can satisfy it with a
+# one-shot latch: keep a ``probed`` flag in ``collect_rtt_samples``, call
+# ``unfilled_client_capabilities`` at the first growth of
+# ``observation_sequence`` and never look at the timing face again.  That latch
+# has two blind spots, and both are frozen below.
+#
+# * A face that is filled at the first frame and empties afterwards is never
+#   noticed (R11): the run reports success and writes rows whose ``token``,
+#   ``sent_monotonic_s`` and ``received_monotonic_s`` cells are empty and whose
+#   ``age_s`` cell is empty too.  That is the same "empty cells read like a
+#   measurement" file the second probe exists to prevent, only from row 3 on.
+# * A face that is empty on the first frame and filled from the second one on is
+#   refused, although the client is measurable from frame 2 (R12).
+#
+# Ruling of this round: probe strictly, on every growth and before any row is
+# appended, so a client can never produce a row with an empty timing face.  R11
+# follows from that, and R12 keeps the reading that comes with it -- a client
+# whose first frame is untimed is refused too.  That is an *intentional strict
+# trade-off* (refusing a possibly legal client beats writing empty timing rows),
+# not a defect: R12 locks it as such.  Whether a real vendor client has the R12
+# shape (``{}`` on the frame right after ``connect()``, filled afterwards) is
+# unverified -- no field run has produced it, see ``docs/s4-field-smoke.md``.
+
+
+def test_main_should_refuse_rtt_when_the_timing_face_empties_mid_run(
+    latency, tmp_path, capsys
+) -> None:
+    """R11: frames 1-2 timed, frame 3 onwards ``{}`` → exit 9, and no CSV.
+
+    Locks exactly one rule: **no row may be written with an empty timing face**.
+    The one-shot probe breaks it -- it latches at the first growth, sees a filled
+    face and closes satisfied -- so the run goes on to append rows from the
+    untimed frames, exits 0 and writes a CSV whose later rows carry an empty
+    ``token``, empty ``sent_monotonic_s`` / ``received_monotonic_s`` and an empty
+    ``age_s`` cell.  Those are precisely the cells that read like a measurement
+    of zero.
+
+    The refusal must happen before the row is appended, so the CSV must not exist
+    at all: an exit 9 that still wrote the two timed rows would leave the
+    "looks like a measurement" file this contract forbids.
+
+    Deliberately *not* asserted: the number of ``get_observation`` calls (a probe
+    may read a frame before deciding, as R8 states) and the row count.
+    """
+    # Frames 1 and 2 (calls 0 and 1) fill ``latest_request_timing``; from frame
+    # 3 (call 2) it is ``{}`` for the rest of the run.
+    client = _FakeClient(empty_timing_from=2)
+    out = tmp_path / "mid-run-empty.csv"
+
+    code = latency.main(
+        [
+            "--host",
+            "127.0.0.1",
+            "--mode",
+            "rtt",
+            "--samples",
+            "5",
+            "--rate-hz",
+            "200",
+            "--csv",
+            str(out),
+        ],
+        client_factory=_Factory(client),
+    )
+    captured = capsys.readouterr()
+
+    assert code == latency.EXIT_CLIENT_UNSUPPORTED, (
+        f"a timing face that empties mid-run must exit 9, got {code}; stderr: {captured.err!r}"
+    )
+    assert "latest_request_timing" in captured.err, (
+        f"stderr does not name the empty attribute: {captured.err!r}"
+    )
+    assert not out.exists(), (
+        f"a run refused for an empty timing face still wrote {out}; no row may be "
+        "written with an empty timing face, not even the timed rows before it"
+    )
+
+
+def test_main_should_still_refuse_rtt_when_the_timing_face_fills_from_the_second_frame(
+    latency, tmp_path, capsys
+) -> None:
+    """R12: first frame ``{}``, filled afterwards → still exit 9 (intended).
+
+    This one is a *strict trade-off*, not a defect, and it is locked as such.  A
+    per-growth probe runs at the first growth of ``observation_sequence``, which
+    is also the frame the client has just answered; if that frame carries no
+    timing, the run is refused -- even when every later frame is timed and the
+    measurement would have been fine from row 2 on.
+
+    Why accept that cost: the probe cannot tell "this host never times a request"
+    from "this host had not timed it yet" on the frame it is looking at.  Note
+    what the grace alternative (wait one more growth, then decide) would *not*
+    cost: the probe runs at every growth, so it does not reopen the R11 hole -- a
+    face that empties later in the run is still refused on the frame it empties
+    on.  Its real price is one row: grace on the first growth would let that
+    frame append a row whose ``token``, stamps and ``age_s`` are empty, i.e.
+    exactly the line R11 forbids.  Refusing at the first growth keeps "no row is
+    ever written from an empty face" absolute, and the price is refusing a
+    possibly legal slow-fill client (one re-run); the grace alternative would
+    write a CSV of empty cells that reads like a measurement.  The refusal is the
+    honest side of that asymmetry.
+
+    Unverified (do not read this test as a claim about hardware): whether the
+    real vendor client can even take this shape -- ``latest_request_timing == {}``
+    on the first frame after ``connect()`` and filled from the second frame on --
+    has not been observed.  If a field run ever produces it, the trade-off itself
+    has to be re-argued (a bounded grace of one frame plus a hard refusal after
+    it would be the candidate), and this test is the one that has to change.
+    """
+    # Call 0 leaves ``latest_request_timing`` as ``{}``; from call 1 it is timed.
+    client = _FakeClient(empty_timing_until=1)
+    out = tmp_path / "late-filled.csv"
+
+    code = latency.main(
+        [
+            "--host",
+            "127.0.0.1",
+            "--mode",
+            "rtt",
+            "--samples",
+            "5",
+            "--rate-hz",
+            "200",
+            "--csv",
+            str(out),
+        ],
+        client_factory=_Factory(client),
+    )
+    captured = capsys.readouterr()
+
+    assert code == latency.EXIT_CLIENT_UNSUPPORTED, (
+        "a first frame without timing is refused on purpose (strict per-growth "
+        f"probe), got exit {code}; stderr: {captured.err!r}"
+    )
+    assert "latest_request_timing" in captured.err, (
+        f"stderr does not name the empty attribute: {captured.err!r}"
+    )
+    assert not out.exists(), f"a refused run wrote {out}"
+
+
+def test_main_should_close_the_client_when_the_timing_face_empties_mid_run(
+    latency, tmp_path, capsys
+) -> None:
+    """R13: the mid-run-empty refusal hands the socket back, as R6 requires.
+
+    Same run as R11, same shape of assertion as R6: the refusal path must not
+    leave the connected client open, or the port stays taken for the rest of the
+    process.  Kept separate from R11 so that a leak shows up as one failing test
+    about the leak instead of a failing refusal.
+    """
+    client = _FakeClient(empty_timing_from=2)
+    out = tmp_path / "leak.csv"
+
+    latency.main(
+        [
+            "--host",
+            "127.0.0.1",
+            "--mode",
+            "rtt",
+            "--samples",
+            "5",
+            "--rate-hz",
+            "200",
+            "--csv",
+            str(out),
+        ],
+        client_factory=_Factory(client),
+    )
+    capsys.readouterr()
+
+    assert client.get_observation_calls > 0, (
+        "the run never sampled a frame, so it did not reach the per-growth probe"
+    )
+    assert client.is_connected is False, (
+        "the exit 9 refusal for an empty timing face returned without closing the "
+        "client it had connected"
+    )
+
+
+def test_main_should_not_use_the_absent_wording_when_the_timing_face_is_empty(
+    latency, tmp_path, capsys
+) -> None:
+    """R14: the empty-timing refusal never reuses ``publishes no``.
+
+    R10 locks one direction of the mutual exclusion (the absent-attribute refusal
+    avoids the empty-timing wording); this is the other one, and it is the one a
+    lazier implementation breaks: it can satisfy R8/R11 by printing the same
+    "publishes no latest_request_timing" sentence for both defects, which leaves
+    the operator unable to tell "upgrade the client" from "find out why the host
+    stopped timing requests".
+
+    ``publishes no`` is the word chosen because it is the stable half of the
+    absent-attribute sentence in ``main`` ("unsupported client: it publishes no
+    latest_request_timing, so rtt cannot be measured."): it states that the face
+    is *not there*, and no honest empty-face message can claim that.  The other
+    words a reader might reach for are rejected on purpose -- the two refusals
+    legitimately share boilerplate, so they cannot separate anything:
+
+    * ``so rtt cannot be measured.`` -- both refusals say it, correctly;
+    * ``no CSV was written`` / ``no sample was recorded`` -- both say it;
+    * ``latest_request_timing`` -- both must name the face, R8/R11 require it;
+    * ``unsupported client`` -- both open with it, the exit code is shared.
+
+    Asserting on any of those would turn a harmless wording change into a red
+    and would say nothing about the defect the operator has to identify.
+    """
+    client = _ClientWithEmptyTiming()
+    out = tmp_path / "empty-wording.csv"
+
+    code = latency.main(
+        [
+            "--host",
+            "127.0.0.1",
+            "--mode",
+            "rtt",
+            "--samples",
+            "5",
+            "--csv",
+            str(out),
+        ],
+        client_factory=_Factory(client),
+    )
+    captured = capsys.readouterr()
+
+    assert code == latency.EXIT_CLIENT_UNSUPPORTED, (
+        f"the empty-timing refusal still exits 9, got {code}: {captured.err!r}"
+    )
+    assert "publishes no" not in captured.err.lower(), (
+        "the empty-timing refusal reuses the absent-attribute wording ('publishes "
+        "no'), so an operator can no longer tell a missing face from an unfilled "
+        f"one: {captured.err!r}"
+    )
+    assert not out.exists(), f"a refused run wrote {out}"
+
+
+# --- R15-R18: the second probe is a pure function --------------------------
+#
+# Symmetric to R2-R4 for ``missing_client_capabilities``.  Signature checked
+# against the source before writing (benchmarks/alohamini_io/measure_latency.py:
+# ``unfilled_client_capabilities(client: Any, names: Sequence[str] =
+# CLIENT_CAPABILITIES) -> list[str]``, body ``[name for name in names if not
+# getattr(client, name, None)]``): the ordering test therefore has to pass
+# ``names`` in a non-alphabetical order, and the purity tests have to get an
+# empty list back only for a face that carries something.
+
+
+def test_unfilled_client_capabilities_should_be_empty_when_the_face_is_filled(
+    latency,
+) -> None:
+    """R15: a filled timing face is not reported, so the probe cannot refuse it.
+
+    ``_FakeClient`` publishes ``{}`` in ``__init__`` and fills the face on every
+    ``get_observation``, so one frame is taken first: that is exactly the state
+    the sampling loop probes in.
+    """
+    client = _FakeClient()
+    client.get_observation()
+
+    assert latency.unfilled_client_capabilities(client) == []
+
+
+def test_unfilled_client_capabilities_should_name_the_face_that_stays_empty(
+    latency,
+) -> None:
+    """R16: an always-``{}`` face is reported by name (the R8 defect, at unit level)."""
+    client = _ClientWithEmptyTiming()
+    client.get_observation()
+
+    assert latency.unfilled_client_capabilities(client) == ["latest_request_timing"]
+
+
+def test_unfilled_client_capabilities_should_follow_the_requested_name_order(
+    latency,
+) -> None:
+    """R17: the result follows ``names``, not alphabetical or set order.
+
+    ``latest_control_status`` sorts *before* ``latest_request_timing``, so a
+    sorted or set-derived result would come back reversed here.  Both faces are
+    empty: the subclass empties the timing face on every frame, and
+    ``latest_control_status`` is set to ``{}`` so that ``None`` (its
+    ``_FakeClient`` default) is not what makes it count.
+    """
+    client = _ClientWithEmptyTiming()
+    client.latest_control_status = {}
+
+    unfilled = latency.unfilled_client_capabilities(
+        client, names=("latest_request_timing", "latest_control_status")
+    )
+
+    assert unfilled == ["latest_request_timing", "latest_control_status"]
+
+
+def test_unfilled_client_capabilities_should_not_touch_the_client(latency) -> None:
+    """R18: the probe is pure -- it reads the face, it neither samples nor mutates it.
+
+    Pinned because the caller places it inside the sampling loop: a probe that
+    took a frame itself (or cleared the face to decide) would add a row, skip a
+    frame or change what ``_request_row`` writes.
+    """
+    client = _ClientWithEmptyTiming()
+    timing_before = client.latest_request_timing
+    calls_before = client.get_observation_calls
+
+    unfilled = latency.unfilled_client_capabilities(client)
+
+    assert unfilled == ["latest_request_timing"]
+    assert client.latest_request_timing == timing_before, (
+        "the probe changed the timing face it was asked to inspect"
+    )
+    assert client.latest_request_timing == {}
+    assert client.get_observation_calls == calls_before, (
+        f"the probe sampled {client.get_observation_calls - calls_before} frame(s)"
+    )
+
+
+# --- R19: the probe sits ahead of the row append ---------------------------
+#
+# R8/R11-R13 observe the refusal through ``main``: exit 9 and no CSV.  Those
+# assertions cannot see *where in the loop* the refusal happens, because a probe
+# moved behind ``rows.append(...)`` still raises before ``write_csv`` and still
+# leaves no file behind on disk.  The position is what makes the CSV provable --
+# a row that is appended and then thrown away was still built from an untimed
+# frame -- so it is pinned here at the unit level, on the rows list itself.
+
+
+def test_collect_rtt_samples_should_append_no_row_for_the_frame_it_refuses(latency) -> None:
+    """R19: an untimed frame never enters ``rows``, not even one that is never written.
+
+    Locks the *position* of the second capability probe, not its existence: it
+    has to run after a growth of ``observation_sequence`` and **before** that
+    frame's ``rows.append(...)``.  Moving it one statement later still raises
+    ``UnfilledClientCapability`` and still lets ``main`` return
+    ``EXIT_CLIENT_UNSUPPORTED`` with no CSV on disk, so the end-to-end tests
+    (R8/R11-R13) cannot tell the two orderings apart; the only observable that
+    can is the caller-supplied ``rows`` list.
+
+    The face is filled on the first two answered frames and ``{}`` from the third
+    one on (``_FakeClient(empty_timing_from=2)``), i.e. the mid-run shape -- so
+    the two rows of the timed frames must be in the list and the row of the frame
+    that triggered the refusal must not be, whatever happens to it afterwards.
+
+    Why the position matters to the CSV: only this ordering makes "the CSV holds
+    no empty-timing row" provable instead of incidental.  Appended-then-discarded
+    rows are rows that were already built out of an untimed frame.
+    """
+    # Calls 0 and 1 time the request; from call 2 the face is ``{}`` for good.
+    client = _FakeClient(empty_timing_from=2)
+    rows: list[dict[str, Any]] = []
+
+    with pytest.raises(latency.UnfilledClientCapability) as excinfo:
+        latency.collect_rtt_samples(
+            client,
+            samples=5,
+            rate_hz=200.0,
+            timeout_s=5.0,
+            sleep=_fast_sleep,
+            clock=_FakeClock(start=0.0, step_s=0.001),
+            rows_out=rows,
+        )
+
+    # Row count is the assertion: two timed growths, zero rows for the refused one.
+    assert len(rows) == 2, (
+        f"the refused frame left {len(rows) - 2} extra row(s) in rows: the probe ran "
+        "after rows.append(...), so a row built from the untimed frame is already in "
+        "the list -- the CSV can no longer be proven free of empty-timing rows"
+    )
+    assert all(row["token"] for row in rows), (
+        "an untimed frame reached rows: the row appended there carries an empty "
+        f"token/age cell -- {[sorted(row) for row in rows]}"
+    )
+    # The refusal stays readable: it names the face the caller has to look at.
+    assert excinfo.value.names == ("latest_request_timing",), (
+        f"the refusal does not name the unfilled face: {excinfo.value.names!r}"
+    )
+
+
+# ===========================================================================
+# U. Gate F, second segment: v2 schema, right model, broken conversion fields
+# ===========================================================================
+#
+# Gate F has two segments in ``_tracking_preflight``
+# (benchmarks/alohamini_io/measure_latency.py:1427): the schema check
+# (``schema_version == 2``) and the unit check ``deg_per_unit(metadata,
+# joint_key)`` (measure_latency.py:1507, raising ``UnitConversionUnavailable``
+# from ``deg_per_unit`` at 538).  G2 above locks the first segment; the variants
+# below lock the second one end to end through ``main()``, because the refusal
+# text is what a field operator reads when the robot does not move.
+#
+# What ``deg_per_unit`` actually reads (measure_latency.py:538-620), verified
+# against the source before writing these cases: ``normalization`` (optional,
+# absent is read as ``range_m100_100``), ``range_min``, ``range_max`` and
+# ``resolution``.  It does **not** read ``homing_offset`` -- that field belongs to
+# the absolute-tick homing of ``capture_robot_fingerprint``, not to the
+# deg-per-unit factor.  So there is deliberately no ``homing_offset`` variant
+# here: it would assert a refusal the gate does not make (and should not make),
+# i.e. a made-up red/green case.
+
+_CALIBRATION_VARIANTS = {
+    "missing_resolution": {"drop": ("resolution",)},
+    "missing_range_min": {"drop": ("range_min",)},
+    "range_max_at_range_min": {"range_max": _TRACKING_MOTOR_ENTRY["range_min"]},
+}
+
+
+def _incomplete_unit_metadata(*, drop: tuple[str, ...] = (), **overrides: Any) -> dict:
+    """v2 metadata whose target motor entry misses or contradicts a field.
+
+    Same shape as ``_unit_metadata`` (a legal v2 payload for the stepped joint),
+    plus key *removal*: an absent field is what deployed metadata looks like,
+    whereas ``{"resolution": None}`` would test a different defect path ("present
+    but not finite").
+    """
+    entry = {key: value for key, value in _TRACKING_MOTOR_ENTRY.items() if key not in drop}
+    entry.update(overrides)
+    return {
+        "schema_version": 2,
+        "robot_model": _TRACKING_METADATA["robot_model"],
+        "motors": {_TRACKING_MOTOR: entry},
+    }
+
+
+class _CountingTrackingFake(_TrackingFake):
+    """``_TrackingFake`` plus the ``send_action_calls`` counter ``_FakeClient`` has.
+
+    Added here rather than to the shared fake so the motion-free assertions of
+    this section read exactly like the rtt ones (``send_action_calls == 0``) and
+    every existing tracking test keeps its fixture untouched.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.send_action_calls = 0
+
+    def send_action(self, action: dict) -> dict:
+        self.send_action_calls += 1
+        return super().send_action(action)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    list(_CALIBRATION_VARIANTS.values()),
+    ids=list(_CALIBRATION_VARIANTS),
+)
+def test_main_should_refuse_tracking_when_the_conversion_fields_are_incomplete(
+    latency, tmp_path, capsys, overrides: dict
+) -> None:
+    """J9: schema v2 and the right model, but no usable deg-per-unit factor.
+
+    The payload passes Gate C (the model is correct) and Gate F's first segment
+    (``schema_version == 2``) and is refused by Gate F's second segment, so this
+    is the case where the operator must be told about *calibration*, not about
+    versions.  Locked assertions:
+
+    * exit ``EXIT_MOTION_GATE_REFUSED`` (6), before any ``send_action``.
+    * stderr carries both ``Gate F`` and ``unit conversion unavailable``: which
+      gate refused and what about it.
+    * stderr does **not** carry ``schema_version``: that string only appears in
+      the first segment's text, so its absence proves this refusal came from the
+      conversion fields.
+    * stderr names the target motor, so a field operator can look up that exact
+      entry on the host side.
+    * nothing was commanded (``send_action_calls == 0``) and no CSV exists.
+    """
+    client = _CountingTrackingFake()
+    client.latest_robot_metadata = _incomplete_unit_metadata(**overrides)
+    out = tmp_path / "tracking.csv"
+
+    code = latency.main(
+        [
+            "--host",
+            "127.0.0.1",
+            "--mode",
+            "tracking",
+            "--enable-motion",
+            "--joint",
+            _TRACKING_MOTOR,
+            "--steps",
+            "1",
+            "--csv",
+            str(out),
+        ],
+        client_factory=_Factory(client),
+    )
+    printed = capsys.readouterr()
+    lowered = printed.err.lower()
+
+    assert code == latency.EXIT_MOTION_GATE_REFUSED, (
+        f"an unusable calibration must be refused with 6, got {code}: {printed.err!r}"
+    )
+    assert "Gate F" in printed.err, f"the refusal does not name Gate F: {printed.err!r}"
+    assert "unit conversion unavailable" in lowered, (
+        f"the refusal does not name the unit conversion: {printed.err!r}"
+    )
+    assert "schema_version" not in lowered, (
+        "the refusal quotes the metadata schema, so it came from Gate F's first "
+        f"segment instead of the conversion fields: {printed.err!r}"
+    )
+    assert _TRACKING_MOTOR in printed.err, (
+        f"the refusal does not name the motor to look up on the host: {printed.err!r}"
+    )
+    assert client.send_action_calls == 0, (
+        f"a refused calibration sent {client.send_action_calls} command(s)"
+    )
+    assert not out.exists(), f"a refused run wrote {out}"
+
+
+def test_main_should_still_measure_rtt_when_the_conversion_fields_are_incomplete(
+    latency, tmp_path
+) -> None:
+    """rtt never reads the calibration, so a broken entry cannot refuse it.
+
+    Recorded as *current* behaviour, not as a rule to keep:
+    ``collect_rtt_samples`` (measure_latency.py:1168) and ``_run_rtt_mode``
+    (measure_latency.py:1339) measure the age of the last request; the only
+    readers of ``client.latest_robot_metadata`` in the script are
+    ``_tracking_preflight`` (measure_latency.py:1455) and the tracking report,
+    and rtt does no unit conversion at all.  A payload that Gate F refuses under
+    ``--mode tracking`` is therefore simply not consulted here and the run
+    succeeds.  Asserted so the mode split is on the record: if rtt ever starts
+    reading the metadata, this test is the first thing to revisit.
+    """
+    client = _FakeClient()
+    client.latest_robot_metadata = _incomplete_unit_metadata(drop=("resolution",))
+    out = tmp_path / "rtt-incomplete-units.csv"
+
+    code = latency.main(
+        [
+            "--host",
+            "127.0.0.1",
+            "--mode",
+            "rtt",
+            "--samples",
+            "2",
+            "--rate-hz",
+            "200",
+            "--csv",
+            str(out),
+        ],
+        client_factory=_Factory(client),
+    )
+
+    assert code == latency.EXIT_OK, (
+        f"rtt does not read the calibration, so the run must still succeed, got {code}"
+    )
+    assert out.is_file(), f"the rtt run wrote no CSV at {out}"
+    assert client.send_action_calls == 0, "rtt mode must stay motion-free"
