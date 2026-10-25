@@ -404,7 +404,7 @@ class _FakeClient:
     def disconnect(self) -> None:
         self.is_connected = False
 
-    def prime_observation_request_window(self, include_cameras: bool = False) -> None:
+    def prime_observation_request_window(self, *, include_cameras: bool) -> None:
         """Record the window prime instead of refilling a real request queue.
 
         The script calls this once per run, after ``connect()`` and before the
@@ -3474,11 +3474,14 @@ def test_main_should_refuse_rtt_before_sampling_when_the_face_is_absent(
     rest of the process.
 
     Ordering, locked here: the probe runs **before** ``_prime_state_only_window``.
-    The prime is the harness's first request on the wire, so a probe placed after
-    it would refuse only *after* spending traffic and would falsify the exit-code
-    documentation ("nothing was requested").  ``prime_calls == []`` is what makes
-    that order observable: with the probe moved back after the prime, the refusal
-    already costs one prime and this assertion turns red.
+    The prime is the harness's first **state-only** request batch (``connect()``
+    has already filled the window with camera requests), and the deployed vendor
+    ``main`` client does implement the prime, so a probe placed after it would
+    refuse only *after* spending a whole request window and would falsify the
+    exit-code documentation ("before the state-only window prime sends its first
+    request").  ``prime_calls == []`` is what makes that order observable: with
+    the probe moved back after the prime, the refusal already costs one prime and
+    this assertion turns red.
     """
     client = _ClientWithoutRequestTiming()
     out = tmp_path / "x.csv"
@@ -3583,7 +3586,7 @@ class _PrimedTrackingFake(_TrackingFake):
         super().__init__(**kwargs)
         self.prime_calls: list[bool] = []
 
-    def prime_observation_request_window(self, include_cameras: bool = False) -> None:
+    def prime_observation_request_window(self, *, include_cameras: bool) -> None:
         self.prime_calls.append(include_cameras)
 
 
