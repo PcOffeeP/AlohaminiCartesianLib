@@ -1,6 +1,6 @@
 # 架构决策记录（ADR）
 
-本文记录 `alohamini-cartesian` 自 v0.1.0 起沿用的决策，编号 D1–D11。每条按背景、决定、后果三段记录，后果同时写正面收益与已知代价。状态写作「已接受（自 vX.Y.Z 起）」，不记具体日期。新的重大取舍按顺序追加编号，已接受的条目不回改。
+本文记录 `alohamini-cartesian` 自 v0.1.0 起沿用的决策，编号 D1–D12。每条按背景、决定、后果三段记录，后果同时写正面收益与已知代价。状态写作「已接受（自 vX.Y.Z 起）」，不记具体日期。新的重大取舍按顺序追加编号，已接受的条目不回改。
 
 ## 索引
 
@@ -17,6 +17,7 @@
 | D9 | 现场基准脚本迁移时机：`benchmarks/alohamini_io` 两脚本与配套测试在 v0.4.0 迁入 | 已接受（自 v0.4.0 起） |
 | D10 | 关节限位取值在 `ArmIK.solve()` 入口校验：违规抛 `ValueError`，多余键忽略 | 已接受（自 v0.5.0 起） |
 | D11 | 失败原因分类：解越限报 JOINT_LIMIT，未越限的残差超标报 RESIDUAL | 已接受（自 v0.6.0 起） |
+| D12 | 基准脚本客户端能力探测：缺 `latest_request_timing` 时 rtt 中止并返回退出码 9，采集脚本相关字段记 `null` | 已接受（自 v0.7.0 起） |
 
 ## D1 依赖形态：独立包，lerobot 作为可选 extra
 
@@ -297,3 +298,42 @@ S3 要把旧仓库的 `control/` 与运动学搬进本库。旧代码在 `contro
 已知代价之一（对外行为变更）：一部分失败的 `reason` 从 `JOINT_LIMIT` 变成 `RESIDUAL`，经 `controller.py` 映射后对外错误码从 `ControlError.JOINT_LIMIT` 变成 `ControlError.RESIDUAL`，按错误码分流的调用方需要调整。实测受影响的既有用例 2 条：原 `test_t_ik_4_1_physically_reachable_but_over_synthetic_limits_reports_joint_limit`（已改名为 `..._too_tight_limits_reports_residual`，残差 `0.024745237494851028` > `0.005`、原始未夹紧解仅外溢 `1.78e-15` 度）与 `T-IK-11.1[joint_limit]`（label 改为 `over_tight_limits`）；这两条旧期望值断言的就是本决策要修掉的误标，已按新契约改正并补了自证前提。
 
 已知代价之二：真实 qpmad 在注入限位下几乎不外溢（实测 1e-15 度级），所以端到端用真实求解器已经造不出 `JOINT_LIMIT`；该分类的覆盖现在依赖按对象身份区分两次 `_solve_once` 的假求解器用例（`T-IK-17.11`、`T-IK-19.1`、`T-IK-19.2`）。这是构造性限制，非覆盖遗漏，但 `_solve_once` 若被重构，这组用例会以「前提破了」的形式成片失败。
+
+## D12 基准脚本客户端能力探测：缺 `latest_request_timing` 时 rtt 中止并返回退出码 9，采集脚本相关字段记 `null`
+
+状态：已接受（自 v0.7.0 起）
+
+### 背景
+
+Pi 上跑的 vendor 是 `main` 分支（`ec65318f`）。它的 `AlohaMiniClient` 提供 `latest_host_timing`，不提供 `latest_request_timing`。它也提供 `latest_safety_status`，与 `latest_control_status` 不是同一帧，字段结构不同（`version`、`control_owner`、`host_session_id`、`command_watchdog_timeout_s`）。
+
+两个现场基准脚本此前按属性名直读计时面。在 Pi 上跑 rtt 模式，计时列只能拿到空单元格，而记录「主机计时缺失」的 `host_timing_missing` 仍为 `False`，同一行数据自相矛盾。
+
+### 决定
+
+两个脚本在 `connect()` 返回后探测客户端有没有要用的属性，按探测结果决定继续还是中止，不按假设直读。
+
+`measure_latency.py --mode rtt`：探测点放在 `connect()` 返回之后、`_prime_state_only_window()` 之前。缺 `latest_request_timing` 时打印说明，返回新增的 `EXIT_CLIENT_UNSUPPORTED = 9`，不写 CSV，连表头都不写。放在预热之前是有意的：预热本身会发出一整个窗口的 state-only 请求，跑完再拒绝等于白放一窗请求。
+
+`capture_robot_fingerprint.py`：缺 `latest_request_timing` 时继续采集，把 `age_s`、`sent_monotonic_s`、`received_monotonic_s` 记为 `null`，每次调用只打一行警告并点名缺失的属性；缺 `latest_control_status` 时 `control_status` 记 `null`。
+
+明确排除两种做法。
+
+1. 用 `getattr` 静默回退。rtt CSV 的 `token`、`sent_monotonic_s`、`received_monotonic_s`、`age_s`、`net_rtt_*`（`net_rtt_est_s`、`net_rtt_low_s`、`net_rtt_high_s`）会变成空单元格或 `NaN`，而 `host_timing_missing` 仍为 `False`。跑出来的表看起来是一次正常测量，等于谎报主机计时存在。
+2. 用 `latest_safety_status` 顶替 `latest_control_status`。两者不是同一帧，结构不同（`version`、`control_owner`、`host_session_id`、`command_watchdog_timeout_s`），映射会改变 payload 在同一键下的语义。
+
+依据是证据纪律：缺的数据标缺，不填 0、不填 `NaN`、不装作正常。
+
+### 后果
+
+正面：缺能力在跑之前暴露，不再产出看起来正常、实际没有计时数据的表；capture 的 payload 里 `null` 直接说明这一面缺失，读表的人不必去猜空单元格的含义。
+
+用户可见契约有三处变化：
+
+1. 新增退出码 `9`（`EXIT_CLIENT_UNSUPPORTED`）。在缺 `latest_request_timing` 的客户端上，rtt 模式以 `9` 结束，不产出 CSV。
+2. `capture` 的 payload 在缺面时出现 `null` 字段（`samples[].age_s`、`samples[].sent_monotonic_s`、`samples[].received_monotonic_s` 与 `control_status`）。10 个顶层键与 `PAYLOAD_SCHEMA_VERSION = 1` 不变。
+3. 版本号从 `0.6.0` 升到 `0.7.0`。
+
+已知代价：探测只验属性存在、不验内容。客户端有该属性但值是空的 dict 时，探测放行，两个脚本随后按空值处理。真实路径上 `connect()` 已经填充该属性，这条分支当前不可达，已登记为待办。
+
+相关提交：实现 `c919fef`；探测前移到窗口预热之前 `a0d82b3`；测试 `36445e1`、`1c2d1fd`；措辞修正 `acc6912`。
