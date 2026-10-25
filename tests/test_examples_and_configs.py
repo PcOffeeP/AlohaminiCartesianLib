@@ -11,10 +11,15 @@
   ``overlay.SETTINGS_FIELDS``，取值等于冻结值，且 site 覆盖 template。
 - C：``examples/`` 下任何 ``*.py`` 都不引用 ``lerobot``（本库只有
   ``src/alohamini_cartesian/adapter/protocol.py`` 可以引用它）。
-- D：契约 A 的「0 次发送」不能是靠硬编码打印出来的假绿。源码级要求示例真的断言
-  ``send_action_calls == 0`` 且该计数器在源码里出现至少 3 次（初始化 / 自增 / 断言 + 打印）；
-  行为级要求把示例模块从路径加载后，``_FakeTransport.send_action_calls`` 会随调用自增
-  （0 → 1 → 2），而不是常量，并真的满足 ``RobotTransport`` 协议。
+- D：契约 A 的「0 次发送」不能是靠硬编码打印出来的假绿。源码级用 **AST 级**守卫要求
+  示例里存在一个 ``ast.Assert`` 节点，被测表达式形如 ``<x>.send_action_calls == 0``
+  （注释、docstring、``if False:`` 分支、``or True`` 都不算数），且源码 AST 里
+  ``send_action_calls`` 属性访问至少 4 处（初始化 / 自增 / 断言条件 / 断言消息 / 打印，
+  字符串与注释不参与计数）；行为级要求把示例模块从路径加载后，
+  ``_FakeTransport.send_action_calls`` 会随调用自增（0 → 1 → 2），而不是常量，并真的满足
+  ``RobotTransport`` 协议；再加一条**对示例子进程真实输出取数**的读数断言：会话必须真的
+  读过观测（``循环共读 N 帧观测``，N >= 1）且报告的下发次数确为 ``0``，否则「dry-run
+  不下发」这条根本没被验证到。
 
 全程离线：不连设备、不联网，唯一的外部动作是拉起一个子进程跑示例脚本。读真实配置时
 一律传 ``check_devices=False``（本机没有这些 ``/dev`` 节点），并传 ``env={}`` 让断言不
@@ -23,7 +28,9 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
+import operator
 import re
 import subprocess
 import sys
@@ -253,11 +260,174 @@ def test_examples_do_not_import_lerobot() -> None:
 # 契约 D：防「硬编码 0 次发送」假绿
 # ---------------------------------------------------------------------------
 
-# 示例源码里必须存在的「真断言」形态：``assert <obj>.send_action_calls == 0``。
-SEND_ACTION_ZERO_ASSERT_RE = re.compile(r"assert\s+\w+\.send_action_calls\s*==\s*0")
+# 计数器在 AST 里对应的属性名：``<x>.send_action_calls``。
+SEND_ACTION_COUNTER_ATTR = "send_action_calls"
 
-# 计数器在源码里至少出现这么多次：``__init__`` 初始化、``send_action`` 自增、断言、打印。
-MIN_SEND_ACTION_COUNTER_REFS = 3
+# 该属性在示例源码的 AST 里至少出现这么多处（注释与字符串不参与计数）：
+# ``__init__`` 初始化赋值、``send_action`` 里 ``+=`` 自增、断言条件、断言消息 f-string、
+# 结尾 print。真实现实测 5 处，阈值取 4 留一格余量。
+MIN_SEND_ACTION_COUNTER_AST_REFS = 4
+
+# 行为级读数：从示例子进程的真实 stdout 取数（用正则取数字，不做子串匹配）。
+OBSERVATION_FRAMES_RE = re.compile(r"循环共读 (\d+) 帧观测")
+SEND_ACTION_COUNT_RE = re.compile(r"send_action 调用次数: (\d+) 次发送")
+MIN_OBSERVATION_FRAMES = 1
+EXPECTED_SEND_ACTION_CALLS = 0
+
+# 用于静态判定常量比较（``if 1 == 0:`` 也算死分支）的比较运算表。
+_COMPARE_OPERATORS: dict[type[ast.cmpop], Any] = {
+    ast.Eq: operator.eq,
+    ast.NotEq: operator.ne,
+    ast.Lt: operator.lt,
+    ast.LtE: operator.le,
+    ast.Gt: operator.gt,
+    ast.GtE: operator.ge,
+}
+
+
+def _static_truth(node: ast.AST) -> bool | None:
+    """静态判定一个测试表达式是否恒真 / 恒假，判不出时返回 ``None``。
+
+    只认 ``ast.Constant``、两侧都是常量的简单比较、以及对它们取 ``not``，足以覆盖
+    ``if False:`` / ``if 1 == 0:`` / ``while False:`` 这类死分支。
+
+    Args:
+        node: 测试表达式节点。
+
+    Returns:
+        ``True`` 恒真、``False`` 恒假、``None`` 判不出（按「两支都可能走到」处理）。
+    """
+    if isinstance(node, ast.Constant):
+        return bool(node.value)
+
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        inner = _static_truth(node.operand)
+
+        return None if inner is None else not inner
+
+    if (
+        isinstance(node, ast.Compare)
+        and len(node.ops) == 1
+        and len(node.comparators) == 1
+        and isinstance(node.left, ast.Constant)
+        and isinstance(node.comparators[0], ast.Constant)
+    ):
+        func = _COMPARE_OPERATORS.get(type(node.ops[0]))
+        if func is None:
+            return None
+        try:
+            return bool(func(node.left.value, node.comparators[0].value))
+        except TypeError:
+            return None
+
+    return None
+
+
+def _reachable_children(node: ast.AST) -> list[ast.AST]:
+    """给出一个节点的直接子节点，跳过常量判定下的死分支。
+
+    Args:
+        node: 当前节点。
+
+    Returns:
+        仍可能被执行的直接子节点（含测试表达式本身）。
+    """
+    if isinstance(node, ast.If):
+        truth = _static_truth(node.test)
+        if truth is True:
+            return [node.test, *node.body]
+        if truth is False:
+            return [node.test, *node.orelse]
+
+        return [node.test, *node.body, *node.orelse]
+
+    if isinstance(node, ast.While):
+        truth = _static_truth(node.test)
+        if truth is False:
+            return [node.test, *node.orelse]
+
+        return [node.test, *node.body, *node.orelse]
+
+    return list(ast.iter_child_nodes(node))
+
+
+def _reachable_nodes(tree: ast.AST) -> list[ast.AST]:
+    """展开 AST，只收「在常量意义上可能被执行」的节点。
+
+    死分支（``if False:`` / ``while False:`` / ``if 1 == 0:``）里的语句不会出现在结果里，
+    而注释与 docstring 本来就不是 ``ast.Assert``，因此两种伪写法都骗不过守卫。
+
+    Args:
+        tree: 待展开的 AST 根节点。
+
+    Returns:
+        可达节点列表。
+    """
+    collected: list[ast.AST] = []
+    stack: list[ast.AST] = [tree]
+    while stack:
+        node = stack.pop()
+        collected.append(node)
+        stack.extend(_reachable_children(node))
+
+    return collected
+
+
+def _is_send_action_counter_ref(node: ast.AST) -> bool:
+    """判断节点是否为 ``<x>.send_action_calls`` 这样的属性访问。
+
+    Args:
+        node: 待判定的 AST 节点。
+
+    Returns:
+        是计数器属性访问时为 ``True``。
+    """
+    return isinstance(node, ast.Attribute) and node.attr == SEND_ACTION_COUNTER_ATTR
+
+
+def _is_int_zero_constant(node: ast.AST) -> bool:
+    """判断节点是否为整数常量 ``0``（``False`` 这类 ``bool`` 常量被排除）。
+
+    Args:
+        node: 待判定的 AST 节点。
+
+    Returns:
+        是整数 0 时为 ``True``；``bool`` 恒为 ``False``。
+    """
+    if not isinstance(node, ast.Constant):
+        return False
+    if isinstance(node.value, bool):
+        return False
+
+    return isinstance(node.value, int) and node.value == 0
+
+
+def _is_send_action_zero_assert(node: ast.AST) -> bool:
+    """判断节点是否为 ``assert <x>.send_action_calls == 0`` 形态的真断言。
+
+    形如 ``assert <x>.send_action_calls == 0`` 才算命中：``test`` 是 ``ast.Compare``，
+    ``left`` 是 ``send_action_calls`` 属性访问，``ops`` 含 ``ast.Eq``，比较对象里有整数
+    常量 ``0``。注释与 docstring 里的同款文字根本不会成为 ``ast.Assert``；``if False:``
+    里的断言虽然仍是 ``ast.Assert``，但会被 ``_reachable_nodes`` 的可达性过滤挡掉。
+
+    Args:
+        node: 待判定的 AST 节点。
+
+    Returns:
+        命中该断言形态时为 ``True``。
+    """
+    if not isinstance(node, ast.Assert):
+        return False
+
+    test = node.test
+    if not isinstance(test, ast.Compare):
+        return False
+    if not _is_send_action_counter_ref(test.left):
+        return False
+    if not any(isinstance(op, ast.Eq) for op in test.ops):
+        return False
+
+    return any(_is_int_zero_constant(comparator) for comparator in test.comparators)
 
 
 @pytest.fixture(scope="module")
@@ -276,24 +446,36 @@ def example_module() -> ModuleType:
     assert loader is not None, f"示例脚本的模块 spec 没有 loader: {EXAMPLE_PATH}"
 
     module = importlib.util.module_from_spec(spec)
-    loader.exec_module(module)
+    # 加载即执行模块级代码，会往 examples/ 下写 __pycache__；临时关掉字节码落盘。
+    previous_dont_write_bytecode = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = previous_dont_write_bytecode
 
     return module
 
 
 def test_example_source_asserts_real_send_action_counter() -> None:
-    """契约 D：示例源码里必须存在 ``assert <obj>.send_action_calls == 0``，不能只打印字面量。"""
-    source = EXAMPLE_PATH.read_text(encoding="utf-8")
-
-    assert SEND_ACTION_ZERO_ASSERT_RE.search(source), (
-        "示例必须断言 send_action_calls == 0，不能只打印字面量「0 次发送」；"
-        f"未在 {EXAMPLE_PATH} 中找到形如 `assert <obj>.send_action_calls == 0` 的语句"
+    """契约 D：示例源码的可达 AST 里必须有 ``assert <obj>.send_action_calls == 0``。"""
+    nodes = _reachable_nodes(
+        ast.parse(EXAMPLE_PATH.read_text(encoding="utf-8"), filename=str(EXAMPLE_PATH))
     )
 
-    counter_refs = source.count("send_action_calls")
-    assert counter_refs >= MIN_SEND_ACTION_COUNTER_REFS, (
-        f"示例源码中 send_action_calls 只出现 {counter_refs} 次，少于要求的"
-        f" {MIN_SEND_ACTION_COUNTER_REFS} 次（初始化 / 自增 / 断言 + 打印）：{EXAMPLE_PATH}"
+    assert any(_is_send_action_zero_assert(node) for node in nodes), (
+        "示例必须真的断言 send_action_calls == 0（AST 级检查），不能只打印字面量「0 次发送」；"
+        "注释、docstring、if False: 死分支里的同款文字都不算数。"
+        f"请在 {EXAMPLE_PATH} 里保留形如 `assert transport.send_action_calls == 0` 的语句"
+        "（`hits = t.send_action_calls; assert hits == 0`、`assert 0 == t.send_action_calls`、"
+        "`assert not t.send_action_calls` 都不被接受）"
+    )
+
+    counter_refs = sum(1 for node in nodes if _is_send_action_counter_ref(node))
+    assert counter_refs >= MIN_SEND_ACTION_COUNTER_AST_REFS, (
+        f"示例源码的可达 AST 里 send_action_calls 属性访问只有 {counter_refs} 处，少于要求的"
+        f" {MIN_SEND_ACTION_COUNTER_AST_REFS} 处（__init__ 初始化 / send_action 自增 /"
+        f" 断言条件 / 断言消息 / 结尾打印；注释、字符串与死分支不参与计数）：{EXAMPLE_PATH}"
     )
 
 
@@ -328,4 +510,32 @@ def test_example_fake_transport_counter_increments_per_send(example_module: Modu
     transport.prime_observation_request_window(include_cameras=False)
     assert transport.prime_calls == 1, (
         "prime_observation_request_window 调用一次后 prime_calls 应为 1"
+    )
+
+
+def test_example_run_output_shows_real_session_reads_observations(
+    example_run: subprocess.CompletedProcess[str],
+) -> None:
+    """契约 D：示例输出的读数来自真实会话——至少读过 1 帧观测，且下发次数确为 0。"""
+    assert example_run.returncode == 0, f"示例脚本退出码非 0\n{_describe(example_run)}"
+
+    frames_match = OBSERVATION_FRAMES_RE.search(example_run.stdout)
+    assert frames_match is not None, (
+        "stdout 里找不到「循环共读 N 帧观测」；会话必须真的读写过观测，"
+        f"否则 dry-run 门禁未被验证\n{_describe(example_run)}"
+    )
+    frames = int(frames_match.group(1))
+    assert frames >= MIN_OBSERVATION_FRAMES, (
+        f"会话只读了 {frames} 帧观测（要求 >= {MIN_OBSERVATION_FRAMES}）：说明注入给会话的"
+        " transport 与结尾被断言的不是同一个实例，dry-run 门禁根本没被验证到"
+        f"\n{_describe(example_run)}"
+    )
+
+    sends_match = SEND_ACTION_COUNT_RE.search(example_run.stdout)
+    assert sends_match is not None, (
+        f"stdout 里找不到「send_action 调用次数: N 次发送」\n{_describe(example_run)}"
+    )
+    assert int(sends_match.group(1)) == EXPECTED_SEND_ACTION_CALLS, (
+        f"示例报告的 send_action 调用次数是 {sends_match.group(1)}，"
+        f"要求 {EXPECTED_SEND_ACTION_CALLS}\n{_describe(example_run)}"
     )
