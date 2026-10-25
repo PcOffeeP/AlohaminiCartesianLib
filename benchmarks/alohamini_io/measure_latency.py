@@ -2166,11 +2166,16 @@ def main(
 
     # rtt mode reads ``latest_request_timing`` on every sampled frame, so a client
     # that does not publish it cannot be measured at all: name the missing face
-    # and refuse here, ahead of ``_prime_state_only_window`` -- that prime sends
-    # this harness's first state-only request, so probing after it would make the
-    # refusal cost traffic and break the "before any request" claim.  Explicitly,
-    # never as a defaulted ``None`` -- empty timing cells would read like a
-    # measurement of zero.
+    # and refuse here, ahead of ``_prime_state_only_window``.  The ordering is the
+    # point: the refusal stops before this harness's own first state-only request,
+    # which is what the exit code 9 docstring says ("before the state-only window
+    # prime sends its first request").  This is not a general traffic argument:
+    # ``_prime_state_only_window`` getattr-misses on a client without
+    # ``prime_observation_request_window`` -- the deployed vendor ``main`` -- and
+    # returns, so for that client the prime sends nothing at all; only a client
+    # that implements the prime would pay traffic for being probed after it.
+    # Missing faces are named explicitly, never as a defaulted ``None`` -- empty
+    # timing cells would read like a measurement of zero.
     if args.mode == "rtt":
         missing = missing_client_capabilities(client)
         if missing:
