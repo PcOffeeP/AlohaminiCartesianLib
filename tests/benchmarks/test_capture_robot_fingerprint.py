@@ -636,3 +636,216 @@ def test_parse_args_should_reject_a_non_positive_sample_count(fingerprint, argv:
         fingerprint.parse_args(["--host", "127.0.0.1", *argv])
 
     assert excinfo.value.code == 2
+
+
+# ===========================================================================
+# Round 4: the client capability probe (a vendor without the timing faces)
+# ===========================================================================
+#
+# The deployed vendor client (``AlohaMiniClient`` on ``main``) has neither
+# ``latest_request_timing`` nor ``latest_control_status``; it publishes
+# ``latest_safety_status``, a semantically and structurally different dict.  The
+# capture read both faces directly, so on that client it died with
+# ``AttributeError`` mid-capture.
+#
+# Ruling: probe the capabilities explicitly and record an **explicit ``None``**
+# for what the client cannot measure.  Never fall back — not to a made-up empty
+# timing dict (which would print ``age_ms`` 0.000), not to
+# ``latest_safety_status`` (a different frame under a different name).  The
+# payload keeps its ten top-level keys and ``PAYLOAD_SCHEMA_VERSION == 1``, and
+# the exit-code semantics (0 / 3 / 4 / 5 / 6) do not move.
+
+
+class _ClientWithoutTimingFaces(_FakeClient):
+    """The vendor client as it ships today: neither timing face exists.
+
+    ``_FakeClient`` sets both attributes in ``__init__`` and re-creates the
+    request timing on every ``get_observation``, which is exactly what hid the
+    gap.  This subclass removes them the way the deployed client never has them.
+
+    ``latest_safety_status`` is present on purpose: that is the attribute the
+    deployed client *does* publish, and it is a different frame (settle/valid
+    flags), so it must never be substituted for ``latest_control_status``.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        del self.latest_request_timing
+        del self.latest_control_status
+        self.latest_safety_status: dict = {
+            "schema_version": 1,
+            "host_session_id": "safety-session",
+            "sample_sequence": 7,
+            "settled": True,
+            "valid": True,
+        }
+
+    def get_observation(self, include_cameras: bool = True) -> dict:
+        state = super().get_observation(include_cameras=include_cameras)
+        # ``_FakeClient.get_observation`` re-creates the request timing dict.
+        del self.latest_request_timing
+        return state
+
+
+# The frozen payload surface: ten top-level keys, no new one for a missing face.
+_PAYLOAD_TOP_LEVEL_KEYS = frozenset(
+    {
+        "schema_version",
+        "captured_utc",
+        "host",
+        "requested_robot_model",
+        "read_only",
+        "sample_count",
+        "samples",
+        "robot_metadata",
+        "control_status",
+        "observation_state",
+    }
+)
+
+
+def test_client_capabilities_should_declare_both_timing_faces(fingerprint) -> None:
+    """R1: the probe names both faces, request timing first."""
+    assert fingerprint.CLIENT_CAPABILITIES == (
+        "latest_request_timing",
+        "latest_control_status",
+    )
+
+
+def test_missing_client_capabilities_should_be_empty_when_both_faces_exist(
+    fingerprint,
+) -> None:
+    """R2: a client that publishes both faces is complete."""
+    client = _FakeClient()
+
+    assert fingerprint.missing_client_capabilities(client) == []
+
+
+def test_missing_client_capabilities_should_name_only_the_absent_face(fingerprint) -> None:
+    """R3: one absent face is reported alone, not as "everything is missing"."""
+    client = _FakeClient()
+    del client.latest_control_status
+
+    assert fingerprint.missing_client_capabilities(client) == ["latest_control_status"]
+
+
+def test_missing_client_capabilities_should_list_both_faces_in_capability_order(
+    fingerprint,
+) -> None:
+    """R4: the vendor client misses both, reported in ``CLIENT_CAPABILITIES`` order."""
+    client = _ClientWithoutTimingFaces()
+
+    assert fingerprint.missing_client_capabilities(client) == [
+        "latest_request_timing",
+        "latest_control_status",
+    ]
+
+
+def test_main_should_record_null_timings_when_both_faces_are_absent(
+    fingerprint, tmp_path, capsys
+) -> None:
+    """R5: a capture from the vendor client succeeds with explicit ``None`` rows.
+
+    No exception, exit ``0``, exactly one warning on stderr naming the attribute,
+    and every value the client cannot measure stored as ``None`` — a JSON
+    ``null``, which is visibly "not measured" instead of a plausible ``0``.
+
+    "Exactly one" is the contract, not "at least one": a warning printed once per
+    sample turns stderr into noise the operator learns to scroll past.
+    """
+    client = _ClientWithoutTimingFaces(sequences=[1, 2, 3])
+    out = tmp_path / "fingerprint.json"
+
+    code = fingerprint.main(
+        ["--host", "127.0.0.1", "--out", str(out), "--samples", "3", "--timeout-s", "5"],
+        client_factory=_Factory(client),
+    )
+    captured = capsys.readouterr()
+
+    assert code == fingerprint.EXIT_OK == 0, (
+        f"a capture without the timing faces must still succeed, got {code}: {captured.err!r}"
+    )
+    assert "latest_request_timing" in captured.err, (
+        f"stderr does not warn about the missing attribute: {captured.err!r}"
+    )
+    warning_count = captured.err.count("latest_request_timing")
+    assert warning_count == 1, (
+        "the missing-attribute warning must be emitted once per capture, not once per "
+        f"sample; stderr named it {warning_count} time(s): {captured.err!r}"
+    )
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert len(payload["samples"]) == 3
+    for sample in payload["samples"]:
+        assert sample["age_s"] is None, f"age_s was invented: {sample}"
+        assert sample["sent_monotonic_s"] is None, f"sent stamp was invented: {sample}"
+        assert sample["received_monotonic_s"] is None, f"received stamp was invented: {sample}"
+    assert payload["control_status"] is None, (
+        "control_status was invented instead of recorded as unknown "
+        f"(latest_safety_status must not stand in for it): {payload['control_status']!r}"
+    )
+
+
+def test_main_should_keep_the_payload_surface_when_both_faces_are_absent(
+    fingerprint, tmp_path
+) -> None:
+    """R6: the ten top-level keys and ``schema_version == 1`` do not move.
+
+    A missing capability must not change the format of the fingerprint: a
+    consumer that reads the payload of a supported client reads this one too.
+    """
+    client = _ClientWithoutTimingFaces(sequences=[1, 2, 3])
+    out = tmp_path / "fingerprint.json"
+
+    code = fingerprint.main(
+        ["--host", "127.0.0.1", "--out", str(out), "--samples", "3", "--timeout-s", "5"],
+        client_factory=_Factory(client),
+    )
+
+    assert code == fingerprint.EXIT_OK
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert set(payload) == _PAYLOAD_TOP_LEVEL_KEYS, (
+        f"payload keys changed: extra={sorted(set(payload) - _PAYLOAD_TOP_LEVEL_KEYS)} "
+        f"missing={sorted(_PAYLOAD_TOP_LEVEL_KEYS - set(payload))}"
+    )
+    assert payload["schema_version"] == fingerprint.PAYLOAD_SCHEMA_VERSION == 1
+    assert payload["robot_metadata"] == _fake_metadata()
+
+
+def test_main_should_still_refuse_invalid_metadata_without_the_timing_faces(
+    fingerprint, tmp_path, capsys
+) -> None:
+    """R7: the exit-code semantics do not depend on the capability probe."""
+    client = _ClientWithoutTimingFaces(sequences=[1, 2, 3])
+    client.latest_robot_metadata = {}
+    out = tmp_path / "fingerprint.json"
+
+    code = fingerprint.main(
+        ["--host", "127.0.0.1", "--out", str(out), "--samples", "3", "--timeout-s", "5"],
+        client_factory=_Factory(client),
+    )
+    captured = capsys.readouterr()
+
+    assert code == fingerprint.EXIT_INVALID_METADATA == 6
+    assert "metadata" in captured.err.lower()
+    assert not out.exists()
+
+
+def test_main_should_keep_the_measured_timings_when_both_faces_exist(fingerprint, tmp_path) -> None:
+    """R8: the supported path is unchanged — numbers in, numbers out."""
+    status = _fake_control_status()
+    client = _FakeClient(sequences=[1, 2, 3], ages=[0.010, 0.020, 0.030])
+    client.latest_control_status = status
+    out = tmp_path / "fingerprint.json"
+
+    code = fingerprint.main(
+        ["--host", "127.0.0.1", "--out", str(out), "--samples", "3", "--timeout-s", "5"],
+        client_factory=_Factory(client),
+    )
+
+    assert code == fingerprint.EXIT_OK
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert [sample["age_s"] for sample in payload["samples"]] == pytest.approx(
+        [0.010, 0.020, 0.030]
+    )
+    assert all(sample["sent_monotonic_s"] is not None for sample in payload["samples"])
+    assert payload["control_status"] == status

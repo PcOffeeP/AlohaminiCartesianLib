@@ -3363,3 +3363,168 @@ def test_tracking_banner_should_stay_quiet_when_the_tolerance_allows_the_crossin
     assert "settle tolerance" in lowered, (
         f"the hint no longer quotes the tolerance: {printed.out!r}"
     )
+
+
+# ===========================================================================
+# R. Client capability probe: a vendor without per-request timing is refused
+# ===========================================================================
+#
+# Round 7.  The deployed vendor client (``AlohaMiniClient`` on ``main``) has no
+# ``latest_request_timing`` — only a semantic and structural neighbour,
+# ``latest_safety_status``.  The rtt branch below read the timings face
+# directly, so on that client the measurement died with ``AttributeError`` at
+# the first sampled frame instead of saying what was wrong.
+#
+# Ruling of this round: probe the capability **explicitly**, before the sampling
+# loop, and abort with ``EXIT_CLIENT_UNSUPPORTED == 9`` when it is absent.
+# ``getattr(client, ..., None)`` is forbidden here: a silent ``None`` would turn
+# every timing cell into an empty/``NaN`` value and the CSV would look like a
+# measurement.  A refusal is the only honest answer.
+
+
+class _ClientWithoutRequestTiming(_FakeClient):
+    """The vendor client as it ships today: ``latest_request_timing`` is absent.
+
+    ``_FakeClient`` publishes the timing dict in ``__init__`` *and* on every
+    ``get_observation``, which is exactly what hid the gap — the attribute always
+    existed.  This subclass removes it on both paths, so ``hasattr`` answers the
+    way it does on the deployed client.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        del self.latest_request_timing
+
+    def get_observation(self, include_cameras: bool = True) -> dict:
+        state = super().get_observation(include_cameras=include_cameras)
+        # ``_FakeClient.get_observation`` re-creates the attribute; a client that
+        # never publishes per-request timing does not.
+        del self.latest_request_timing
+        return state
+
+
+def test_client_capabilities_should_declare_only_the_request_timing_face(latency) -> None:
+    """R1: rtt mode needs exactly one timing face, and says so in one place."""
+    assert latency.CLIENT_CAPABILITIES == ("latest_request_timing",)
+
+
+def test_missing_client_capabilities_should_be_empty_when_the_face_exists(latency) -> None:
+    """R2: a client that publishes per-request timing is complete."""
+    client = _FakeClient()
+
+    assert latency.missing_client_capabilities(client) == []
+
+
+def test_missing_client_capabilities_should_name_the_absent_face(latency) -> None:
+    """R3: the vendor client is reported by name, so the message can name it."""
+    client = _ClientWithoutRequestTiming()
+
+    assert latency.missing_client_capabilities(client) == ["latest_request_timing"]
+
+
+def test_missing_client_capabilities_should_follow_the_requested_name_order(latency) -> None:
+    """R4: the result follows ``names``, not alphabetical or set order.
+
+    ``latest_control_status`` sorts *before* ``latest_request_timing``, so a
+    sorted or set-derived result would come back reversed here.
+    """
+    client = _ClientWithoutRequestTiming()
+    del client.latest_control_status
+
+    missing = latency.missing_client_capabilities(
+        client, names=("latest_request_timing", "latest_control_status")
+    )
+
+    assert missing == ["latest_request_timing", "latest_control_status"]
+
+
+def test_module_constants_should_include_client_unsupported(latency) -> None:
+    """R5: an unsupported client is its own exit code, not a connect failure."""
+    assert getattr(latency, "EXIT_CLIENT_UNSUPPORTED", None) == 9
+
+
+def test_main_should_refuse_rtt_before_sampling_when_the_face_is_absent(
+    latency, tmp_path, capsys
+) -> None:
+    """R6: no timing face → exit 9, the attribute named on stderr, and no CSV.
+
+    The refusal happens *before* the sampling loop (zero observations) and writes
+    nothing at all, not even a header: a CSV with empty timing columns reads like
+    a measurement, which is the failure mode this round locks out.
+
+    The refused run still owns the socket it opened, so it must hand it back: a
+    refusal that returns without ``disconnect()`` leaks the connection for the
+    rest of the process.
+    """
+    client = _ClientWithoutRequestTiming()
+    out = tmp_path / "x.csv"
+
+    code = latency.main(
+        [
+            "--host",
+            "127.0.0.1",
+            "--mode",
+            "rtt",
+            "--samples",
+            "5",
+            "--csv",
+            str(out),
+        ],
+        client_factory=_Factory(client),
+    )
+    captured = capsys.readouterr()
+
+    assert code == 9, f"a client without per-request timing must exit 9, got {code}"
+    assert "latest_request_timing" in captured.err, (
+        f"stderr does not name the missing attribute: {captured.err!r}"
+    )
+    assert "vendor" in captured.err.lower(), (
+        f"stderr does not say the vendor client is the cause: {captured.err!r}"
+    )
+    assert client.get_observation_calls == 0, (
+        f"the probe sampled {client.get_observation_calls} frame(s) before refusing"
+    )
+    assert not out.exists(), f"a refused run wrote {out}"
+    assert client.is_connected is False, (
+        "the exit 9 refusal returned without closing the client it had connected"
+    )
+
+
+def test_main_should_still_write_the_full_rtt_csv_when_the_face_exists(latency, tmp_path) -> None:
+    """R7: the supported path is unchanged — 18 columns, every key cell filled."""
+    client = _FakeClient(ages=[0.030, 0.031, 0.032])
+    out = tmp_path / "rtt.csv"
+
+    code = latency.main(
+        [
+            "--host",
+            "127.0.0.1",
+            "--mode",
+            "rtt",
+            "--samples",
+            "3",
+            "--rate-hz",
+            "200",
+            "--csv",
+            str(out),
+        ],
+        client_factory=_Factory(client),
+    )
+
+    assert code == latency.EXIT_OK
+    assert out.is_file()
+    with out.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        fieldnames = reader.fieldnames or []
+        rows = list(reader)
+    assert len(fieldnames) == 18, f"the rtt header changed shape: {fieldnames}"
+    assert len(rows) == 3
+    for row in rows:
+        for field in (
+            "token",
+            "sent_monotonic_s",
+            "received_monotonic_s",
+            "age_s",
+            "net_rtt_est_s",
+        ):
+            assert row[field] != "", f"row {row['sample_index']} has an empty {field}: {row}"
