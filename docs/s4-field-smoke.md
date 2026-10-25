@@ -2,7 +2,7 @@
 
 这份文档给一次现场窗口的执行顺序、每条命令、每步判据与产物。到现场后由 Agent 通过 SSH 连上 Pi，照着本文档逐条取数与执行，不因缺信息临时决策。
 
-**本手册的 Pi 侧命令从未实际执行过。** 本次修订时本机无法连接 Pi，所有 `ssh "$PI" '…'` 形式的命令均未实测。首次现场执行时如有偏差，按实际输出修正并回写到本文档。
+本手册的 Pi 侧命令在 2026-10-25 对 `pi5@10.34.170.98` 执行过一轮（第 2、4、8 节的部分条目，每步在 `$S4DIR/stdout/` 下留有成组的 `.cmd`/`.log`/`.exit`）；其余条目仍未实测。首次在现场执行未实测条目时如有偏差，按实际输出修正并回写到本文档。
 
 ## 0 这份文档怎么用
 
@@ -56,15 +56,18 @@ Gate F 第①条的判断式在 `benchmarks/alohamini_io/measure_latency.py`，�
 
 判断顺序分两层：先用 SSH 读 Pi 上的 vendor 代码做预判，再决定本窗口做哪几个阶段；最终判据仍是 `capture` 的实测结果。
 
+**已实测记录（2026-10-25，Pi `10.34.170.98`）**：vendor 仓库 `/home/pi5/lerobot_alohamini` 提交 `ec65318f`，`src/lerobot/robots/alohamini/alohamini_host.py` 第 129 行为 `"schema_version": 1,`。即 **P0 未通过，且是源码级的 1**，不是「代码 2、运行时 1」的组合。该 Pi 的 git 工作区另有 6 个未提交改动（`docs/alohamini/commands.md`、`examples/alohamini/{calibrate_bi,record_bi,teleoperate_bi}.py`、`src/lerobot/robots/alohamini/config_alohamini.py`、`tests/robots/test_alohamini_ros_compat.py`），未清理、未触碰。第 8 节三个配置字段的源码默认值取自这份工作区文件。
+
 下面两条命令用到第 3 节定义的 `PI` 与 `run`。先执行第 3 节的变量块与函数定义，再回到这里。
 
 ```bash
 run 0.2-pi-commit ssh "$PI" 'git -C /home/pi5/lerobot_alohamini rev-parse HEAD'
-run 0.3-pi-schema ssh "$PI" 'grep -n "\"schema_version\"" /home/pi5/lerobot_alohamini/src/lerobot/robots/alohamini/alohamini_host.py | head -5'
+run 0.3-pi-schema ssh "$PI" 'grep -n "schema_version" ~/lerobot_alohamini/src/lerobot/robots/alohamini/alohamini_host.py'
 ```
 
 判断规则：
 
+- 只认 `build_robot_metadata` 函数体里的那一行。`camera_stream.py` 的 `CAMERA_STREAM_SCHEMA_VERSION` 是摄像头的另一套版本号，不要拿它判断 P0。按目录 grep 会把这个常量一起捞出来（实测多一行 `camera_stream.py:74: "schema_version": CAMERA_STREAM_SCHEMA_VERSION,`），所以 `0.3` 只查单文件。
 - `0.3` 的输出里，`build_robot_metadata` 那段是 `"schema_version": 2,` → P0 视为可通过，继续做阶段 1 与阶段 3。
 - `0.3` 读到 `1` → P0 不通过，按下面「P0 未解决」分支执行。本窗口只做阶段 0、阶段 1 的 1.2 与 1.3、阶段 2 的 v1 路径、阶段 4。
 - 这两条只是**读代码**，不等于运行时真的广播 `2`。代码硬编码 `2` 而运行时广播 `1` 的组合在原理上存在（Pi 上的 Host 可能从别的路径启动、或用的是更旧的镜像）。最终仍以阶段 1.1 的 `capture` exit 0 与 JSON 里 `robot_metadata.schema_version` 的值为准。
@@ -75,6 +78,16 @@ run 0.4-pi-ls ssh "$PI" 'ls /home/pi5/lerobot_alohamini/src/lerobot/robots/aloha
 ```
 
 路径不符时按实际路径调整 `0.3` 后重跑，把实际路径与该次输出记进 `$S4DIR/stdout/`（`run` 已自动留下 `.cmd`、`.log`、`.exit`）。
+
+要看 `0.3` 命中行前后的上下文时，先定位再取，不要写死区间：
+
+```bash
+run 0.3b-schema-context ssh "$PI" 'f=~/lerobot_alohamini/src/lerobot/robots/alohamini/alohamini_host.py; n=$(grep -n "\"schema_version\"" "$f" | head -1 | cut -d: -f1); sed -n "$((n-25)),$((n+15))p" "$f"'
+```
+
+厂商文件行号随提交变化，一律以 grep 命中的行号为准，不要记死行号。2026-10-25 实测：`build_robot_metadata` 在约 111 行，`"schema_version"` 在 129 行；按固定区间 `sed -n "160,200p"` 取到的是 `main()` 的 argparse，不是这个函数。
+
+本小节产物：`$S4DIR/stdout/` 下的 `0.2-pi-commit-*`、`0.3-pi-schema-*`、`0.3b-schema-context-*`、`0.4-pi-ls-*`。
 
 **本机无法预先确认，只能到现场实测。** `robot_metadata.schema_version` 由 Pi 上的 Host 进程广播，取值取决于 Pi 上的 vendor 代码，要 SSH 连到 Pi 才看得到；本机（未连 Pi）做不到。
 
@@ -154,7 +167,7 @@ run() {
 run 1.1-capture uv run --no-sync python benchmarks/alohamini_io/capture_robot_fingerprint.py --host "$PI_HOST" --out "$S4DIR/capture/fingerprint-$STAMP.json"
 
 # Pi 侧命令
-run 0.5-host-procs ssh "$PI" 'pgrep -af "alohamini|lerobot"'
+run 0.5-host-procs ssh "$PI" 'pgrep -af "alohamini_host|lerobot"'
 
 # 失败用例：验证留痕链路本身
 run 0.9-probe false
@@ -219,12 +232,22 @@ run 0.1-ping ping -c 3 "$PI_HOST"
 2. Host 进程在跑，记下 PID：
 
 ```bash
-run 0.5-host-procs ssh "$PI" 'pgrep -af "alohamini|lerobot"'
+run 0.5-host-procs ssh "$PI" 'pgrep -af "alohamini_host|lerobot"'
 ```
 
 判据：`.log` 里至少一行，行首有 PID。没有输出说明 Host 没起，先起 Host 再往下。
 
-3. 5555 与 5556 在听：
+`pgrep` 默认按扩展正则解释，`|` 直接写，不要转义。写成 `\|` 时 ERE 把反斜杠加竖线当字面量，有进程也可能匹配不到。
+
+3. 工具存在性自证（放在 `0.6` 之前跑）：
+
+```bash
+run 0.4b-tools ssh "$PI" 'command -v ss netstat; echo "---"; ss -ltn | head -20'
+```
+
+这一条只回答一个问题：`ss` / `netstat` 在不在。`command -v` 打出路径即存在；`ss -ltn` 那一段不管有没有端口，都能看出工具本身能不能跑。
+
+4. 5555 与 5556 在听：
 
 ```bash
 run 0.6-ports ssh "$PI" 'ss -ltnp | grep -E ":5555|:5556"'
@@ -238,7 +261,9 @@ run 0.6b-ports-netstat ssh "$PI" 'netstat -ltnp | grep -E ":5555|:5556"'
 
 判据：两个端口各至少一行 `LISTEN`。
 
-4. Pi 地址核对（IP 变更时用）：
+`0.6` 空输出有两种可能：工具缺失，或没有监听。`0.4b-tools` 用来区分这两种。**空输出本身不构成「Host 未运行」的证明**，要结合 `0.5` 的进程检查一起判。2026-10-25 实测：`ss` 与 `netstat` 在 Pi 上都存在（`/usr/bin/ss`、`/usr/bin/netstat`），`0.6` 两条输出为空是因为确实没有 LISTEN 的 5555/5556。该结论来自 2026-10-25 的独立复核（`command -v` 与 `ss -ltn`），不是通过 `0.4b-tools` 步骤本身取得——`0.4b` 是为后续现场补的规范化步骤。
+
+5. Pi 地址核对（IP 变更时用）：
 
 ```bash
 run 0.10-pi-ip ssh "$PI" 'hostname -I'
@@ -246,7 +271,7 @@ run 0.10-pi-ip ssh "$PI" 'hostname -I'
 
 这一条需要先能连上。连不上时依次试 mDNS 名 `pi5.local`（命令见第 3 节）、问现场要地址、在路由器管理页查 DHCP 列表。
 
-5. 两个脚本的参数能解析：
+6. 两个脚本的参数能解析：
 
 ```bash
 run 0.7-capture-help uv run --no-sync python benchmarks/alohamini_io/capture_robot_fingerprint.py --help
@@ -266,7 +291,7 @@ run 0.8-measure-help uv run --no-sync python benchmarks/alohamini_io/measure_lat
 
 `--host` 一律写 `"$PI_HOST"`。上一次现场记录的地址是 `10.34.170.98`（来源 `field-run-summary.md` 第 1 行「远端」）。本次先用 `0.1-ping` 确认可达，再用 `0.10-pi-ip` 的输出确认这个地址就是这台 Pi，然后往下做。
 
-本阶段产物：`$S4DIR/stdout/` 下的 `0.1-ping-*`、`0.5-host-procs-*`、`0.6-ports-*`（或 `0.6b-ports-netstat-*`）、`0.7-capture-help-*`、`0.8-measure-help-*`、`0.10-pi-ip-*`。
+本阶段产物：`$S4DIR/stdout/` 下的 `0.1-ping-*`、`0.5-host-procs-*`、`0.4b-tools-*`、`0.6-ports-*`（或 `0.6b-ports-netstat-*`）、`0.7-capture-help-*`、`0.8-measure-help-*`、`0.10-pi-ip-*`。
 
 ## 5 阶段 1：零运动测量与指纹（不动机器人）
 
@@ -329,6 +354,8 @@ run 1.3-rtt-deploy uv run --no-sync python benchmarks/alohamini_io/measure_laten
 
 现场最容易把顶层那个 `1` 当成失败原因。脚本只校验 `robot_metadata.schema_version == 2` 与 `motors` 非空映射，不校验每个电机的 8 个字段是否齐全。8 字段是 `id`、`model`、`normalization`、`drive_mode`、`range_min`、`range_max`、`homing_offset`、`resolution`，齐不齐由宿主决定，现场逐电机记录实际覆盖情况。
 
+实测（2026-10-25，Pi 提交 `ec65318f`）：`build_robot_metadata` 给每个电机只写 6 个键——`id`、`model`、`normalization`、`drive_mode`、`range_min`、`range_max`，**没有 `homing_offset`，也没有 `resolution`**。`robot_metadata` 顶层是 `schema_version`、`robot_model`、`motors`、`cameras` 四项。文档其它地方提到的「8 个字段」是代码里 `validate_metadata` 认识的完整字段集，不是 Pi 当前实际发出的字段集。
+
 ## 6 阶段 2：制造一次代码 Gate F 的真实拒绝记录
 
 **互斥声明**：阶段 2 依赖宿主仍是 v1，才用版本判断触发 Gate F 的第一段；阶段 3 要求宿主为 v2，Gate F 的第一段才过得去。同一窗口只能做其中一个，按第 2 节 P0 的判断二选一。
@@ -371,7 +398,7 @@ meta = json.loads(paths[-1].read_text())["robot_metadata"]
 motors = meta.get("motors") or {}
 print(f"motors: {len(motors)}")
 for name, fields in sorted(motors.items()):
-    missing = [k for k in ("normalization", "range_min", "range_max", "resolution")
+    missing = [k for k in ("normalization", "drive_mode", "range_min", "range_max", "homing_offset", "resolution")
                if fields.get(k) is None]
     bad = []
     try:
@@ -389,7 +416,9 @@ PY
 判断规则：
 
 - 只有当某个电机的 `missing` 或 `bad` 非空时，它对应的关节才会在 Gate F 第二段被拒。
-- 若全部电机都齐全，本窗口触发不了 F 的第二段。此时只记录「v2 宿主下 Gate F 未触发」这一事实，理由写进 `TODO.md` 与 `$S4DIR/stdout/`（`2.1-probe-*` 已在盘上）。**不要为了造记录去改标定文件或伪造数据。**
+- 在**当前 Pi 的 vendor 版本**上，即便把 `schema_version` 改成 2，`2.1-probe` 的输出也会是每个电机 `missing=['homing_offset','resolution']`（按实际键名判断）。Gate F 的第二段因此对所有关节都成立，也就是说**这条备用路径在该机上是可达的**，不是纸面路径。实测依据：Pi 的 `build_robot_metadata` 给每个电机只写 6 个键（`id`、`model`、`normalization`、`drive_mode`、`range_min`、`range_max`），没有 `homing_offset`，也没有 `resolution`；`robot_metadata` 顶层是 `schema_version`、`robot_model`、`motors`、`cameras` 四项。
+- 记录证据时必须写明命中的是哪一段。两种拒绝要分开：`schema_version` 不是 2 → Gate F 第一段拒绝；换算字段不全 → Gate F 第二段拒绝。
+- 若全部电机都齐全（其他厂商版本可能如此），本窗口触发不了 F 的第二段。此时只记录「v2 宿主下 Gate F 未触发」这一事实，理由写进 `TODO.md` 与 `$S4DIR/stdout/`（`2.1-probe-*` 已在盘上）。**不要为了造记录去改标定文件或伪造数据。**
 - 电机名到关节观测键（如 `arm_left_shoulder_pan.pos`）的对应关系本文未核实。现场用该电机的名字加 `--joint` 试一次，命令骨架如下，`--joint` 的取值按 `2.1` 输出里 `missing` 或 `bad` 非空的电机名改：
 
 ```bash
@@ -478,45 +507,98 @@ max_loop_freq_hz: 50
 
 ### 现场取值：三个数值字段用命令取
 
-`observation_request_window`、`watchdog_timeout_ms`、`max_loop_freq_hz` 三个字段的取值在 Pi 上，三条命令都在 Pi 侧跑：
+`observation_request_window`、`watchdog_timeout_ms`、`max_loop_freq_hz` 三个字段的取值在 Pi 上，下面五条命令都在 Pi 侧跑：
 
 ```bash
 run 4.1-host-args ssh "$PI" 'pgrep -af alohamini'
-run 4.2-host-cmdline ssh "$PI" 'pid=$(pgrep -f alohamini | head -1); tr "\0" " " < /proc/$pid/cmdline; echo'
-run 4.3-host-config ssh "$PI" 'grep -rnE "observation_request_window|watchdog_timeout_ms|max_loop_freq_hz" /home/pi5/lerobot_alohamini/src/lerobot/robots/alohamini/ | head -20'
+run 4.2-host-cmdline ssh "$PI" 'pid=$(pgrep -f alohamini_host.py | head -1); echo "pid=$pid"; [ -n "$pid" ] && ps -o pid,cmd -p "$pid" && tr "\0" " " < /proc/$pid/cmdline; echo'
+run 4.3-host-config ssh "$PI" 'grep -rnE --include="*.py" --exclude-dir=__pycache__ "observation_request_window|watchdog_timeout_ms|max_loop_freq_hz" ~/lerobot_alohamini/src/lerobot/robots/alohamini/ | head -20'
+run 4.3b-config-args ssh "$PI" 'grep -n "add_argument" ~/lerobot_alohamini/src/lerobot/robots/alohamini/alohamini_host.py'
+run 4.3c-config-classes ssh "$PI" 'sed -n "95,145p" ~/lerobot_alohamini/src/lerobot/robots/alohamini/config_alohamini.py'
 ```
+
+`4.2` 的两条配套判断规则：
+
+- `ps -o cmd` 的输出里必须出现 `python`，否则说明 Host 未运行、取到的是别的东西。此时该项记为「未取到」，不要当作实际启动参数。
+- 不要用 `pgrep -f alohamini`：2026-10-25 实测它会匹配到 ssh 远端那条 `bash -c …` 自己（当时 `pid=2060`），`/proc/$pid/cmdline` 读到的是探针自己的命令。必须写 `alohamini_host.py`。
+
+`4.3` 的 `--include="*.py" --exclude-dir=__pycache__` 不能去掉：按目录 grep 会命中 `__pycache__` 的 `.pyc`，输出里多出 `grep: …: binary file matches` 并占掉 `head -20` 的名额（2026-10-25 实测混进 3 行）。
+
+`4.3b` 用来确认这三个字段有没有命令行入口。实测只有 5 处 `add_argument`（`--robot_model`、`--no_follower`、`--profile_timing`、`--camera-stream`、`--camera-stream-port`），都不涉及这三个字段。
+
+`4.3c` 用来看清默认值属于哪个 dataclass。实测 `AlohaMiniHostConfig` 与 `AlohaMiniClientConfig` 各有一个 `observation_request_window`（`:110` 与 `:135`），取 Host 那个。
 
 取值规则：
 
-- `4.2` 的命令行里出现覆盖值时（例如 `--observation-request-window 3`），以命令行里的值为准。
-- 命令行里没有出现，就取 `4.3` 里源码的默认值。
+- 先用 `4.2` 看实际启动命令行里有没有覆盖。当前 Pi 的 vendor 版本没有这三项的命令行入口，因此实际生效值等于 `AlohaMiniHostConfig` 的源码默认值，用 `4.3` 取。
+- 将来厂商版本若新增入口，以 `4.2` 的实际输出为准。
 - 写进现场 YAML 的必须是「实际生效的那个值」，并在 `$S4DIR/stdout/` 里留下取得它的命令（`4.x-*.cmd`）与输出（`4.x-*.log`）。
+
+已实测记录（2026-10-25，Pi `ec65318f`，Host 未运行）：
+
+| 字段 | 实测/推定值 | 依据 |
+| --- | --- | --- |
+| `observation_request_window` | 3 | `config_alohamini.py:110`（`AlohaMiniHostConfig` 源码默认）；该项无命令行入口 |
+| `watchdog_timeout_ms` | 1000 | `config_alohamini.py:122` |
+| `max_loop_freq_hz` | 50 | `config_alohamini.py:125` |
+
+Host 未运行，所以这三个值是**源码默认**，不是「运行中进程的实际生效值」。`config_alohamini.py` 在 Pi 工作区是未提交修改状态，取值以工作区文件为准，与 HEAD `ec65318f` 的差异未核对。启动 Host 后应重跑 `4.2`/`4.3` 复核。
 
 另外四个字段的取值：
 
 | 字段 | 取法 |
 | --- | --- |
 | `robot_model` | 阶段 1.1 产物 `$S4DIR/capture/fingerprint-$STAMP.json` 里 `robot_metadata.robot_model` 的值 |
-| `left_port` / `right_port` | `run 4.5-serial ls -l /dev/serial/by-id/`；Pi 一侧同时取一份 `run 4.5b-serial-pi ssh "$PI" 'ls -l /dev/serial/by-id/'` 做对照 |
-| `cameras` | `run 4.6-video ls -l /dev/video*`；Pi 一侧同样取一份做对照，再加实际相机接法 |
+| `left_port` / `right_port` | `run 4.5-serial ls -l /dev/serial/by-id/`；Pi 一侧同时取一份 `run 4.5b-serial-pi ssh "$PI" 'ls -l /dev/serial/by-id/'` 做对照（判据见下） |
+| `cameras` | `run 4.6-video ls -l /dev/video*`；Pi 一侧取 `4.6b-video-pi` 做对照（命令见下），再加实际相机接法（判据见下） |
 
-`load_settings(check_devices=True)` 校验的是本机 `/dev/` 下的节点存在性（`overlay.py`），所以 `left_port` / `right_port` 与相机路径的最终取值必须以本机 `ls` 输出里能找到的节点为准。Pi 一侧的输出用来核对两处接法是否一致；不一致时以本机为准，并把差异记进 `$S4DIR/stdout/` 的现场记录。
-
-判据：两份一起能被读通。命令：
+Pi 一侧的相机节点对照命令：
 
 ```bash
-run 4.4-load-check uv run --no-sync python -c "from pathlib import Path; from alohamini_cartesian.config.overlay import load_settings; print(load_settings(template=Path('$S4DIR/configs/template.yaml'), site=Path('$S4DIR/configs/site.yaml')))"
+run 4.6b-video-pi ssh "$PI" 'ls -l /dev/video* 2>/dev/null | head -20'
+```
+
+`4.5b` 与 `4.6` 的判据不能按 `.exit` 是否为 0 判成功。`ls` 在无匹配时返回 2；2026-10-25 实测 Pi 上没有 `/dev/ttyUSB*`，末条 `ls` 无匹配使整条命令 exit 2，而 `by-id` 与 `ttyACM` 的输出完全正常。判据是：看 `.log` 里有没有 `/dev/ttyACM*` 行；`4.6` 同理，看有没有 `/dev/video*` 行。`.exit` 为 2 但 `.log` 里有该有的行，这一条算取到。
+
+标定文件核对（换机或重装后要确认标定文件还在）：
+
+```bash
+run 4.7-calib ssh "$PI" 'ls -l ~/.cache/huggingface/lerobot/calibration/robots/*/ 2>/dev/null; find ~ -maxdepth 5 -name "*.json" -path "*calibration*" 2>/dev/null | head -20'
+```
+
+判据：输出里能找到这次要用的标定文件，并记下大小。2026-10-25 实测：Pi 上有 `robots/alohamini/AlohaMiniRobot.json`（2880 B）与 lekiwi 的两个，另有 `/home/pi5/b02-b03-evidence/calibration-alohamini2pro.json`。
+
+设备分工（2026-10-25 实测）：本机（macOS）没有 `/dev/serial/by-id/`、`/dev/ttyACM*`、`/dev/video*`；Pi 上有 `ttyACM0`/`ttyACM1`（两块 `usb-1a86` 单串口，`5B14029263` 与 `5B14111703`）与 20 个 `/dev/video*` 节点。本机那两条命令在没接机械臂的 Mac 上取不到，不能据此判「设备缺失」。
+
+设备路径填的是**将来运行本库那台机器**上的路径，不是「随便哪台机器都能用」的路径：
+
+- 真正部署时本库跑在接了机械臂的那台机器上（本项目是 Pi），YAML 里写 Pi 侧路径（`/dev/ttyACM0`、`/dev/ttyACM1`、`/dev/video*`），在这台机器上 `load_settings(check_devices=True)` 才成立。
+- 若只在 Mac 上做配置结构校验，用 `load_settings(check_devices=False)`（这是默认值），只验键名、类型、取值，**不验设备存在性**。此时设备存在性的证据来自 Pi 侧的 `4.5b`/`4.6b` 输出，不要因为本机 `ls` 为空就判「设备缺失」。
+- `check_devices=True` 在 Mac 上必然失败（本机没有这些 `/dev/` 节点），这不是配置写错，是跑错机器。
+
+判据：两份一起能被读通。本次现场在 Mac 上跑结构校验，显式写 `check_devices=False`：
+
+```bash
+run 4.4-load-check uv run --no-sync python -c "from pathlib import Path; from alohamini_cartesian.config.overlay import load_settings; print(load_settings(template=Path('$S4DIR/configs/template.yaml'), site=Path('$S4DIR/configs/site.yaml'), check_devices=False))"
 ```
 
 判据：`.exit` 为 `0`，`.log` 里打印出合并后的 `AlohaMiniSettings`。
 
-现场易错点：本库 config overlay 的 `watchdog_timeout_ms` 默认是 `500`（`src/alohamini_cartesian/config/overlay.py` 的 `AlohaMiniSettings`），厂商 `config_alohamini.py` 默认是 `1000`（旧仓库 `src/lerobot/robots/alohamini/config_alohamini.py:102`）。现场核对宿主实参时不要把两个数字混用，样例里写实际生效的那个值。以 `4.2` 与 `4.3` 的实测为准，这两个默认值都不作为依据。
+设备存在性校验需要把两份 YAML 拿到接了机械臂的 Pi 上跑，本次现场不做。命令留在这里备查：
+
+```bash
+run 4.4b-load-check-deploy uv run --no-sync python -c "from pathlib import Path; from alohamini_cartesian.config.overlay import load_settings; print(load_settings(template=Path('configs/template.yaml'), site=Path('configs/site.yaml'), check_devices=True))"
+```
+
+这一条在 Pi 上部署后跑（本次现场不做）。命令里的 `configs/template.yaml`、`configs/site.yaml` 是占位路径，实际以 Pi 上落点为准；前提是 Pi 已装本库。本次实际跑的是 `4.4-load-check`，`4.4b` 未跑。
+
+现场易错点：本库 config overlay 的 `watchdog_timeout_ms` 默认是 `500`（`src/alohamini_cartesian/config/overlay.py` 的 `AlohaMiniSettings`），厂商 `config_alohamini.py` 的默认是 `1000`（不写行号：行号随厂商提交变化，2026-10-25 实测在 Pi 上约 122 行）。现场核对宿主实参时不要把两个数字混用，样例里写实际生效的那个值。以 `4.2` 与 `4.3` 的实测为准，这两个默认值都不作为依据。
 
 现场易错点：`robot_model` 的两处默认值不一致。本库 `src/alohamini_cartesian/config/overlay.py` 的 `AlohaMiniSettings.robot_model` 默认值是 `alohamini1`（`overlay.py:51`）；两个现场脚本的 `DEFAULT_ROBOT_MODEL` 都是 `alohamini2pro`（`benchmarks/alohamini_io/capture_robot_fingerprint.py:76`、`benchmarks/alohamini_io/measure_latency.py:360`）。现场机型是 AlohaMini 2 Pro，而 `measure_latency.py` 的代码 Gate C 要求宿主 metadata 的 `robot_model` 与 `--robot-model` 相等（`measure_latency.py:1437`）。所以现场 YAML 必须显式写 `robot_model: alohamini2pro`，不能用模板里的 `alohamini1`，否则配置表达的意思与真机不符。
 
 模板随包分发的落点（`configs/` 是否进仓库）不在本次窗口决定。两份文件本次都落在证据目录。
 
-本阶段产物：`configs/template.yaml`、`configs/site.yaml`，以及 `stdout/4.1-host-args-*`、`4.2-host-cmdline-*`、`4.3-host-config-*`、`4.4-load-check-*`、`4.5-serial-*`、`4.5b-serial-pi-*`、`4.6-video-*`。
+本阶段产物：`configs/template.yaml`、`configs/site.yaml`，以及 `stdout/4.1-host-args-*`、`4.2-host-cmdline-*`、`4.3-host-config-*`、`4.3b-config-args-*`、`4.3c-config-classes-*`、`4.4-load-check-*`、`4.5-serial-*`、`4.5b-serial-pi-*`、`4.6-video-*`、`4.6b-video-pi-*`、`4.7-calib-*`。`4.4b-load-check-deploy` 本次未跑，无产物。
 
 ## 9 退出码对照表
 
@@ -616,7 +698,7 @@ $S4DIR/                       # = ~/pi-workspace/alohamini-cartesian-teleop/evid
 - [ ] 宿主 `robot_metadata.schema_version` 取到整数 `2`，且有 `capture` 产物为证（P0 关闭）
 - [ ] `capture` exit 0，JSON 10 个顶层键齐全，且 `robot_metadata.motors` 里逐个电机的 8 字段齐备情况有记录
 - [ ] 两组 rtt 各 500 样本、各 exit 0，且报告里 `achieved_rate_hz` 与请求率的差距有记录
-- [ ] 代码 Gate F 至少有一次真实拒绝记录（stderr 原文 + 命令原文 + 退出码）；本窗口触发不了 F 的第二段时，改为记录「v2 宿主下 Gate F 未触发」、`2.1-probe` 的输出与理由
+- [ ] 代码 Gate F 至少有一次真实拒绝记录（stderr 原文 + 命令原文 + 退出码）；本窗口触发不了 F 的第二段时，改为记录「v2 宿主下 Gate F 未触发」、`2.1-probe` 的输出与理由。当前 Pi 上第二段可达（换算字段不全），所以本窗口应按第二段记；只有在电机字段齐全的宿主机上才落回「未触发」分支
 - [ ] Mode B 若执行：每步的 `error_deg`、`overshoot_deg`、`settled` 齐全；`rise_90_time_s` 非空；若为空，说明原因（容差设置或命中同一轮询），并写明是哪一种；收尾 `hold_issued` 在报告里
 - [ ] 阶段 2 与阶段 3 只做了第 6 节对照表允许的那一个，另一个没做并写明了原因
 - [ ] 两份 YAML 样例（模板 + 现场）落盘，字段名与 `config/overlay.py` 一致，且能被 `load_settings` 读通
@@ -634,7 +716,14 @@ $S4DIR/                       # = ~/pi-workspace/alohamini-cartesian-teleop/evid
 
 ## 13 已知缺口与未验证项
 
-- 本手册里所有 `ssh "$PI" '…'` 命令未实测。本次修订时本机无法连接 Pi。
+Pi 侧命令的实测范围（一条命令算一项）：
+
+| 已实测（2026-10-25） | 未实测 |
+| --- | --- |
+| `0.0-ssh-check`、`0.10-pi-ip`、`0.2-pi-commit`、`0.3-pi-schema`、`0.3b-schema-context`、`0.5-host-procs`、`0.6-ports`、`0.6b-ports-netstat`、`4.1-host-args`、`4.2-host-cmdline`、`4.3-host-config`、`4.3b-config-args`、`4.3c-config-classes`、`4.5-serial`、`4.5b-serial-pi`、`4.6-video`、`4.6b-video-pi`、`4.7-calib` | `0.4b-tools`、`0.4-pi-ls`、`1.1-capture`、`1.2`、`1.3`、`2.1-probe`、全部阶段 2 与阶段 3 的命令、`4.4-load-check` |
+
+未实测不等于不可用，但首次执行时要格外留意输出形态与本文档描述是否一致。
+
 - Mode B 从未在真机跑过。
 - 收尾 hold 的实际效果无证据。
 - exit 8 的真实触发路径无记录。

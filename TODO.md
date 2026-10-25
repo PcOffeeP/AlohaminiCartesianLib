@@ -20,7 +20,9 @@
 
 | 状态 | 事项 | 判据 | 备注 |
 | --- | --- | --- | --- |
-| 待办 | P0：确认宿主 `robot_metadata.schema_version` 是否为整数 2 | `capture` exit 0 且 JSON 里该值为 2 | 只能现场确认，本机需 SSH 连 Pi，做不到；未解决则受控试动跑不了。现场执行以 `docs/s4-field-smoke.md` 为准，Pi 侧信息一律用 SSH 取；可先用 SSH 读 Pi 上 vendor 代码的 `schema_version` 行预判（该文档步骤 `0.3-pi-schema`），最终以 `capture` 实测为准 |
+| 待办 | P0：确认宿主 `robot_metadata.schema_version` 是否为整数 2 | `capture` exit 0 且 JSON 里该值为 2 | **2026-10-25 实测：未通过。** Pi `10.34.170.98` 的 vendor 仓库提交 `ec65318f`，`src/lerobot/robots/alohamini/alohamini_host.py` 第 129 行为 `"schema_version": 1,`，即源码级的 1，不是「代码 2、运行时 1」的组合。解除后才能做指纹采集与受控试动。现场执行仍以 `docs/s4-field-smoke.md` 第 2 节为准（步骤 `0.3-pi-schema` 已改为只查单文件），最终以 `capture` 实测为准 |
+| 待办 | 启动 Pi 上的 Host 后才能做指纹采集与阶段 2 的 Gate F 拒绝记录 | `0.5-host-procs` 有进程、`0.6-ports` 见 5555/5556 的 `LISTEN`，随后 `1.1-capture` 能连上 | 2026-10-25 实测：Pi 上 Host 未运行（`0.5` 无进程、`0.6` 无 5555/5556 监听；`0.4b-tools` 已证 `ss`/`netstat` 存在，不是工具缺失）。需现场启动 Host，**需要人工在场与授权**，本机做不到 |
+| 待办 | 启动 Host 后重跑 `4.2-host-cmdline` 与 `4.3-host-config`，复核三个配置字段（3 / 1000 / 50 目前来自源码默认，不是运行中进程的实际生效值） | 两次输出能判出实际生效值，写进 `docs/s4-field-smoke.md` 第 8 节的实测记录 | 依 `docs/s4-field-smoke.md` 第 8 节 `4.2`/`4.3` 的判据；`4.2` 需 `ps -o cmd` 里出现 `python` 才算取到 |
 | 待办 | 完成 S4 现场窗口的零运动部分与受控试动 | 按 `docs/s4-field-smoke.md` 第 11 节逐条勾选 | 逐条命令、判据、产物见该文档；现场执行以 `docs/s4-field-smoke.md` 为准，Pi 侧信息一律用 SSH 取（`ssh "$PI" '…'`），不靠口头转述 |
 
 ## 3 待定
