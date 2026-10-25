@@ -56,7 +56,7 @@ Gate F 第①条的判断式在 `benchmarks/alohamini_io/measure_latency.py`，�
 
 判断顺序分两层：先用 SSH 读 Pi 上的 vendor 代码做预判，再决定本窗口做哪几个阶段；最终判据仍是 `capture` 的实测结果。
 
-**已实测记录（2026-10-25，Pi `10.34.170.98`）**：vendor 仓库 `/home/pi5/lerobot_alohamini` 提交 `ec65318f`，`src/lerobot/robots/alohamini/alohamini_host.py` 第 129 行为 `"schema_version": 1,`。即 **P0 未通过，且是源码级的 1**，不是「代码 2、运行时 1」的组合。该 Pi 的 git 工作区另有 6 个未提交改动（`docs/alohamini/commands.md`、`examples/alohamini/{calibrate_bi,record_bi,teleoperate_bi}.py`、`src/lerobot/robots/alohamini/config_alohamini.py`、`tests/robots/test_alohamini_ros_compat.py`），未清理、未触碰。第 8 节三个配置字段的源码默认值取自这份工作区文件。
+**已实测记录（2026-10-25 UTC 07:00 前后，Pi `10.34.170.98`，来源 `stdout/0.2-pi-commit-20261025T070057Z.log`）**：该时点 vendor 仓库 `/home/pi5/lerobot_alohamini` 的 HEAD 是 `ec65318f`（当日 UTC 09:33 之后已换成 `6aee1f81`，见后文「已关闭」段），`src/lerobot/robots/alohamini/alohamini_host.py` 第 129 行为 `"schema_version": 1,`。即 **P0 未通过，且是源码级的 1**，不是「代码 2、运行时 1」的组合。该 Pi 的 git 工作区另有 6 个未提交改动（`docs/alohamini/commands.md`、`examples/alohamini/{calibrate_bi,record_bi,teleoperate_bi}.py`、`src/lerobot/robots/alohamini/config_alohamini.py`、`tests/robots/test_alohamini_ros_compat.py`），未清理、未触碰。第 8 节三个配置字段的源码默认值取自这份工作区文件。
 
 同一日运行时实证（2026-10-25T07:41Z）：在 Pi 上执行阶段 2 的 Gate F 命令，门禁拒绝，报文原文为
 
@@ -69,7 +69,7 @@ Gate F refused: the host metadata schema_version is 1, expected 2.
 
 退出码 `6`，全程零运动命令。至此 P0 由「源码级为 1」升级为「运行时实测为 1」，两级证据一致。
 
-**2026-10-25 当日已关闭**：Pi 上的运行时升级到含 metadata v2 的版本，完全跑通的路径 `/home/pi5/lerobot_alohamini`，HEAD `6aee1f81d503be98972d605ed32189221a674607`。旧部署原样备份在 `/home/pi5/lerobot_alohamini.legacy-ec65318f-20261025`（`ec65318f` 加 6 个未提交改动）。关闭判据：`capture` exit 0，`robot_metadata.schema_version` 为 `2`，18 个电机的 `homing_offset` 与 `resolution` 全部有值；改名后厂商测试 `60 passed`。上面那段 v1 记录保留为历史，下文 P0 判断规则与分支照旧适用。
+**2026-10-25 当日已关闭，该时点 HEAD 为 `6aee1f81`**：Pi 上的运行时升级到含 metadata v2 的版本，完全跑通的路径 `/home/pi5/lerobot_alohamini`，HEAD `6aee1f81d503be98972d605ed32189221a674607`（UTC 09:33:54 的采指纹已在这版上完成，见 `capture/fingerprint-merged-6aee1f81.json` 的 `captured_utc`；升级前 UTC 07:00 前后的 HEAD 是 `ec65318f`）。旧部署原样备份在 `/home/pi5/lerobot_alohamini.legacy-ec65318f-20261025`（`ec65318f` 加 6 个未提交改动）。关闭判据：`capture` exit 0，`robot_metadata.schema_version` 为 `2`，18 个电机的 `homing_offset` 与 `resolution` 全部有值；改名后厂商测试 `60 passed`。上面那段 v1 记录保留为历史，下文 P0 判断规则与分支照旧适用。
 
 下面两条命令用到第 3 节定义的 `PI` 与 `run`。先执行第 3 节的变量块与函数定义，再回到这里。
 
@@ -136,6 +136,12 @@ mkdir -p "$S4DIR"/{capture,rtt,tracking,configs,stdout}
 - `PI_HOST` 是唯一需要现场填的值。上次现场记录的是 `10.34.170.98`（来源 `field-run-summary.md` 第 1 行「远端」），先按这个值试，连接检查见本节末尾。
 - `S4DIR` 按 UTC 日期建，形式 `s4-20261022`，与既有证据文件 `rtt-net-20261022-162919.csv` 同一命名法。
 - `STAMP` 是本次会话的时间戳，形式 `YYYYmmddTHHMMSSZ`。正文里凡出现 `$STAMP` 的地方，指的都是这一个值；同一次会话内的全部产物共用它，不再手填。
+
+### 时间基准：日志里的时间是 UTC
+
+Pi 的系统时区设成 `Europe/London`，日志显示的时间等于 UTC。本地时间是 UTC+8，钟点比日志里的数字大 8 小时：日志里的 `09:5x` 对应本地 `17:5x`。
+
+因此本文凡涉及现场时间，都写明是 UTC 还是本地时间。`$S4DIR` 与 `$STAMP` 按 UTC 生成（`date -u`），产物文件名里的时间也一律是 UTC。
 
 ### 在哪跑
 
@@ -324,7 +330,7 @@ run 1.1-capture uv run --no-sync python benchmarks/alohamini_io/capture_robot_fi
 run 1.2-rtt-net uv run --no-sync python benchmarks/alohamini_io/measure_latency.py --host "$PI_HOST" --mode rtt --rate-hz 1000 --request-window 1 --samples 500 --csv "$S4DIR/rtt/rtt-net-$STAMP.csv"
 ```
 
-判据：`exit 0` 且 CSV 有数据行。若返回 `9`，说明这份 vendor 的 client 不发布 `latest_request_timing`，rtt 无法测量——这是设计行为，按第 13 节记录，不当故障、不重试改参数。若返回 `3`，是连接问题，按第 12 节处置。
+判据：`exit 0` 且 CSV 有数据行。若返回 `9`，说明该时点这份 vendor 的 client 不发布 `latest_request_timing`（升级前 HEAD `ec65318f` 属此情形），rtt 无法测量——这是设计行为，按第 13 节记录，不当故障、不重试改参数。升级后 HEAD `6aee1f81` 提供该面，`3.2-rtt` 实测 exit 0。若返回 `3`，是连接问题，按第 12 节处置。
 
 在 Pi 上执行时必须把 `PYTHONPATH` 指向被测代码，否则会 import 到已安装的旧版本。采集脚本的 `default_client_factory()` 直接 `import lerobot`，不经过本库 adapter；不设 `PYTHONPATH` 时表现为指纹计时字段全 `null`，或 `measure --mode rtt` 返回退出码 `9`。这两类现象看着像代码缺陷，实际是跑错了代码。退出码 `9` 就是这样在真机上首次触发的，这条不再只有单元测试背书。
 
@@ -369,7 +375,7 @@ run 1.3-rtt-deploy uv run --no-sync python benchmarks/alohamini_io/measure_laten
 
 现场最容易把顶层那个 `1` 当成失败原因。脚本只校验 `robot_metadata.schema_version == 2` 与 `motors` 非空映射，不校验每个电机的 8 个字段是否齐全。8 字段是 `id`、`model`、`normalization`、`drive_mode`、`range_min`、`range_max`、`homing_offset`、`resolution`，齐不齐由宿主决定，现场逐电机记录实际覆盖情况。
 
-实测（2026-10-25，Pi 提交 `ec65318f`）：`build_robot_metadata` 给每个电机只写 6 个键——`id`、`model`、`normalization`、`drive_mode`、`range_min`、`range_max`，**没有 `homing_offset`，也没有 `resolution`**。`robot_metadata` 顶层是 `schema_version`、`robot_model`、`motors`、`cameras` 四项。v2 宿主（提交 `6aee1f81`）上 18 个电机的这两个字段全部有值，无 `null`。文档其它地方提到的「8 个字段」是代码里 `validate_metadata` 认识的完整字段集，不是 Pi 当前实际发出的字段集。
+实测（2026-10-25 UTC 07:00 前后，该时点 Pi HEAD 为 `ec65318f`）：`build_robot_metadata` 给每个电机只写 6 个键——`id`、`model`、`normalization`、`drive_mode`、`range_min`、`range_max`，**没有 `homing_offset`，也没有 `resolution`**。`robot_metadata` 顶层是 `schema_version`、`robot_model`、`motors`、`cameras` 四项。v2 宿主（同日 UTC 09:33 之后的提交 `6aee1f81`）上 18 个电机的这两个字段全部有值，无 `null`。文档其它地方提到的「8 个字段」是代码里 `validate_metadata` 认识的完整字段集，不是 Pi 当前实际发出的字段集。
 
 ## 6 阶段 2：制造一次代码 Gate F 的真实拒绝记录
 
@@ -433,8 +439,8 @@ PY
 判断规则：
 
 - 只有当某个电机的 `missing` 或 `bad` 非空时，它对应的关节才会在 Gate F 第二段被拒。
-- v1 宿主（提交 `ec65318f`）上，`build_robot_metadata` 给每个电机只写 6 个键（`id`、`model`、`normalization`、`drive_mode`、`range_min`、`range_max`），没有 `homing_offset`，也没有 `resolution`；那时即便把 `schema_version` 改成 2，`2.1-probe` 的输出也会是每个电机 `missing=['homing_offset','resolution']`，第二段对所有关节都成立。
-- v2 宿主（提交 `6aee1f81`）上 18/18 电机字段齐全，`2.1-probe` 不会报 `missing`，Gate F 第二段不会被触发。这条拒绝路径在 v2 宿主上未验证。
+- v1 宿主（2026-10-25 UTC 07:00 前后的提交 `ec65318f`）上，`build_robot_metadata` 给每个电机只写 6 个键（`id`、`model`、`normalization`、`drive_mode`、`range_min`、`range_max`），没有 `homing_offset`，也没有 `resolution`；那时即便把 `schema_version` 改成 2，`2.1-probe` 的输出也会是每个电机 `missing=['homing_offset','resolution']`，第二段对所有关节都成立。
+- v2 宿主（同日 UTC 09:33 之后的提交 `6aee1f81`）上 18/18 电机字段齐全，`2.1-probe` 不会报 `missing`，Gate F 第二段不会被触发。这条拒绝路径在 v2 宿主上未验证。
 - 记录证据时必须写明命中的是哪一段。两种拒绝要分开：`schema_version` 不是 2 → Gate F 第一段拒绝；换算字段不全 → Gate F 第二段拒绝。
 - 若全部电机都齐全（其他厂商版本可能如此），本窗口触发不了 F 的第二段。此时只记录「v2 宿主下 Gate F 未触发」这一事实，理由写进 `TODO.md` 与 `$S4DIR/stdout/`（`2.1-probe-*` 已在盘上）。**不要为了造记录去改标定文件或伪造数据。**
 - 电机名到关节观测键（如 `arm_left_shoulder_pan.pos`）的对应关系本文未核实。现场用该电机的名字加 `--joint` 试一次，命令骨架如下，`--joint` 的取值按 `2.1` 输出里 `missing` 或 `bad` 非空的电机名改：
@@ -479,6 +485,8 @@ run 3.1-tracking uv run --no-sync python benchmarks/alohamini_io/measure_latency
 | `--settle-timeout-s` | `2.0` | 默认 `1.0` s，20 ms 命令节奏下每步预算偏紧 |
 | `--timeout-s` | `60` | 默认 `30` s 对多步加 settle 偏紧，中途超时会以 exit 1 结束 |
 
+`--delta-deg` 的硬上限与 stdout 表现：常量 `MAX_STEP_DELTA_DEG = 1.0`（`benchmarks/alohamini_io/measure_latency.py:347`，`resolve_delta_deg` 用 `min(delta_deg, MAX_STEP_DELTA_DEG)`）。请求 `--delta-deg 2.0` 时实际按 1.0 执行，report 首部把两者都打印出来，原文形如 `delta_deg=1.000 (requested 2.000)`（格式在 `measure_latency.py:1989` 与 `:1990`）。要凑更大总行程，只能改成「1° × 更多步」，加大 `--delta-deg` 无效。
+
 关于 `rise_90_time_s` 为空：源码的说法是这一列 can be empty，即**可能**为空。是否为空取决于该关节是否在同一次轮询里越过 90% 线，不是「容差取小了就一定空、取大了就一定不空」。
 
 运动学事实：
@@ -490,6 +498,32 @@ run 3.1-tracking uv run --no-sync python benchmarks/alohamini_io/measure_latency
 - hold 是就地冻结：把实测 `*.pos` 当目标，三轴速度钉 0，反馈带高度就回写实测高度。报告里只写 `hold_issued`，不写「sent」，因为 action socket 是 PUSH/CONFLATE 无确认。
 
 exit 8 表示 hold 被拒，也就是停命令没到。这一条按「机器可能仍在动」处置：先断电，再排查。判定与处置见第 12 节。
+
+### 2026-10-25 真机试动实测（五次运行）
+
+条件：左臂、单关节、每步 1°、场地清空、断电开关在手。证据目录 `tracking/` 下有五份 CSV，一份对应一次运行，下表按 `t_send_monotonic_s` 的先后排列。
+
+时间基准：本小节与第 13 节引用的现场时间取自 Pi 日志，均为 UTC。本地时间为 UTC+8，钟点比日志数字大 8 小时，见第 3 节「时间基准」。
+
+达成率口径：指令行程 = Σ（每步 `cmd_deg` − 该步 `baseline_deg`）；实测净行程 = 末步 `measured_deg` − 首步 `baseline_deg`；达成率 = 实测净行程 ÷ 指令行程。`cmd_deg` 是每步的绝对目标角，各步起点不同，分母按逐步差求和，不用「步数 × 1°」。例：腕部 1.7582° ÷ 2.0000° = 87.9%；首次试动 0.1758° ÷ 3.0000° = 5.9%。
+
+| 次序 | 关节（电机 ID） | 指令行程 | 实测净行程 | 达成率 | 停稳 | 数据文件 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1（首次试动） | `arm_left_shoulder_pan`(1) | 3.0°（1°×3 步） | +0.176° | 5.9% | 三步 `settled=False`，误差 0.824° / 1.000° / 1.000° | `tracking/modeB-first-20261025.csv` |
+| 2 | `arm_left_wrist_roll`(6) | 2.0°（1°×2 步） | +1.758° | 87.9% | 两步 `settled=True`，误差 0.121° | `tracking/modeB-wrist-20261025.csv` |
+| 3 | `arm_left_shoulder_pan`(1) | 3.0°（1°×3 步） | +0.264° | 8.8% | 三步 `settled=False`，误差 0.824° / 1.000° / 0.912° | `tracking/modeB-shoulder-20261025.csv` |
+| 4 | `arm_left_shoulder_lift`(2) | 2.0°（1°×2 步） | +0.264° | 13.2% | 两步 `settled=False`，误差 0.912° / 0.824° | `tracking/modeB-lift-20261025.csv` |
+| 5 | `arm_left_shoulder_pan`(1) | 2.0°（1°×2 步） | +0.176° | 8.8% | 两步 `settled=False`，误差 0.912° / 0.912° | `tracking/modeB-pan2-20261025.csv` |
+
+读数要点：
+
+- 位移都是 1 tick 的整数倍（1 tick = 0.0879°）：腕部每步约 10 tick，肩部每步约 1 tick。
+- 第 1 行与第 3 行命令相同：同一关节、同为 1°×3 步，净行程却是 +0.176° 与 +0.264°，相差 0.088°，正好 1 tick。同一命令重复两次的落点已经不同，单次达成率不能当稳定指标读。
+- 运行结束后的回弹量未采集：`tracking/` 里没有运行之后的采样，证据目录也没有对应记录。要量化回弹，需在试动结束后继续读该轴并落盘。
+- 五份 CSV 的 `note` 列只有 `ok` 与 `settle budget exhausted` 两种值，没有 `aborted:`，即每次运行都把 `--steps` 走满、没有中途中止。首次试动的 report 原文（`stdout/modeB-first-20261025.stdout`）与此一致：`steps_completed=3`、`abort_reason=None`、`hold_issued=yes`，同次 stderr 0 字节。现场记录这几次运行的退出码均为 0；证据目录里只有首次试动留了 report 与 stderr，没有逐次 `.exit` 文件。
+- `rise_90_time_s` 全部为空，原因是 `--settle-tolerance-deg` 默认 0.15 不小于 0.1 × 步长，90% 交点不会先被判定（脚本自带说明）。
+
+本轮只动左臂，右臂未参与，对侧串值未验证。
 
 本阶段产物：`tracking/tracking-$STAMP.csv` 与 `stdout/3.1-tracking-*`。
 
@@ -552,7 +586,7 @@ run 4.3c-config-classes ssh "$PI" 'sed -n "95,145p" ~/lerobot_alohamini/src/lero
 - 将来厂商版本若新增入口，以 `4.2` 的实际输出为准。
 - 写进现场 YAML 的必须是「实际生效的那个值」，并在 `$S4DIR/stdout/` 里留下取得它的命令（`4.x-*.cmd`）与输出（`4.x-*.log`）。
 
-已实测记录（2026-10-25，Pi `ec65318f`，Host 未运行）：
+已实测记录（2026-10-25 UTC 07:00 前后，该时点 Pi HEAD 为 `ec65318f`，Host 未运行）：
 
 | 字段 | 实测/推定值 | 依据 |
 | --- | --- | --- |
@@ -560,7 +594,7 @@ run 4.3c-config-classes ssh "$PI" 'sed -n "95,145p" ~/lerobot_alohamini/src/lero
 | `watchdog_timeout_ms` | 1000 | `config_alohamini.py:122` |
 | `max_loop_freq_hz` | 50 | `config_alohamini.py:125` |
 
-Host 未运行，所以这三个值是**源码默认**，不是「运行中进程的实际生效值」。`config_alohamini.py` 在 Pi 工作区是未提交修改状态，取值以工作区文件为准，与 HEAD `ec65318f` 的差异未核对。启动 Host 后应重跑 `4.2`/`4.3` 复核。
+Host 未运行，所以这三个值是**源码默认**，不是「运行中进程的实际生效值」。`config_alohamini.py` 在 Pi 工作区是未提交修改状态，取值以工作区文件为准，与当时 HEAD `ec65318f` 的差异未核对。启动 Host 后应重跑 `4.2`/`4.3` 复核。
 
 同日 Host 启动后复核：Host 实际启动命令为 `/home/pi5/miniconda3/envs/lerobot_alohamini/bin/python -m lerobot.robots.alohamini.alohamini_host --robot_model alohamini2pro`，未包含任何覆盖这三个字段的参数，与上表「源码默认即实际生效值」一致。
 
@@ -737,25 +771,33 @@ $S4DIR/                       # = ~/pi-workspace/alohamini-cartesian-teleop/evid
 | exit 1 加反馈失联 | 连续 3 次序号不涨 | 检查网络与 Host 负载 |
 | 网络中断 | `ping` 丢包 | 重跑该阶段，不复用旧产物 |
 
+### 停 Host 不等于失力
+
+停 Host 之后手臂仍然带电保持。2026-10-25 停 Host 后读到的寄存器是 `Torque_Enable=1`、`Lock=0`，位置环还在通电，人手推就是顶着位置环（读数完整表见第 13 节）。断电才失力。
+
+所以收工若要断电，先把手臂放到低位再断电，避开断电瞬间的下落。这条只约束断电时序，不改变任何一条退出码判据。
+
 ## 13 已知缺口与未验证项
 
 Pi 侧命令的实测范围（一条命令算一项）：
 
 | 已实测（2026-10-25） | 未实测 |
 | --- | --- |
-| `0.0-ssh-check`、`0.10-pi-ip`、`0.2-pi-commit`、`0.3-pi-schema`、`0.3b-schema-context`、`0.5-host-procs`、`0.6-ports`、`0.6b-ports-netstat`、`1.1-capture`、`1.2`、`1.3`、阶段 2 的 Gate B 探测与 Gate F 拒绝（`2.0-refusal-v1`）、`4.1-host-args`、`4.2-host-cmdline`、`4.3-host-config`、`4.3b-config-args`、`4.3c-config-classes`、`4.5-serial`、`4.5b-serial-pi`、`4.6-video`、`4.6b-video-pi`、`4.7-calib` | `0.4b-tools`、`0.4-pi-ls`、`2.1-probe`、阶段 3 的命令、`4.4-load-check` |
+| `0.0-ssh-check`、`0.10-pi-ip`、`0.2-pi-commit`、`0.3-pi-schema`、`0.3b-schema-context`、`0.5-host-procs`、`0.6-ports`、`0.6b-ports-netstat`、`1.1-capture`、`1.2`、`1.3`、阶段 2 的 Gate B 探测与 Gate F 拒绝（`2.0-refusal-v1`）、`4.1-host-args`、`4.2-host-cmdline`、`4.3-host-config`、`4.3b-config-args`、`4.3c-config-classes`、`4.5-serial`、`4.5b-serial-pi`、`4.6-video`、`4.6b-video-pi`、`4.7-calib`、阶段 3 的 `3.1-tracking`（五次运行） | `0.4b-tools`、`0.4-pi-ls`、`2.1-probe`、`4.4-load-check` |
 
 新增实测项的备注：
 
-- `1.1-capture`、`1.2`、`1.3`：已在 v2 宿主上实测通过（RTT 为 Pi 本机回环）。`1.1-capture` exit 0，`robot_metadata.schema_version` 为 `2`，18 个电机字段齐全；`1.2` / `1.3` exit 0，请求率受 Host 50 Hz 主循环封顶，`1.2` 组 `achieved_rate_hz=49.8`（请求 1000 Hz）。早先一次在 Pi 侧以 conda python 执行 `1.1-capture` 时退出码 `3`（当时缺 `latest_request_timing`），未写 JSON；该现象已由 v0.7.0 的能力探测改为显式中止或记 `null`。
+- `1.1-capture`、`1.2`、`1.3`：已在 v2 宿主上实测通过（RTT 为 Pi 本机回环）。`1.1-capture` exit 0，`robot_metadata.schema_version` 为 `2`，18 个电机字段齐全；`1.2` / `1.3` exit 0，请求率受 Host 50 Hz 主循环封顶，`1.2` 组 `achieved_rate_hz=49.8`（请求 1000 Hz）。早先一次在 Pi 侧以 conda python 执行 `1.1-capture` 时退出码 `3`（该时点 vendor 为升级前的 `ec65318f`，不提供 `latest_request_timing`；升级后的 `6aee1f81` 提供该面），未写 JSON；该现象已由 v0.7.0 的能力探测改为显式中止或记 `null`。
 - 阶段 2 的 Gate B 探测：命中，列出可用关节。
 - 阶段 2 的 Gate F 拒绝（`2.0-refusal-v1`）：命中第一段，`schema_version` 为 1。
 - `2.1-probe`：本身未跑。v2 宿主下 18/18 电机字段齐全，Gate F 第二段不会被触发，探测结论会是「不拒」。第二段的拒绝路径仍未验证，见本节末尾。
 - `4.2-host-cmdline` 与 `4.3-host-config` 的「启动 Host 后复核」已做：Host 启动命令里没有覆盖 `observation_request_window`、`watchdog_timeout_ms`、`max_loop_freq_hz` 这三个字段的参数。
+- 阶段 3 的命令（`3.1-tracking`）：已跑五次，五份 CSV 的 `note` 列只有 `ok` 与 `settle budget exhausted`，无 `aborted`；首次试动的 report 记 `steps_completed=3`、`abort_reason=None`、`hold_issued=yes`，同次 stderr 0 字节。只有腕部达成率高：`arm_left_wrist_roll` 净行程 +1.758°/2.0°（87.9%），两步 `settled=True`，误差 0.121°。肩部未跟随：首次试动 `arm_left_shoulder_pan` 5.9%，随后同一轴 8.8%（1°×3 步）与 8.8%（1°×2 步），`arm_left_shoulder_lift` 13.2%，全部 `settled=False`。原因定位中。数据见第 7 节。
 
 未实测不等于不可用，但首次执行时要格外留意输出形态与本文档描述是否一致。
 
-- Mode B 从未在真机跑过。
+- Mode B 只在 2026-10-25 跑过五次，都是左臂单关节、每步 1°。右臂、多关节联动、更大的单步行程都未跑过，见第 7 节实测表。
+- `tracking` CSV 的 `received_monotonic_s` 一列五份全空。按第 10 节的列定义，该列记的是本步越过 90% 那一帧的到达时刻；五份的 `rise_90_time_s` 也全空，说明没有帧记到 90% 交点，该列随之空。两者同因这一条是推论，未单独验证。后果是算不出「命令发出到反馈到达」的时延：`t_send_monotonic_s` 有值、到达时刻没有，本轮只能算位置与误差。要补这一列，先把 `--settle-tolerance-deg` 取到小于 0.1 × delta（即小于 0.1°）让交点出现，再确认脚本在该帧写入到达时刻。
 - Gate F 第二段（换算字段不全时的拒绝）在 v2 宿主上未触发、未验证：现在 18/18 字段齐全，第二段不会拒。要验它需构造换算字段不全的宿主，或注入测试。
 - 4 路相机在采集时全返回零帧（`Frame is None`），另有两次 ZMQ 请求超时。关节与 metadata 正常，所以未阻塞零运动阶段，但带图像的用例会拿到空帧。未排查。
 - RTT 数字是 Pi 本机回环，不能当网络延迟读。
@@ -765,10 +807,52 @@ Pi 侧命令的实测范围（一条命令算一项）：
 - 脚本不检查关节限位。
 - `schema_version` 升到 2 的步骤两仓库文档都没有。
 - 电机名到关节观测键的对应关系未核实，见第 6 节。
+- 运动过程中的实时寄存器跃迁未采集：本节「电流字段不可用，扭矩状态为开，写入者未识别」里那 152 次读全部发生在停 Host 之后，是静止态。`Present_Load`、`Present_Current`、`Status` 在步进过程中怎么变，没有数据。
+- Host 侧的安全门禁是否扣住了肩部目标未验证。要判它得看停滞检测、`joint_hold_events`、`requested_targets` / `accepted_targets` 在步进时的表现，这些都需要重启 Host 复现。
+
+### 电流字段不可用，扭矩状态为开，写入者未识别
+
+四条现场事实并排，反馈侧与手感侧互相矛盾，都保留，不做取舍：
+
+| 事实 | 内容 |
+| --- | --- |
+| 反馈侧 | 18 个电机的 `currents_ma` 全为 `0.0`，偶见 `6.5`（等于 1 个最小刻度） |
+| 手感侧 | 手推手臂有明显阻力、推不动 |
+| 命令侧 | `arm_left_wrist_roll` 能跟随命令走出 +1.758°/2.0°（87.9%） |
+| 源码侧 | 厂商代码 `alohamini.py` 的 `configure()` 无条件调用 `disable_torque()`，两处 `enable_torque()` 是注释掉的（`alohamini.py:545`、`:567`），git 全历史里从未生效 |
+
+2026-10-25 停 Host 后只读伺服寄存器，读左臂 ID 1（`shoulder_pan`）、2（`shoulder_lift`）、3（`elbow_flex`）、6（`wrist_roll`）：34 个寄存器 × 4 电机，加二次采样，共 152 次读，全部成功，零失败。
+
+| 寄存器 | ID1 | ID2 | ID3 | ID6 | 判读 |
+| --- | --- | --- | --- | --- | --- |
+| `Torque_Limit` | 1000 | 1000 | 1000 | 1000 | 满量程，未被压低 |
+| `Max_Torque_Limit` | 1000 | 1000 | 1000 | 1000 | 同上 |
+| `P` / `I` / `D` | 16 / 0 / 32 | 16 / 0 / 32 | 16 / 0 / 32 | 16 / 0 / 32 | 四台完全相同，未被改 |
+| `Operating_Mode` | 0 | 0 | 0 | 0 | 位置伺服 |
+| `Torque_Enable` | 1 | 1 | 1 | 1 | 扭矩开着 |
+| `Lock` | 0 | 0 | 0 | 0 | 未锁 |
+| `Protection_Current` | 310 | 500 | 500 | 310 | 按型号分组（sts3250=310、sts3095=500），不按「动得动 / 动不了」分组 |
+| `Present_Load` | 0 | 0 | 0 | 0 | 静止态为 0 |
+| `Present_Position` = `Goal_Position` | 一致 | 一致 | 一致 | 一致 | 四台都停在目标位 |
+| `Status` | 0 | 0 | 0 | 0 | 无报警 |
+| 温度 / 电压 | 22–27 ℃ / 10.6–10.8 V | — | — | — | 正常 |
+
+结论四条：
+
+- `currents_ma` 仍不可用作负载或扭矩判据。静止态 `currents_ma` 与寄存器 `Present_Load` 都是 0，说明静止时确实无负载；这不能反推运动过程中的负载。
+- 扭矩状态已由寄存器读数为**开着**：四台都是 `Torque_Enable=1`、`Lock=0`。这与「手推不动」一致：位置模式下扭矩开着，人手推就是顶着位置环。
+- 肩部与腕部在寄存器配置上找不出差别。`Torque_Limit`、`Max_Torque_Limit`、`P`/`I`/`D`、`Operating_Mode` 四项四台逐项相同；`Protection_Current` 唯一的不同是按型号分组，把 ID1 与 ID6 分在同一组（同为 sts3250、310），而这两台的达成率分别是 8.8% 与 87.9%。因此寄存器配置差异解释不了达成率差异。
+- `{Torque_Enable=1, Lock=0}` 这个组合不是本库与厂商 fork 的常规写路径能留下的状态。厂商 `feetech.py` 的 `disable_torque()` 写 `{Torque_Enable=0, Lock=0}`，`enable_torque()` 写 `{1, 1}`（`lerobot_alohamini/src/lerobot/motors/feetech/feetech.py:293`、`:304`），两条都产生不出 `{1, 0}`；本库 `src/` 里没有对这两个寄存器的写入。**写入者身份未识别。** 源码侧 `configure()` 无条件调 `disable_torque()` 预测扭矩应为 0，实测为 1，两者冲突：是这次运行路径上该调用没走到，还是之后被别的写入者覆盖，两点都未验证。
 
 ### Pi 上的 client 只发布部分计时面
 
-Pi 当前的 vendor（`main`，`ec65318f`）里，`AlohaMiniClient` 提供 `latest_host_timing`，但**不提供** `latest_request_timing`；它是 `latest_safety_status`，与 `latest_control_status` 不是同一帧，结构也不同（`version` / `control_owner` / `host_session_id` / `command_watchdog_timeout_s`），不可互相替代。
+这条观测要按 vendor 版本分两段读，时点不能混。
+
+**升级前**（2026-10-25 UTC 07:00 前后，HEAD `ec65318f`；`stdout/1.1b-capture-pi-20261025T074158Z.log` 与该轮 `1.2b` 的报错都在这个时点）：`AlohaMiniClient` 提供 `latest_host_timing`，但**不提供** `latest_request_timing`，`measure_latency.py --mode rtt` 返回 `9`。该版本里能拿到的是 `latest_safety_status`，与 `latest_control_status` 不是同一帧，结构也不同（`version` / `control_owner` / `host_session_id` / `command_watchdog_timeout_s`），不可互相替代。
+
+**升级后**（HEAD `6aee1f81`）：提供 `latest_request_timing`，`measure_latency.py --mode rtt` 实测 exit 0，证据 `evidence/s4-20261025/stdout/3.2-rtt-20261025T094446Z.exit` 内容为 `exit=0`。
+
+对仍缺该面的旧 vendor，下面的探测行为依然有效。
 
 两个基准脚本由此产生的行为（v0.7.0 起）：
 
@@ -789,9 +873,7 @@ payload 的 10 个顶层键与 `schema_version = 1` 不变；缺能力不改变 
 
 ## 14 待裁决事项
 
-一条，未定，不阻塞现场零运动阶段。
-
-1. 证据目录是否长期固定在 `/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/`？还是本库内另立 `evidence/`？
+无。原「证据目录是否长期固定」一条已定：维持外部目录，见 `TODO.md` 第 3 节。
 
 ## 附录 A：两个脚本的完整参数表
 

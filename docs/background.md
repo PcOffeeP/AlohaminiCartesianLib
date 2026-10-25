@@ -81,11 +81,11 @@
 | 阶段 | 状态 | 依据 |
 | --- | --- | --- |
 | 阶段 0 到场核对 | 已做 | 证据目录 `stdout/0.*`，含 Pi 提交、`schema_version` 行、Host 进程与端口 |
-| P0：宿主广播 `robot_metadata.schema_version` 为整数 2 | 已关闭 | Pi 上的运行时已从 v1 升级到含 metadata v2 的版本。完全跑通的路径 `/home/pi5/lerobot_alohamini`，HEAD `6aee1f81d503be98972d605ed32189221a674607`（`main` 与 `codex/alohamini-cartesian-teleop` 的合并提交链）。旧部署备份在 `/home/pi5/lerobot_alohamini.legacy-ec65318f-20261025`（`ec65318f` 加 6 个未提交改动，原样保留）。关闭判据：`capture` exit 0，且 JSON 里 `robot_metadata.schema_version=2`。升级后厂商测试 `60 passed`，`import lerobot` 落点为 `/home/pi5/lerobot_alohamini/src/lerobot/__init__.py` |
+| P0：宿主广播 `robot_metadata.schema_version` 为整数 2 | 已关闭 | Pi 上的运行时已从 v1 升级到含 metadata v2 的版本。完全跑通的路径 `/home/pi5/lerobot_alohamini`，HEAD `6aee1f81d503be98972d605ed32189221a674607`（该时点的 HEAD，UTC 09:33:54 的采指纹已在这版上完成；`main` 与 `codex/alohamini-cartesian-teleop` 的合并提交链；升级前 UTC 07:00 前后的 HEAD 是 `ec65318f`，见旧部署目录名）。旧部署备份在 `/home/pi5/lerobot_alohamini.legacy-ec65318f-20261025`（`ec65318f` 加 6 个未提交改动，原样保留）。关闭判据：`capture` exit 0，且 JSON 里 `robot_metadata.schema_version=2`。升级后厂商测试 `60 passed`，`import lerobot` 落点为 `/home/pi5/lerobot_alohamini/src/lerobot/__init__.py` |
 | 阶段 1 零运动测量与指纹 | 已取得 | `capture` exit 0，`schema_version` 为 `2`，18 个电机的 `homing_offset` 与 `resolution` 全部有值，样本 5，与 codex 原分支逐字段对比 `field diffs: 0`。`measure --mode rtt` exit 0，`achieved_rate_hz=49.8`（请求 1000 Hz，受 Host 50 Hz 主循环封顶），`request_age_ms` p50 20.109，`net_rtt_estimate_ms` p50 6.176，`host_timing_missing=0/100`。这组 RTT 是 Pi 本机回环，不是 PC 到 Pi 的链路延迟 |
 | 阶段 2 制造代码 Gate F 拒绝 | 第一段已取得，第二段未验证 | 第一段：v1 宿主时期 exit 6、零命令，报文 `Gate F refused: the host metadata schema_version is 1, expected 2.`。第二段（换算字段不全时的拒绝）在 v2 宿主上未触发、未验证：现在 18/18 字段齐全，第二段不会拒 |
-| 阶段 3 受控试动（Mode B） | 未做 | 从未在真机执行，需要现场窗口与授权。P0 关闭不改变这一条需要授权 |
-| 阶段 4 配置样例 | 数据取齐，产物未落盘 | `stdout/4.*` 命令与日志齐备；证据目录 `configs/` 为空，仓库内无 `configs/` |
+| 阶段 3 受控试动（Mode B） | 已首次执行（2026-10-25） | 腕部跟随 87.9%（`arm_left_wrist_roll`，净行程 +1.758°/指令 2.0°，两步 `settled=True`，误差 0.121°）；肩部未跟随：首次试动 `arm_left_shoulder_pan`（1°×3 步）5.9%，随后同一轴 8.8%（1°×3 步）与 8.8%（1°×2 步），`arm_left_shoulder_lift` 13.2%（1°×2 步），全部 `settled=False`，未停稳。五份 CSV 的 `note` 列无 `aborted`，均未中途中止。扭矩状态与肩部不跟随的原因排查中。数据见 `docs/s4-field-smoke.md` 第 7 节 |
+| 阶段 4 配置样例 | 已完成 | 两份 YAML 已入库（`configs/template.yaml`、`configs/site.yaml`），`site.yaml` 的 `observation_request_window` / `watchdog_timeout_ms` / `max_loop_freq_hz` 取现场实测 `3` / `1000` / `50`（出处 Pi `config_alohamini.py:110/122/125`，见 `docs/s4-field-smoke.md` 第 8 节）；两份都能被 `load_settings` 读通。`stdout/4.*` 命令与日志齐备 |
 
 证据目录：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261025/`。逐条命令与判据见 `docs/s4-field-smoke.md`。
 
