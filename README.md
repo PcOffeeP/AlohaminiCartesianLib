@@ -1,25 +1,19 @@
 # AlohaMini Cartesian
 
-AlohaMini 笛卡尔遥操作的产品侧库：对机器人运行时的适配协议、能力探测与单位换算裁决、配置覆盖，以及控制层与运动学。核心只依赖 numpy。
+AlohaMini 笛卡尔控制的产品侧库：对机器人运行时的适配协议、能力探测与单位换算裁决、配置覆盖，以及控制层与运动学。核心只依赖 numpy。
 
-## 为什么独立成库
+## 目标与平台
 
-旧仓库把产品代码与机器人运行时放在同一仓同一分支上。库的版本号跟着 vendor 分支漂移，产品改动与实机运行时版本互相绑死，实机换一次版本就得连产品一起动。
+目标：把 AlohaMini 2 Pro 从「遥操作主臂牵着走」改成「PC 上一个 Python 库直接按笛卡尔目标下发」，入口是 `connect` / `move_to` / `move_by`，底层仍走现有发送链、单位与硬件保护。详见 [docs/background.md](docs/background.md)。
 
-现场改动只能落进会被 vendor 更新的文件里。上游一覆盖，现场配置和补丁就没了；旧结构里没有 overlay 表达差异，差异只能直接改源码。
+| 项 | 内容 |
+| --- | --- |
+| 上游仓库 | <https://github.com/liyiteng/lerobot_alohamini.git>，Pi 上部署的就是这份 |
+| 本地 fork | `/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini` |
 
-验证工具还把 metadata 的 `schema_version` 当成兼容判据。旧仓库 `benchmarks/alohamini_io/measure_latency.py` 的运动门禁只接受 `schema_version == 2`，遇到 schema 1 或字符串 `"2"` 直接拒绝，工具被版本号拦死，而真正该判的是这项能力在不在。
+旧仓库 `lerobot_alohamini-cartesian-teleop` 已退役，不再作为参考。
 
-## 与旧仓库的分工
-
-本库与旧仓库是两个项目：本库是产品侧的库，旧仓库是厂商运行时的 fork（从上游仓库分出来的副本）。
-
-| 项目 | 定位 | 包含什么 | 与本库的关系 |
-| --- | --- | --- | --- |
-| 本库 `alohamini-cartesian-lib` | 产品侧独立 Python 库，只跑在 PC 一侧 | 把「末端目标 → 六关节角 → 指令」翻译成协议动作发给 Host；不含厂商代码；测试离线、不连设备；唯一接触面是 `adapter/protocol.py` | 本库自身 |
-| 旧仓库 `/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini-cartesian-teleop` | 厂商运行时的 fork | `src/lerobot`，版本 0.6.1，remote 指向 `liyiteng/lerobot_alohamini`，当前分支 `codex/alohamini-cartesian-teleop`；该路径是 `lerobot_alohamini` 仓库的 worktree；含 Host 进程、电机总线、相机、录制、ROS 兼容；实机运行的唯一已验证路径 | 本库不修改它，只作只读参考 |
-
-改产品逻辑进本库，改 vendor 运行时进旧仓库上游，两边不混。
+本库不含厂商代码，测试离线、不连设备，唯一接触面是 `adapter/protocol.py`。
 
 ## 定案一览
 
@@ -27,13 +21,13 @@ AlohaMini 笛卡尔遥操作的产品侧库：对机器人运行时的适配协�
 | --- | --- | --- |
 | D1 | 依赖形态 | 独立包发布，`lerobot` 作为可选 `extra`（`runtime`），不使用 git submodule |
 | D2 | 配置格式 | YAML 单文件加环境变量覆盖，顺序为默认值 → 模板 → 现场文件 → 环境变量 |
-| D3 | 迁移范围 | 只搬 `control/`、运动学（`joint_kinematic_adapter`、`model_specs`）与 `benchmarks/`，分阶段搬，v0.1.0 不含 |
-| D4 | 启动方式 | 新开仓库，当前状态作为 `v0.1.0` 起点，旧仓库冻结为只读参考 |
-| D5 | 迁移范围与适配边界 | 控制层与运动学入库内，控制器不直连 `lerobot`，电机语义改为库内镜像 |
+| D3 | 入库范围 | 只收 `control/`、运动学（`joint_kinematic_adapter`、`model_specs`）与 `benchmarks/` |
+| D4 | 仓库形态 | 本库是新开的独立仓库；旧仓库已退役，不再作为参考 |
+| D5 | 入库范围与适配边界 | 控制层与运动学入库内，控制器不直连 `lerobot`，电机语义改为库内镜像 |
 | D6 | numpy 依赖 | 核心不再零依赖，只加 numpy；不引入 torch/scipy，`placo` 的依赖形态见 D8 |
-| D7 | 迁移边界 | 厂商侧协议测试不迁入，本库对厂商内部协议不负回归责任 |
+| D7 | 测试边界 | 厂商侧协议测试不入本库；本库对厂商内部协议不负回归责任 |
 | D8 | `placo` 依赖形态 | 声明 `kinematics` extra（`placo>=0.10.1,<0.11`），接受 numpy 落到 2.3.x |
-| D9 | 现场基准脚本迁移时机 | `benchmarks/alohamini_io` 两脚本与配套测试在 v0.4.0 迁入，不等 S4；语义零改动，`lerobot` 保持函数体内惰性导入 |
+| D9 | 现场基准脚本迁移时机 | `benchmarks/alohamini_io` 两脚本与配套测试入库；语义零改动，`lerobot` 保持函数体内惰性导入 |
 | D10 | 关节限位取值在 `ArmIK.solve()` 入口校验 | 违规抛 `ValueError`，多余键忽略；`±inf` 不放行（默认路径撞不上），`memoryview` 已排除 |
 
 每条的背景、决定与代价见 [docs/ADR.md](docs/ADR.md)。

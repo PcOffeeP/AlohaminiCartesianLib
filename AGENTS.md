@@ -6,7 +6,9 @@
 
 一句话：一个独立的 Python 库，把「末端要往哪走」翻译成「六个关节各转多少度」，再把指令发给机器人。
 
-机器人在跑厂商（vendor）的软件，我们不修改它；本库只跑在 PC 一侧，通过协议与机器人的常驻主程序（Host 进程）通信。
+平台是厂商的 `lerobot_alohamini`：上游仓库 <https://github.com/liyiteng/lerobot_alohamini.git>，本地 fork `/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini`，Pi 上部署在 `/home/pi5/lerobot_alohamini`。机器人在跑厂商（vendor）的软件，我们不修改它；本库只写 PC 一侧的代码，通过协议与机器人的常驻主程序（Host 进程）通信。
+
+最初要解决的问题：手臂原先得靠一台遥操作主臂（leader）牵着走，关节动作由 teleoperation 产生。要做的是让 PC 上的 Python 库直接下发笛卡尔目标。
 
 ## 2 回答方式（硬要求）
 
@@ -28,7 +30,7 @@
 - **只有 `adapter/protocol.py` 可以引用 `lerobot`**。`src/` 内其余文件禁止；有 AST 测试守着。
 - 测试必须离线：不连设备、不联网、不依赖真机。
 - 不引入 `torch`、`scipy` 等重依赖。`placo` 属可选（IK 数值用例需要它）。
-- 不修改厂商仓库 `/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini-cartesian-teleop`。
+- 不修改本地 fork `/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini` 与 Pi 上的上游部署。旧仓库 `lerobot_alohamini-cartesian-teleop` 已退役，不再作为参考。
 - 不自动推送远程、不改写历史（不 amend、不 force push）。
 - 提交只用显式路径，禁止 `git add -A`。
 - 待办清单在仓库根 `TODO.md`。开工前先读它；发现自己没做完的、或发现新缺口，当场追加一行，不要只在对话里记；完成一项就改状态并写上提交哈希。
@@ -70,4 +72,4 @@ git log --oneline -3                    # 最近提交
 - 迁移归档：`docs/archive/migration-backlog.md`（迁移已在 v0.4.0 完成）
 - 待办清单：`TODO.md`
 - 实测数据：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/`（目录内 `README.md` 写了命名约定）
-- 旧仓库（只读参考）：`/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini-cartesian-teleop`
+- 设计规范（SSOT，在已退役的旧仓库路径下，尚未迁入本库）：`/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini-cartesian-teleop/docs/alohamini-control/Alohamini-control-design.md`
