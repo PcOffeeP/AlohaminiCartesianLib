@@ -650,7 +650,7 @@ run 4.4b-load-check-deploy uv run --no-sync python -c "from pathlib import Path;
 
 现场易错点：`robot_model` 的两处默认值不一致。本库 `src/alohamini_cartesian/config/overlay.py` 的 `AlohaMiniSettings.robot_model` 默认值是 `alohamini1`（`overlay.py:51`）；两个现场脚本的 `DEFAULT_ROBOT_MODEL` 都是 `alohamini2pro`（`benchmarks/alohamini_io/capture_robot_fingerprint.py:76`、`benchmarks/alohamini_io/measure_latency.py:360`）。现场机型是 AlohaMini 2 Pro，而 `measure_latency.py` 的代码 Gate C 要求宿主 metadata 的 `robot_model` 与 `--robot-model` 相等（`measure_latency.py:1437`）。所以现场 YAML 必须显式写 `robot_model: alohamini2pro`，不能用模板里的 `alohamini1`，否则配置表达的意思与真机不符。
 
-模板随包分发的落点（`configs/` 是否进仓库）不在本次窗口决定。两份文件本次都落在证据目录。
+两份配置样例已入库：`configs/template.yaml` 与 `configs/site.yaml`。现场值见第 8 节，读取验证用 `load_settings(template=..., site=...)`。
 
 本阶段产物：`configs/template.yaml`、`configs/site.yaml`，以及 `stdout/4.1-host-args-*`、`4.2-host-cmdline-*`、`4.3-host-config-*`、`4.3b-config-args-*`、`4.3c-config-classes-*`、`4.4-load-check-*`、`4.5-serial-*`、`4.5b-serial-pi-*`、`4.6-video-*`、`4.6b-video-pi-*`、`4.7-calib-*`。`4.4b-load-check-deploy` 本次未跑，无产物。
 

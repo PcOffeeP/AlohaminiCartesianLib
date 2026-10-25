@@ -16,7 +16,7 @@
 | 已完成 | ADR D10 正文里的代码行号随 `arm_ik.py` 改动漂移 | 逐条核对引用的行号与当前文件一致 | 纯文档；本轮已逐条核正，提交 16e6ef9 |
 | 已完成 | `tests/test_arm_ik.py` 的 `T-IK-4.2` 有一处「六关节在区间内」的断言读的是夹紧后的 `q_deg`，对任何实现恒真；与 `T-IK-4.1` 修前的同形态缺陷 | 断言改读 `_solve_once` 的原始输出并比 `LIMIT_EPS_DEG`，且能构造出真外溢时该断言会失败 | 已改为读 _solve_once 的未夹紧原始输出并比 LIMIT_EPS_DEG（与 T-IK-4.1 共用 helper）；实测旧断言在真外溢时仍通过、新断言在真外溢时失败、正常场景通过。完成于提交 e85e828fdc31131cd9dfe858cf9d7454179e53db |
 | 待办 | 能力探测只验属性存在，未验内容。若客户端有 `latest_request_timing` 但值为空 dict（该字段在 `__init__` 里初始化为 `{}`），探测会放行，rtt 可能写出空值行。真实路径上 `connect()` 已填充，当前不可达。 | 首帧计时为空时也判 `9`，并有测试锁定 | 见 `docs/s4-field-smoke.md` 第 13 节 |
-| 待办 | `tests/test_examples_and_configs.py` 的 `SITE_VALUES` 冻结值仍是 `1` / `500` / `50`，与 `configs/site.yaml` 本轮改成的现场部署值 `3` / `1000` / `50` 不一致 | `test_site_yaml_values_are_frozen` 与 `test_site_yaml_loads_with_expected_settings` 转绿，且 `pytest tests` 回到 `1074 passed, 2 skipped` | 本轮改 `configs/site.yaml` 时发现；两处口径得先定一个（冻结值跟现场部署值，或 site.yaml 回退），本轮未动 `tests/` |
+| 已完成 | `tests/test_examples_and_configs.py` 的 `SITE_VALUES` 冻结值曾为 `1` / `500` / `50`，与 `configs/site.yaml` 本轮改成的现场部署值 `3` / `1000` / `50` 不一致 | `test_site_yaml_values_are_frozen` 与 `test_site_yaml_loads_with_expected_settings` 转绿，且 `pytest tests` 回到 `1074 passed, 2 skipped` | 冻结值已同步为 3 / 1000 / 50，全套 1074 passed；提交 `ae8bcec` |
 
 ## 2 现场
 
