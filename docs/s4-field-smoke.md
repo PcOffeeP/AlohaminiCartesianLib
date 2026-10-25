@@ -58,6 +58,17 @@ Gate F 第①条的判断式在 `benchmarks/alohamini_io/measure_latency.py`，�
 
 **已实测记录（2026-10-25，Pi `10.34.170.98`）**：vendor 仓库 `/home/pi5/lerobot_alohamini` 提交 `ec65318f`，`src/lerobot/robots/alohamini/alohamini_host.py` 第 129 行为 `"schema_version": 1,`。即 **P0 未通过，且是源码级的 1**，不是「代码 2、运行时 1」的组合。该 Pi 的 git 工作区另有 6 个未提交改动（`docs/alohamini/commands.md`、`examples/alohamini/{calibrate_bi,record_bi,teleoperate_bi}.py`、`src/lerobot/robots/alohamini/config_alohamini.py`、`tests/robots/test_alohamini_ros_compat.py`），未清理、未触碰。第 8 节三个配置字段的源码默认值取自这份工作区文件。
 
+同一日运行时实证（2026-10-25T07:41Z）：在 Pi 上执行阶段 2 的 Gate F 命令，门禁拒绝，报文原文为
+
+```text
+Gate F refused: the host metadata schema_version is 1, expected 2.
+  The calibration table under motors.<motor> would come from another metadata layout, so its
+  fields (range_min / range_max / resolution / normalization) and every degree figure derived
+  from them are unverified; nothing was commanded.
+```
+
+退出码 `6`，全程零运动命令。至此 P0 由「源码级为 1」升级为「运行时实测为 1」，两级证据一致。
+
 下面两条命令用到第 3 节定义的 `PI` 与 `run`。先执行第 3 节的变量块与函数定义，再回到这里。
 
 ```bash
@@ -311,7 +322,7 @@ run 1.1-capture uv run --no-sync python benchmarks/alohamini_io/capture_robot_fi
 run 1.2-rtt-net uv run --no-sync python benchmarks/alohamini_io/measure_latency.py --host "$PI_HOST" --mode rtt --rate-hz 1000 --request-window 1 --samples 500 --csv "$S4DIR/rtt/rtt-net-$STAMP.csv"
 ```
 
-判据：exit 0，`$S4DIR/rtt/rtt-net-$STAMP.csv` 写出。
+判据：`exit 0` 且 CSV 有数据行。若返回 `9`，说明这份 vendor 的 client 不发布 `latest_request_timing`，rtt 无法测量——这是设计行为，按第 13 节记录，不当故障、不重试改参数。若返回 `3`，是连接问题，按第 12 节处置。
 
 1.3 部署形态（请求 30 Hz、窗口 3）：
 
@@ -368,6 +379,8 @@ run 1.3-rtt-deploy uv run --no-sync python benchmarks/alohamini_io/measure_laten
 ### v1 路径：用版本判断触发
 
 代码 Gate F 在第一条 `send_action` 之前执行，所以它的拒绝路径结构上零命令，可以安全地制造。
+
+2026-10-25 已实际执行本条路径并取得拒绝记录，命中 Gate F 第一段（版本判断），报文见第 2 节实测记录。
 
 宿主仍是 `schema_version=1` 时，跑
 
@@ -544,6 +557,8 @@ run 4.3c-config-classes ssh "$PI" 'sed -n "95,145p" ~/lerobot_alohamini/src/lero
 
 Host 未运行，所以这三个值是**源码默认**，不是「运行中进程的实际生效值」。`config_alohamini.py` 在 Pi 工作区是未提交修改状态，取值以工作区文件为准，与 HEAD `ec65318f` 的差异未核对。启动 Host 后应重跑 `4.2`/`4.3` 复核。
 
+同日 Host 启动后复核：Host 实际启动命令为 `/home/pi5/miniconda3/envs/lerobot_alohamini/bin/python -m lerobot.robots.alohamini.alohamini_host --robot_model alohamini2pro`，未包含任何覆盖这三个字段的参数，与上表「源码默认即实际生效值」一致。
+
 另外四个字段的取值：
 
 | 字段 | 取法 |
@@ -619,6 +634,9 @@ run 4.4b-load-check-deploy uv run --no-sync python -c "from pathlib import Path;
 | measure | 6 | 代码 Gate A–F 拒绝 |
 | measure | 7 | rtt 模式样本不足 |
 | measure | 8 | 收尾 hold 被拒，停命令没到 |
+| measure | 9 | 客户端不发布 rtt 模式所测量的能力（`latest_request_timing`）。连上后立即拒绝，未发请求、未采样、不写 CSV |
+
+`capture_robot_fingerprint.py` 不产生 `9`：缺 `latest_request_timing` 时它继续采集并把计时字段记 `null`，见第 13 节。
 
 退出码同时写在每步的 `$S4DIR/stdout/<步骤号>-$STAMP.exit` 里，查表前先看这个文件。
 
@@ -720,7 +738,14 @@ Pi 侧命令的实测范围（一条命令算一项）：
 
 | 已实测（2026-10-25） | 未实测 |
 | --- | --- |
-| `0.0-ssh-check`、`0.10-pi-ip`、`0.2-pi-commit`、`0.3-pi-schema`、`0.3b-schema-context`、`0.5-host-procs`、`0.6-ports`、`0.6b-ports-netstat`、`4.1-host-args`、`4.2-host-cmdline`、`4.3-host-config`、`4.3b-config-args`、`4.3c-config-classes`、`4.5-serial`、`4.5b-serial-pi`、`4.6-video`、`4.6b-video-pi`、`4.7-calib` | `0.4b-tools`、`0.4-pi-ls`、`1.1-capture`、`1.2`、`1.3`、`2.1-probe`、全部阶段 2 与阶段 3 的命令、`4.4-load-check` |
+| `0.0-ssh-check`、`0.10-pi-ip`、`0.2-pi-commit`、`0.3-pi-schema`、`0.3b-schema-context`、`0.5-host-procs`、`0.6-ports`、`0.6b-ports-netstat`、`1.1-capture`、阶段 2 的 Gate B 探测与 Gate F 拒绝（`2.0-refusal-v1`）、`4.1-host-args`、`4.2-host-cmdline`、`4.3-host-config`、`4.3b-config-args`、`4.3c-config-classes`、`4.5-serial`、`4.5b-serial-pi`、`4.6-video`、`4.6b-video-pi`、`4.7-calib` | `0.4b-tools`、`0.4-pi-ls`、`1.2`、`1.3`、`2.1-probe`、阶段 3 的命令、`4.4-load-check` |
+
+新增实测项的备注：
+
+- `1.1-capture`：在 Pi 侧以 conda python 执行，退出码 `3`（当时缺 `latest_request_timing`），未写 JSON。该现象已由 v0.7.0 的能力探测改为显式中止或记 `null`。
+- 阶段 2 的 Gate B 探测：命中，列出可用关节。
+- 阶段 2 的 Gate F 拒绝（`2.0-refusal-v1`）：命中第一段，`schema_version` 为 1。
+- `4.2-host-cmdline` 与 `4.3-host-config` 的「启动 Host 后复核」已做：Host 启动命令里没有覆盖 `observation_request_window`、`watchdog_timeout_ms`、`max_loop_freq_hz` 这三个字段的参数。
 
 未实测不等于不可用，但首次执行时要格外留意输出形态与本文档描述是否一致。
 
@@ -731,6 +756,27 @@ Pi 侧命令的实测范围（一条命令算一项）：
 - 脚本不检查关节限位。
 - `schema_version` 升到 2 的步骤两仓库文档都没有。
 - 电机名到关节观测键的对应关系未核实，见第 6 节。
+
+### Pi 上的 client 只发布部分计时面
+
+Pi 当前的 vendor（`main`，`ec65318f`）里，`AlohaMiniClient` 提供 `latest_host_timing`，但**不提供** `latest_request_timing`；它是 `latest_safety_status`，与 `latest_control_status` 不是同一帧，结构也不同（`version` / `control_owner` / `host_session_id` / `command_watchdog_timeout_s`），不可互相替代。
+
+两个基准脚本由此产生的行为（v0.7.0 起）：
+
+| 脚本 | 缺什么 | 行为 |
+| --- | --- | --- |
+| `measure_latency.py --mode rtt` | `latest_request_timing` | 连上后立即拒绝，退出码 `9`，stderr 说明缺哪个属性、为什么不测量、建议换发布该面的 vendor 版本；**不写 CSV**，连表头都不写 |
+| `measure_latency.py --mode tracking` | 不读该面 | 不受影响 |
+| `capture_robot_fingerprint.py` | `latest_request_timing` | 继续采集；每条样本的 `age_s` / `sent_monotonic_s` / `received_monotonic_s` 记为 `null`，stderr 警告一次（写明「缺失而非零」） |
+| `capture_robot_fingerprint.py` | `latest_control_status` | `control_status` 记为 `null`，不回退到 `latest_safety_status` |
+
+payload 的 10 个顶层键与 `schema_version = 1` 不变；缺能力不改变 capture 的退出码语义（metadata 不合法仍是 6，写盘失败仍是 5，正常仍是 0）。
+
+判读要点：在这份 vendor 上 `measure --mode rtt` 返回 `9` 是**设计行为，不是故障**；`capture` 里出现 `null` 计时字段同理。看到它们不要当成通信问题排查。
+
+为什么不静默回退：若用 `getattr` 把缺失的 `latest_request_timing` 当空值处理，rtt CSV 的 `token` / `sent_monotonic_s` / `received_monotonic_s` / `age_s` / `net_rtt_*` 会全部变空或 NaN，而 `host_timing_missing` 仍为 `False`，等于谎报主机计时存在。缺能力时应显式中止并说明，不做静默降级。
+
+另一条相关事实：`pyproject.toml` 对 `lerobot` 只声明名字、不声明版本或提交（ADR D1 有意如此），因此没有机制能在安装期拦住这类接口不匹配；两个脚本的测试夹具同时设了 `latest_request_timing` 与 `latest_host_timing`，单元测试也发现不了——这个缺口是靠真机跑出来的。
 
 ## 14 待裁决事项
 
