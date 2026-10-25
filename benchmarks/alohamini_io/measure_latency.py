@@ -302,19 +302,31 @@ Exit codes
    hold was issued and the evidence is on disk.
 9  the connected client cannot provide the capability rtt mode measures with
    (``latest_request_timing``), so the request age cannot be measured at all.
-   Two defects share the code and are named apart on stderr: the client does not
-   publish that attribute (refused as soon as ``connect()`` returned, before the
-   state-only window prime sends its first request and before the first sampled
-   frame), or it publishes it and never fills it.  The second refusal is checked
-   strictly on EVERY fresh frame -- every growth of ``observation_sequence``,
-   judged before that frame's row is appended -- so a face that goes empty in the
-   middle of a run is refused as well, not only one that was empty from the
-   start.  The timing of that probe is dictated by the data: a fresh frame is the
-   earliest moment an empty face can be told from one the host simply had not
-   timed yet.  It costs a client whose FIRST fresh frame is untimed the whole run
-   (that client is refused even when every later frame is timed); that is a
-   deliberate strict trade-off, not an oversight.  Before the first fresh frame
-   the run has already done its single state-only window prime
+   Three shapes share the code: the client does not publish that attribute
+   (refused as soon as ``connect()`` returned, before the state-only window prime
+   sends its first request and before the first sampled frame), it publishes it
+   without all four keys the rtt row reads (``token``, ``sent_monotonic_s``,
+   ``received_monotonic_s``, ``age_s``) holding usable values, or that unfilled
+   face is still there when the sampling loop gives up.  The absent shape has its
+   own sentence on stderr; the unfilled one -- the second and the third shape,
+   i.e. one defect met at two moments -- names the missing keys key by key.  A
+   key counts as missing when it is absent, ``None``, a non-finite number, or an
+   empty ``token``, so a face that carries all four keys with a ``None``
+   ``age_s`` is refused as well as a half-filled one.  The unfilled shape is
+   judged strictly on EVERY fresh frame -- every growth of
+   ``observation_sequence``, judged before that frame's row is appended -- so a
+   face that goes empty in the middle of a run is refused as well, not only one
+   that was empty from the start.  The timing of that probe is dictated by the
+   data: a fresh frame is the earliest moment an unfilled face can be told from
+   one the host simply had not timed yet.  It costs a client whose FIRST fresh
+   frame is untimed the whole run (that client is refused even when every later
+   frame is timed); that is a deliberate strict trade-off, not an oversight.  The
+   same probe runs once more when the sampling loop gives up: a sequence frozen
+   for the whole run never grows, so an untimed face is reported as 9 rather than
+   as 7 ("insufficient samples") -- only after ``--timeout-s``, because nothing
+   separates a frozen sequence from a slow one before the deadline.  A frozen
+   sequence whose face *does* carry the keys keeps giving 7.  Before the first
+   fresh frame the run has already done its single state-only window prime
    (``prime_observation_request_window``), i.e. one request at the default
    ``DEFAULT_REQUEST_WINDOW = 1``, so the empty-face refusal costs exactly that
    prime.  Either way no CSV was written -- not even a header -- and the
@@ -354,18 +366,26 @@ EXIT_INSUFFICIENT_SAMPLES = 7
 EXIT_HOLD_FAILED = 8
 # The client cannot measure what this mode measures, in either of the two shapes
 # that refusal takes: it publishes no ``latest_request_timing`` at all, or it
-# publishes it and leaves it empty on the frame being sampled.  Both mean there
-# is no request age to record, so the rtt run is refused instead of writing a CSV
-# of empty timing cells -- and one code covers both, because the caller sees one
-# outcome and one remedy.  Two probes split the two shapes and neither subsumes
-# the other.  ``missing_client_capabilities`` asks "is the face there?" in
-# ``main``, after ``connect()`` returned and ahead of ``_prime_state_only_window``,
-# so a client without the face is refused before a request window is spent on it.
-# ``unfilled_client_capabilities`` asks "is that face filled?" in
-# ``collect_rtt_samples``, on every growth of ``observation_sequence`` and ahead of
-# that frame's ``rows.append``: a fresh frame is what makes an empty face tellable
-# from one the host has not timed yet, and probing before the append is what keeps
-# an empty row -- and the CSV header -- from being written.
+# publishes it without the keys rtt reads (absent, ``None``, non-finite, empty
+# token -- a half-filled face is refused as well as an all-empty one).  Both mean
+# there is no request age to record, so the rtt run is refused instead of writing
+# a CSV of empty timing cells -- and one code covers all of them, because the
+# caller sees one outcome and one remedy.  Three moments share the code and are
+# named apart on stderr:
+#   * ``missing_client_capabilities`` asks "is the face there?" in ``main``, after
+#     ``connect()`` returned and ahead of ``_prime_state_only_window``, so a client
+#     without the face is refused before a request window is spent on it;
+#   * ``unfilled_client_capabilities`` asks "does the face carry
+#     ``REQUIRED_REQUEST_TIMING_KEYS``?" in ``collect_rtt_samples``, on every
+#     growth of ``observation_sequence`` and ahead of that frame's
+#     ``rows.append``: a fresh frame is what makes an unfilled face tellable from
+#     one the host has not timed yet, and probing before the append is what keeps
+#     an empty row -- and the CSV header -- from being written;
+#   * the same probe runs once more at the moment the loop gives up: a frozen
+#     ``observation_sequence`` never grows, so the per-growth probe never fires,
+#     and without the give-up probe an untimed face would be reported as a
+#     sampling-budget problem (7) instead of a capability one (9).  A face that
+#     *does* carry the keys still ends in 7 there.
 EXIT_CLIENT_UNSUPPORTED = 9
 
 # One commanded step never exceeds this many degrees.
@@ -405,6 +425,17 @@ DEFAULT_CONTROL_HZ = 50.0
 # estimate stops being a network measurement (see module docstring, "Sampling
 # pace vs. network round trip").  Only warns; nothing changes in the rows.
 RTT_RATE_WARNING_HZ = 200.0
+# Lower bound on the wait of a poll that grew no row, for every period: a direct
+# caller can hand in a ``rate_hz`` that is non-finite or non-positive (a wait of
+# ``0.0`` would reopen the full-speed ``get_observation`` poll the idle arm
+# exists to prevent), and a finite but huge rate (``--rate-hz 1e9``) gives a
+# ``period_s`` far below what the wall clock honours.  Both are clamped to this
+# floor, so no idle wait is shorter than it.
+# 1 ms is the *lower* bound and not a second sampling rate: it sits two orders
+# below the 20 ms host loop period and below every period this measurement uses,
+# so a loop waiting 1 ms already polls at 1 kHz -- such a caller has no request
+# rhythm to follow, and repeating frames are not worth polling that finely.
+IDLE_POLL_FLOOR_S = 1e-3
 DEFAULT_SAMPLES = 500
 DEFAULT_TIMEOUT_S = 30.0
 DEFAULT_DELTA_DEG = 1.0
@@ -492,6 +523,17 @@ HOST_METADATA_SCHEMA_VERSION = 2
 # semantically different neighbour (``latest_safety_status``) is refused with
 # ``EXIT_CLIENT_UNSUPPORTED`` rather than sampled into empty columns.
 CLIENT_CAPABILITIES = ("latest_request_timing",)
+# The keys of ``latest_request_timing`` rtt mode actually consumes, i.e. the
+# *necessary* set a face has to carry before a row may be built from it.  Taken
+# from the consumers, never from "whatever the client happens to publish": a
+# newer client may add fields, and an extra key must not refuse a run.
+#   * ``_request_row`` (measure_latency.py:1351, token at :1362, stamps at
+#     :1378-1379, age at :1380) reads ``token``, ``sent_monotonic_s``,
+#     ``received_monotonic_s`` and ``age_s``;
+#   * ``net_rtt_estimate_s`` (measure_latency.py:830) reads ``age_s``.
+# The host stamps that estimator also subtracts live on ``latest_host_timing``,
+# which is a different face, so they are not in this set.
+REQUIRED_REQUEST_TIMING_KEYS = ("token", "sent_monotonic_s", "received_monotonic_s", "age_s")
 
 
 # The class name is frozen by tests/benchmarks: renaming it would break the
@@ -529,6 +571,22 @@ def _finite_or_none(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if math.isfinite(number) else None
+
+
+def _request_token_text(token: Any) -> str:
+    """The text ``_request_row`` writes into the ``token`` cell.
+
+    Shared with the half-filled probe on purpose: a token that converts to an
+    empty string is exactly the token that lands as an empty CSV cell, so
+    "is it filled?" has to judge the same text the row writes.
+    """
+    if isinstance(token, bytes):
+        # The client stores the request token as bytes; decode before it reaches
+        # a dict/CSV so the cell is text and not ``b'...'``.
+        return token.decode("ascii", errors="replace")
+    if token is None:
+        return ""
+    return str(token)
 
 
 def _observation_sequence(client: Any) -> int | None:
@@ -925,36 +983,106 @@ def missing_client_capabilities(
 # name is part of the contract, and ``Unfilled`` is the word that keeps this
 # refusal apart from a missing capability face.
 class UnfilledClientCapability(RuntimeError):  # noqa: N818
-    """Raised when a capability face exists but has never been filled in."""
+    """Raised when a capability face exists but has never been filled in.
 
-    def __init__(self, names: Sequence[str]) -> None:
+    ``names`` keeps the meaning it always had -- the faces the probe named -- so
+    ``UnfilledClientCapability(["latest_request_timing"])`` still constructs and
+    ``.names`` still lists the face.  ``missing_keys`` says *which* cells of those
+    faces hold nothing, which is the part the operator can act on: "the client is
+    broken" is not actionable, "``age_s`` is missing" is.
+    """
+
+    def __init__(self, names: Sequence[str], missing_keys: Sequence[str] = ()) -> None:
         self.names = tuple(names)
-        super().__init__(f"{', '.join(self.names)} is published but never filled")
+        self.missing_keys = tuple(missing_keys)
+        message = f"{', '.join(self.names)} is published but never filled"
+        if self.missing_keys:
+            message += f" (missing key(s): {', '.join(self.missing_keys)})"
+        super().__init__(message)
+
+
+def missing_request_timing_keys(timing: Any) -> tuple[str, ...]:
+    """The ``REQUIRED_REQUEST_TIMING_KEYS`` that ``timing`` holds nothing usable for.
+
+    Empty means the face can build a real row; non-empty means it cannot, and the
+    result names exactly which cells would come out empty (or ``NaN``).  A key
+    counts as missing when
+
+    * it is absent from the face, or its value is ``None`` -- what
+      ``_request_row`` writes as an empty cell;
+    * it is one of the three stamps/ages and is not a finite number -- what
+      ``net_rtt_estimate_s`` turns into ``NaN`` (``_finite_or_none``);
+    * it is ``token`` and converts to the empty string -- an empty token cell.
+
+    All three shapes are the same defect from the operator's side: the face says
+    "there was a timed request" while the fields it holds cannot support that
+    claim, so a measurement of zero gets written where no measurement exists.
+
+    Pure and offline: the face is read, never sampled or mutated.  A face that is
+    not a mapping reports every necessary key as missing, because nothing can be
+    read from it.
+    """
+    if not isinstance(timing, Mapping):
+        return REQUIRED_REQUEST_TIMING_KEYS
+    missing: list[str] = []
+    for key in REQUIRED_REQUEST_TIMING_KEYS:
+        value = timing.get(key)
+        unusable = (
+            not _request_token_text(value) if key == "token" else _finite_or_none(value) is None
+        )
+        if unusable:
+            missing.append(key)
+    return tuple(missing)
+
+
+def _capability_face_filled(name: str, value: Any) -> bool:
+    """Whether one capability face holds what its consumer reads.
+
+    ``latest_request_timing`` is judged key by key
+    (``missing_request_timing_keys``): a *non-empty* face that misses one of the
+    four necessary keys still writes an empty or ``NaN`` cell, so "not empty" is
+    not a high enough bar.  Every other face name keeps the truthiness test the
+    probe always used.
+    """
+    if name == "latest_request_timing":
+        return not missing_request_timing_keys(value)
+    return bool(value)
 
 
 def unfilled_client_capabilities(
     client: Any, names: Sequence[str] = CLIENT_CAPABILITIES
 ) -> list[str]:
-    """The client attributes of ``names`` that exist but hold nothing.
+    """The client attributes of ``names`` that exist but fill nothing usable.
 
     The *second* capability probe.  ``missing_client_capabilities`` asks whether
-    the face exists; this one asks whether the face it found is filled -- a
-    client can publish ``latest_request_timing`` and leave it ``{}`` for the
-    whole run (a half-implemented vendor build, a frame the host did not time).
+    the face exists; this one asks whether the face it found carries what the rtt
+    row reads -- a client can publish ``latest_request_timing`` and leave it
+    ``{}`` for the whole run (a half-implemented vendor build, a frame the host
+    did not time), or carry only part of it (a token but no ``age_s``).
     ``_request_row`` reads that face as ``dict(client.latest_request_timing or {})``,
     so an empty face would be written out as empty ``token``/stamp/``age_s``
-    cells (a ``NaN`` lands only in ``net_rtt_est_s``): a CSV that reads like a
+    cells (a ``NaN`` lands only in ``net_rtt_est_s``), and a half-filled one as a
+    *looks*-timed row with the same empty cells: a CSV that reads like a
     measurement instead of like a missing one.  The caller therefore refuses the
     run with ``EXIT_CLIENT_UNSUPPORTED``, naming the face as empty rather than
     absent.
+
+    "Filled" is therefore key-based for ``latest_request_timing``: the face has
+    to carry ``REQUIRED_REQUEST_TIMING_KEYS`` with usable values
+    (``missing_request_timing_keys``).  Extra keys are allowed -- the bar is "the
+    four are there", never "the face is exactly these four".
 
     Where the caller probes: on EVERY growth of ``client.observation_sequence``
     and before that frame's row is appended (``collect_rtt_samples``), not once
     at the first growth -- a face that is filled at the start and empties later
     would slip through a one-shot latch and be written out from then on.  The
-    price is the mirror case: a client whose *first* fresh frame is untimed is
-    refused as well, even when every later frame is timed.  That is a deliberate
-    strict trade-off (refusing a possibly legal client beats writing empty timing
+    same probe runs a second time at the moment the loop runs out of budget
+    (see ``collect_rtt_samples``): a frozen sequence never grows, so the
+    per-growth probe never runs and an untimed face would otherwise be reported
+    as a sampling-budget refusal.  The price of the per-growth strictness is the
+    mirror case: a client whose *first* fresh frame is untimed is refused as
+    well, even when every later frame is timed.  That is a deliberate strict
+    trade-off (refusing a possibly legal client beats writing empty timing
     rows), not an oversight; whether a real vendor client takes that shape is
     unverified.  A refused run writes no CSV at all -- not even a header -- because
     the check sits ahead of the first ``rows.append``, and ``main``'s ``finally``
@@ -965,7 +1093,24 @@ def unfilled_client_capabilities(
     first probe already refused an absent face; a defaulted ``None`` counts as
     unfilled.
     """
-    return [name for name in names if not getattr(client, name, None)]
+    return [
+        name for name in names if not _capability_face_filled(name, getattr(client, name, None))
+    ]
+
+
+def _unfilled_capability(client: Any) -> UnfilledClientCapability | None:
+    """The capability refusal to raise for the timing face, if it holds nothing usable.
+
+    Both probe moments (per growth, and at the give-up deadline of
+    ``collect_rtt_samples``) go through this one builder so they cannot drift
+    apart in wording or in which keys they report.
+    """
+    unfilled = unfilled_client_capabilities(client)
+    if not unfilled:
+        return None
+    return UnfilledClientCapability(
+        unfilled, missing_request_timing_keys(getattr(client, "latest_request_timing", None))
+    )
 
 
 def _prime_state_only_window(client: Any) -> None:
@@ -1119,8 +1264,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     # ranges are checked here so no socket is ever opened for them.
     if args.samples < 1:
         parser.error(f"--samples must be >= 1 (got {args.samples})")
-    if args.rate_hz <= 0.0:
-        parser.error(f"--rate-hz must be > 0 (got {args.rate_hz})")
+    # Finiteness and sign together, in the same ``not (a and b)`` shape as
+    # ``--control-hz`` below: ``--rate-hz`` is the period ``collect_rtt_samples``
+    # paces on and the rate the prefetch/queue terms are gated with, and ``inf``
+    # is ``> 0`` while ``nan`` makes every comparison false.  Letting either
+    # through degenerates ``period_s`` to ``0.0``, i.e. the full-speed poll loop
+    # the frozen-sequence arm of that loop exists to prevent.
+    if not (math.isfinite(args.rate_hz) and args.rate_hz > 0.0):
+        parser.error(f"--rate-hz must be a finite number > 0 (got {args.rate_hz})")
     # Two judgements on purpose, and the first one is load-bearing: ``inf`` is
     # ``>= 1.0`` and ``1 / inf == 0.0``, so a finiteness-blind check let
     # ``--control-hz inf`` (and ``1e400``, which argparse parses to ``inf``)
@@ -1133,6 +1284,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error(f"--request-window must be >= 1 (got {args.request_window})")
     if args.host_loop_hz <= 0.0:
         parser.error(f"--host-loop-hz must be > 0 (got {args.host_loop_hz})")
+    # ``--timeout-s`` is the only stop condition of the rtt loop
+    # (``deadline_s = start_s + timeout_s``): ``inf`` never arrives and ``nan``
+    # makes ``now_s >= deadline_s`` false forever, so a frozen sequence would run
+    # until the operator kills the process.  ``0`` and negative values expire the
+    # budget before the first frame, and the give-up probe deliberately keeps that
+    # shape as ``InsufficientSamples`` (7) -- a capability gap would be reported
+    # as a sampling-budget problem.  Same finiteness shape as ``--control-hz``.
+    if not (math.isfinite(args.timeout_s) and args.timeout_s > 0.0):
+        parser.error(f"--timeout-s must be a finite number > 0 (got {args.timeout_s})")
     # Tracking knobs: a zero step count commands nothing while looking like a
     # run, and a non-positive settle budget or a negative tolerance makes the
     # settle judgement meaningless.
@@ -1199,15 +1359,7 @@ def _request_row(
 ) -> dict[str, Any]:
     timing = dict(client.latest_request_timing or {})
     host_timing = client.latest_host_timing
-    token = timing.get("token")
-    if isinstance(token, bytes):
-        # The client stores the request token as bytes; decode before it reaches
-        # a dict/CSV so the cell is text and not ``b'...'``.
-        token = token.decode("ascii", errors="replace")
-    elif token is None:
-        token = ""
-    else:
-        token = str(token)
+    token = _request_token_text(timing.get("token"))
     # The RAW window and the requested rate go in: ``net_rtt_estimate_s`` owns
     # both gates.  Passing an already gated window here would also gate the
     # prefetch term, i.e. it would hide exactly the wait that dominates when the
@@ -1255,7 +1407,9 @@ def collect_rtt_samples(
     """Collect one row per *growth* of ``client.observation_sequence``.
 
     Repeated frames are skipped instead of counted twice, and a sequence that
-    never grows ends in ``InsufficientSamples`` rather than a short CSV.
+    never grows ends in ``InsufficientSamples`` rather than a short CSV -- unless
+    the timing face itself is unusable, in which case the give-up moment below
+    reports the capability refusal instead.
 
     ``rows_out``, when given, is the very list the rows are appended to, so a
     caller that catches an exception raised out of this loop (``KeyboardInterrupt``
@@ -1265,7 +1419,19 @@ def collect_rtt_samples(
     The loop paces against an absolute deadline: sample ``n`` is due at
     ``start + n / rate_hz``, so a blocking read is charged to the period instead
     of being added on top of it (sleeping one whole period after every read
-    would cap the achieved rate at ``1 / (read + period)``).
+    would cap the achieved rate at ``1 / (read + period)``).  A poll that
+    produced no fresh frame waits one *full* period before the next one: the row
+    target cannot advance without a row, so the old arithmetic
+    (``start + len(rows) * period``) collapsed onto ``start`` at ``len(rows) ==
+    0`` (and onto its last value once the sequence froze mid-run), i.e.
+    ``pause_s <= 0`` and the loop polled at whatever speed the client answered
+    -- measured at ~4.3e6 ``get_observation`` calls/s on a frozen sequence before
+    this arm existed.  With a fresh row the target is exactly the row's own
+    sampling instant, unchanged.  An idle poll waits ``max(period_s,
+    IDLE_POLL_FLOOR_S)``: the floor bounds *every* rate's wait (a huge finite
+    rate such as ``--rate-hz 1e9`` gave a 1 ns wait before) and is the whole
+    wait when ``rate_hz`` gives no usable period (non-finite or non-positive,
+    refused for the CLI by ``parse_args`` but reachable by a direct caller).
 
     ``request_window`` and ``rate_hz`` reach the row unconverted: the queue and
     prefetch terms of ``net_rtt_estimate_s`` own their own gates, so a row can
@@ -1274,12 +1440,39 @@ def collect_rtt_samples(
 
     The second capability probe runs at *every* growth of
     ``observation_sequence`` and before that frame's row is appended
-    (``unfilled_client_capabilities``): a face that exists and is empty is only
-    distinguishable from one the host has not timed yet once a fresh frame has
-    arrived, and refusing there keeps the run from writing a row -- or a CSV --
-    of empty timing cells.  Probing per growth and not once is deliberate: a face
-    that is filled on the first frames and empties later would slip past a
-    one-shot latch and be written out from the frame it emptied on.
+    (``unfilled_client_capabilities``): a face that exists and holds nothing
+    usable is only distinguishable from one the host has not timed yet once a
+    fresh frame has arrived, and refusing there keeps the run from writing a row
+    -- or a CSV -- of empty timing cells.  Probing per growth and not once is
+    deliberate: a face that is filled on the first frames and empties later
+    would slip past a one-shot latch and be written out from the frame it
+    emptied on.  "Holds nothing usable" is key-based, not "is the dict empty":
+    a face missing one of ``REQUIRED_REQUEST_TIMING_KEYS`` is refused here too
+    (a half-filled face would write the same empty/``NaN`` cells).
+
+    The same probe runs a second time at the moment the loop gives up: that is
+    the only point where a capability gap can be told from a genuinely short
+    budget, and only this ordering tells them apart:
+
+    * on the give-up moment (``now >= deadline``) the timing face is probed
+      *before* choosing the exception: unusable face -> ``UnfilledClientCapability``
+      (with the missing keys), usable face -> ``InsufficientSamples``.  A
+      sequence frozen for the whole run never grows, so the per-growth probe
+      never fires; without this one a client that publishes an untimed face
+      would be reported as a sampling-budget problem (exit 7) and sent to
+      ``--timeout-s`` / ``--samples`` instead of to the client.  The probe needs
+      at least one frame of this run: a budget that expired before the first
+      ``get_observation`` leaves the face unwritten by this loop, which says
+      nothing about the client, so that run keeps ``InsufficientSamples``;
+    * the per-growth probe is unchanged and stays where it is, so a client that
+      *does* grow keeps being refused on the frame whose face is unusable, before
+      that frame's row exists.
+
+    A genuinely short run keeps ``InsufficientSamples``: a filled face with a
+    frozen sequence (a dead feedback link, not a capability gap) still gives
+    exit 7.  The give-up answer costs the whole budget to arrive -- the loop can
+    only know a sequence never grew once the deadline has passed -- so a frozen,
+    untimed run is reported as 9 only after ``--timeout-s``, not immediately.
 
     The cost of that strictness is the mirror case, accepted on purpose: a client
     whose *first* fresh frame carries no timing is refused too, even when every
@@ -1299,25 +1492,49 @@ def collect_rtt_samples(
     sleep_fn = time.sleep if sleep is None else sleep
     clock_fn = time.monotonic if clock is None else clock
     period_s = 1.0 / rate_hz if rate_hz > 0 else 0.0
+    # The wait of a poll that grew no row: never below ``IDLE_POLL_FLOOR_S``.
+    # ``period_s`` is the interval to pace against when it is finite and positive,
+    # but a huge rate makes it far too fine to wait on (``--rate-hz 1e9`` gives
+    # 1 ns), and a direct caller can pass ``rate_hz=nan``/``inf`` -- both land on
+    # ``0.0`` here, which would make the wait zero and the loop poll at the
+    # client's maximum speed.  Both shapes get the floor.
+    period_usable = math.isfinite(period_s) and period_s > 0.0
+    idle_pause_s = max(period_s, IDLE_POLL_FLOOR_S) if period_usable else IDLE_POLL_FLOOR_S
     start_s = clock_fn()
     deadline_s = start_s + timeout_s
     last_sequence = client.observation_sequence
     rows: list[dict[str, Any]] = [] if rows_out is None else rows_out
+    observed = 0
 
     while len(rows) < samples:
         now_s = clock_fn()
         if now_s >= deadline_s:
+            # The give-up moment: budget is over and no more rows are coming.
+            # Before blaming the budget, ask whether this client can be measured
+            # at all -- a sequence that never grew hides an unfilled face from the
+            # per-growth probe below, and "insufficient samples" would send the
+            # operator to --timeout-s instead of to the client.  A *filled* face
+            # still ends in InsufficientSamples here (a dead feedback link is not
+            # a capability gap), and so does a budget that expired before the
+            # first frame: a face no frame ever wrote says nothing about the
+            # client, only that this run asked it for nothing.
+            if observed > 0:
+                refusal = _unfilled_capability(client)
+                if refusal is not None:
+                    raise refusal
             raise InsufficientSamples(required=samples, collected=len(rows))
         client.get_observation(include_cameras=False)
+        observed += 1
         sequence = client.observation_sequence
-        if sequence > last_sequence:
+        grew = sequence > last_sequence
+        if grew:
             last_sequence = sequence
             # Strictly per growth, and before the row: a face that empties in the
             # middle of a run must never reach the CSV as an empty timing row.  A
             # first frame without timing is refused as well (see docstring).
-            unfilled = unfilled_client_capabilities(client)
-            if unfilled:
-                raise UnfilledClientCapability(unfilled)
+            refusal = _unfilled_capability(client)
+            if refusal is not None:
+                raise refusal
             rows.append(
                 _request_row(
                     client,
@@ -1331,7 +1548,11 @@ def collect_rtt_samples(
             if len(rows) >= samples:
                 break
         # Only top up to the next absolute deadline, never past the run budget.
-        target_s = start_s + len(rows) * period_s
+        # A frame that grew targets its own sampling instant; a frame that did
+        # not has no instant to target, so it waits ``idle_pause_s`` -- one whole
+        # period, floored at ``IDLE_POLL_FLOOR_S`` -- instead of collapsing onto
+        # ``start_s`` (which would mean ``pause_s <= 0`` and a spin).
+        target_s = start_s + len(rows) * period_s if grew else now_s + idle_pause_s
         pause_s = min(target_s - now_s, deadline_s - now_s)
         if pause_s > 0.0:
             sleep_fn(pause_s)
@@ -1466,17 +1687,24 @@ def _run_rtt_mode(client: Any, args: argparse.Namespace) -> int:
         # Caught ahead of the generic ``Exception`` below: this is a capability
         # refusal, not a dead transport, and it shares exit code 9 with the
         # absent-face refusal.  The wording is the only thing that tells the two
-        # apart, so it names the face as empty and never reuses the "publishes
-        # no ..." sentence of ``main``: an operator has to read "upgrade the
-        # client" and "find out why the host stopped timing requests" apart.
+        # apart, so it names the face as unfilled -- never the "publishes no ..."
+        # sentence of ``main`` -- and it names the keys that face is missing: a
+        # half-filled face is only actionable when the operator sees *which* cell
+        # would have been blank.  It also never says "insufficient samples": a
+        # frozen sequence reaches this branch from the give-up moment, and the
+        # operator has to be sent to the client, not to ``--timeout-s``.
+        missing_keys = (
+            "" if not exc.missing_keys else "; missing key(s): " + ", ".join(exc.missing_keys)
+        )
         print(
             "unsupported client: it publishes "
             + ", ".join(exc.names)
-            + " but never fills it, so rtt cannot be measured.\n"
-            "  The attribute is there and stays an empty dict, so the request age has no\n"
-            "  value to report: a run would write empty token, stamp and age cells that\n"
-            "  read like a measurement.  Fix the client (or the host that stopped timing\n"
-            "  requests) and re-run; no sample was recorded and no CSV was written.",
+            + " but never fills it completely, so rtt cannot be measured.\n"
+            "  The face is there but not filled completely"
+            + missing_keys
+            + ", so a run would write empty token, stamp and age cells that read like a\n"
+            "  measurement.  Fix the client (or the host that stopped timing requests) and\n"
+            f"  re-run; no CSV was written ({len(rows)} collected row(s) were discarded).",
             file=sys.stderr,
         )
         return EXIT_CLIENT_UNSUPPORTED

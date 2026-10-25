@@ -90,6 +90,17 @@ must turn this file red):
   only at the first growth of ``observation_sequence`` must fail R11 (a face that
   empties from row 3 on would otherwise be written out as empty cells and the
   run would exit 0).
+* **half-filled timing face accepted** — a non-empty face missing one of the four
+  keys the row reads (``token`` / ``sent_monotonic_s`` /
+  ``received_monotonic_s`` / ``age_s``) must fail R20: exit 9, no CSV, and stderr
+  naming the missing key.  R21/R22 keep the other side green (all four keys, or
+  four plus extra ones, must stay measurable), so the probe cannot be turned into
+  "refuse anything that is not exactly these four keys".
+* **frozen sequence at 0 rows spins** — a pacing loop whose pause is
+  ``min(start + 0 * period - now, deadline - now)`` never sleeps, so the frozen
+  case polls at the client's maximum speed; R24 bounds the poll count and R23
+  requires that same run to be reported as a *capability* refusal (9), not as
+  "insufficient samples" (7), whenever the timing face is untimed.
 
 .. warning::
    ``send_action`` may only be *called* inside a tracking function of the module
@@ -3665,10 +3676,10 @@ def test_main_should_prime_the_state_only_window_in_tracking_mode(
 # put anything in it -- ``{}`` in ``__init__`` and nothing afterwards, a
 # half-implemented vendor build, or a frame the host did not time.
 # ``_request_row`` reads it as ``dict(client.latest_request_timing or {})``
-# (benchmarks/alohamini_io/measure_latency.py:1124), so an always-empty dict
+# (约 benchmarks/alohamini_io/measure_latency.py:1360), so an always-empty dict
 # becomes an all-empty timing row: ``""``/``NaN`` cells that read like a
 # measurement of zero.  So the capability probe needs a second question next to
-# ``missing_client_capabilities`` (measure_latency.py:881): *is the face it found
+# ``missing_client_capabilities`` (约 measure_latency.py:964): *is the face it found
 # actually filled?*  ``missing_client_capabilities`` itself stays a pure
 # ``hasattr`` check -- R2-R4 freeze that -- and the second probe is pinned below
 # from the outside, through ``main()``.
@@ -4095,12 +4106,13 @@ def test_main_should_not_use_the_absent_wording_when_the_timing_face_is_empty(
 # --- R15-R18: the second probe is a pure function --------------------------
 #
 # Symmetric to R2-R4 for ``missing_client_capabilities``.  Signature checked
-# against the source before writing (benchmarks/alohamini_io/measure_latency.py:
-# ``unfilled_client_capabilities(client: Any, names: Sequence[str] =
-# CLIENT_CAPABILITIES) -> list[str]``, body ``[name for name in names if not
-# getattr(client, name, None)]``): the ordering test therefore has to pass
-# ``names`` in a non-alphabetical order, and the purity tests have to get an
-# empty list back only for a face that carries something.
+# against the source before writing (``unfilled_client_capabilities`` at
+# 约 benchmarks/alohamini_io/measure_latency.py:1052, signature
+# ``(client: Any, names: Sequence[str] = CLIENT_CAPABILITIES) -> list[str]``,
+# body ``[name for name in names if not getattr(client, name, None)]``): the
+# ordering test therefore has to pass ``names`` in a non-alphabetical order, and
+# the purity tests have to get an empty list back only for a face that carries
+# something.
 
 
 def test_unfilled_client_capabilities_should_be_empty_when_the_face_is_filled(
@@ -4238,14 +4250,15 @@ def test_collect_rtt_samples_should_append_no_row_for_the_frame_it_refuses(laten
 # ===========================================================================
 #
 # Gate F has two segments in ``_tracking_preflight``
-# (benchmarks/alohamini_io/measure_latency.py:1427): the schema check
-# (``schema_version == 2``) and the unit check ``deg_per_unit(metadata,
-# joint_key)`` (measure_latency.py:1507, raising ``UnitConversionUnavailable``
-# from ``deg_per_unit`` at 538).  G2 above locks the first segment; the variants
-# below lock the second one end to end through ``main()``, because the refusal
-# text is what a field operator reads when the robot does not move.
+# (约 benchmarks/alohamini_io/measure_latency.py:1779): the schema check
+# (``schema_version == 2``, 约 measure_latency.py:1849) and the unit check
+# ``deg_per_unit(metadata, joint_key)`` (约 measure_latency.py:1859, raising
+# ``UnitConversionUnavailable`` from ``deg_per_unit`` at 约
+# measure_latency.py:621).  G2 above locks the first segment; the variants below
+# lock the second one end to end through ``main()``, because the refusal text is
+# what a field operator reads when the robot does not move.
 #
-# What ``deg_per_unit`` actually reads (measure_latency.py:538-620), verified
+# What ``deg_per_unit`` actually reads (约 measure_latency.py:621-701), verified
 # against the source before writing these cases: ``normalization`` (optional,
 # absent is read as ``range_m100_100``), ``range_min``, ``range_max`` and
 # ``resolution``.  It does **not** read ``homing_offset`` -- that field belongs to
@@ -4369,10 +4382,10 @@ def test_main_should_still_measure_rtt_when_the_conversion_fields_are_incomplete
     """rtt never reads the calibration, so a broken entry cannot refuse it.
 
     Recorded as *current* behaviour, not as a rule to keep:
-    ``collect_rtt_samples`` (measure_latency.py:1168) and ``_run_rtt_mode``
-    (measure_latency.py:1339) measure the age of the last request; the only
+    ``collect_rtt_samples`` (约 measure_latency.py:1396) and ``_run_rtt_mode``
+    (约 measure_latency.py:1666) measure the age of the last request; the only
     readers of ``client.latest_robot_metadata`` in the script are
-    ``_tracking_preflight`` (measure_latency.py:1455) and the tracking report,
+    ``_tracking_preflight`` (约 measure_latency.py:1779) and the tracking report,
     and rtt does no unit conversion at all.  A payload that Gate F refuses under
     ``--mode tracking`` is therefore simply not consulted here and the run
     succeeds.  Asserted so the mode split is on the record: if rtt ever starts
@@ -4403,3 +4416,749 @@ def test_main_should_still_measure_rtt_when_the_conversion_fields_are_incomplete
     )
     assert out.is_file(), f"the rtt run wrote no CSV at {out}"
     assert client.send_action_calls == 0, "rtt mode must stay motion-free"
+
+
+# ===========================================================================
+# V. Capability, third probe: a half-filled timing face is refused
+# ===========================================================================
+#
+# Section T asked "is the face filled?" and settled for ``not getattr(client,
+# name, None)``: anything non-empty passes.  That reading has a third blind spot,
+# and it is the one this section freezes: a dict that carries only *some* of the
+# keys the rtt row reads.
+#
+# Two consumers of ``latest_request_timing`` decide which keys are necessary:
+#
+# * ``_request_row`` (约 benchmarks/alohamini_io/measure_latency.py:1351) reads
+#   ``token``, ``sent_monotonic_s``, ``received_monotonic_s`` and ``age_s``;
+# * ``net_rtt_estimate_s`` (约 benchmarks/alohamini_io/measure_latency.py:830)
+#   reads ``age_s`` (约 measure_latency.py:861) -- the host stamps it also subtracts live on
+#   ``latest_host_timing``, which is a different face.
+#
+# So the necessary key set is exactly those four (``_MISSING_TIMING_KEYS``): a
+# face missing any one of them cannot produce a readable measurement.  Today the
+# non-empty probe lets such a face through, so the run reports success and the
+# CSV holds rows whose ``age_s`` cell is empty (missing ``age_s``), whose
+# ``sent_monotonic_s`` / ``received_monotonic_s`` / ``token`` cells are empty
+# (missing one of those) and whose ``net_rtt_*`` cells are ``NaN`` while
+# ``host_timing_missing`` still reads ``False`` -- a file that looks like a
+# measurement of zero.
+#
+# The cases below drive the shape from the outside through ``main()``: the
+# refusal section T already owns (exit ``EXIT_CLIENT_UNSUPPORTED``, no CSV at
+# all) plus the one thing the half-filled case needs on top of it -- stderr has to
+# *name the missing key*, because "the client is broken" is not actionable while
+# "``latest_request_timing`` has no ``age_s``" is.
+
+# The four keys the rtt row consumes; the parametrisation drops one at a time.
+_MISSING_TIMING_KEYS = ("token", "sent_monotonic_s", "received_monotonic_s", "age_s")
+
+# The two substrings ``_run_rtt_mode`` wraps the missing-key list in
+# (约 benchmarks/alohamini_io/measure_latency.py:1666): the line it prints is
+# ``...; missing key(s): <keys>, so a run would write empty token, stamp and age
+# cells ...``.  They are *implementation contract*: if the refusal is reworded,
+# both move with it.
+#
+# Why the list has to be bounded at all: the explanation that follows it names
+# ``token`` / ``stamp`` / ``age`` in prose, so a bare ``key in stderr`` is green
+# for ``token`` even when the refusal reports no key whatsoever -- the fake green
+# this section was written to close.
+_MISSING_KEYS_MARKER = "missing key(s):"
+_MISSING_KEYS_TERMINATOR = ", so "
+
+
+def _missing_key_clause(stderr: str) -> str:
+    """The part of ``stderr`` that lists the keys the half-filled face misses.
+
+    Everything between ``_MISSING_KEYS_MARKER`` and the ``_MISSING_KEYS_TERMINATOR``
+    join (or the end of the line, whichever comes first), stripped: for the
+    current wording that is exactly ``"age_s"`` / ``"token"`` /
+    ``"sent_monotonic_s"`` / ``"received_monotonic_s"``, never the boilerplate
+    sentence.  An absent marker yields the empty string, so a refusal that names
+    no key at all cannot satisfy any containment check made on the clause.
+
+    Only the two constants above are assumed about the wording: the separator
+    inside the key list, the punctuation after it and the rest of the sentence
+    are not.  The key-list separator *is* assumed one step later, by
+    ``_missing_key_names``.
+    """
+    clause = stderr.partition(_MISSING_KEYS_MARKER)[2]
+    for terminator in (_MISSING_KEYS_TERMINATOR, "\n"):
+        clause = clause.partition(terminator)[0]
+    return clause.strip()
+
+
+def _missing_key_names(stderr: str) -> set[str]:
+    """The key names the missing-key clause lists, as a set.
+
+    Parsing rules, each chosen to fail *closed* rather than open:
+
+    * the input is ``_missing_key_clause(stderr)`` -- marker to terminator (or
+      end of line), stripped.  An absent marker gives ``""`` and therefore
+      ``set()``, which equals no expected key set at all;
+    * the clause is split on ``", "``, the separator ``", ".join(...)`` puts
+      between two keys in ``_run_rtt_mode``.  A comma without a space does not
+      split, so the unsplit remainder stays one item and is not a key name;
+    * every item is stripped and empty items are dropped, so a stray separator
+      at either end does not invent a key;
+    * nothing else is dropped.  Prose residue is deliberately *kept*: if the
+      terminator disappears, the clause runs to the end of the line and the
+      sentence that spells ``token`` / ``stamp`` / ``age`` out in prose lands in
+      the set -- the equality is red instead of ``token`` quietly going green on
+      that prose.
+
+    So the result is ``{"<key>"}`` only when the clause is a bare list holding
+    exactly that one key name.
+    """
+    clause = _missing_key_clause(stderr)
+    return {item.strip() for item in clause.split(", ") if item.strip()}
+
+
+class _ClientWithPartialTiming(_FakeClient):
+    """``_FakeClient`` with one key removed from the timing face after every frame.
+
+    ``_FakeClient`` fills all four keys on every ``get_observation``; this
+    subclass pops ``dropped_key`` afterwards, so the face is *non-empty* (section
+    T's probe is satisfied) and *incomplete* (the row that would be written has an
+    empty cell or a ``nan``).  Key removal, not ``{key: None}``: an absent key is
+    what a half-implemented client leaves behind, and it is also the shape that
+    makes the "name the missing key" requirement checkable.
+
+    Defaults are untouched -- the base fake still fills every key.
+    """
+
+    def __init__(self, *, dropped_key: str, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._dropped_key = dropped_key
+
+    def get_observation(self, include_cameras: bool = True) -> dict:
+        """Take the frame the base fake builds, then drop the scripted key."""
+        state = super().get_observation(include_cameras=include_cameras)
+        self.latest_request_timing.pop(self._dropped_key, None)
+        return state
+
+
+@pytest.mark.parametrize("dropped_key", _MISSING_TIMING_KEYS)
+def test_main_should_refuse_rtt_when_the_timing_face_misses_a_key(
+    latency, tmp_path, capsys, dropped_key: str
+) -> None:
+    """R20: a face holding three of the four keys is refused, and the key is named.
+
+    Locked assertions, and why each one is here:
+
+    * exit ``EXIT_CLIENT_UNSUPPORTED`` (9): at the time of writing the run exits
+      0 and writes a CSV, i.e. a half-filled face is accepted as a measurement;
+    * the CSV does not exist -- a refused run writes nothing, not even a header,
+      for the same reason R8/R11 require it;
+    * stderr names the face (``latest_request_timing``, as in R8/R11/R14) *and*
+      the missing key, so the operator can tell which cell would have been blank
+      instead of guessing which of the four the client does not fill.  The key has
+      to be named *inside the missing-key clause* (``_missing_key_clause``), not
+      merely somewhere in stderr: the explanation that follows the clause spells
+      ``token`` / ``stamp`` / ``age`` out in prose, so a bare containment check was
+      green for ``token`` even when the refusal reported no key at all.  The clause
+      boundary is the implementation contract documented at
+      ``_MISSING_KEYS_MARKER`` / ``_MISSING_KEYS_TERMINATOR`` and has to move with
+      the wording in ``_run_rtt_mode``.
+    * the set of keys parsed out of that clause is *exactly* ``{dropped_key}``
+      (``_missing_key_names``), not merely a set that contains it: a refusal that
+      always lists all four keys (the ``"token"`` / ``"received_monotonic_s"``
+      cases would stay green on containment alone, the other two go red) and a
+      clause whose terminator vanished (it would then swallow the prose sentence
+      and go green for ``token`` again) both fail this one.  Containment stays as
+      the first, more legible message; the equality is the assertion that locks
+      the shape.
+
+    Nothing here names an implementation constant: the four keys are the ones
+    ``_request_row`` / ``net_rtt_estimate_s`` consume, and the test only states
+    that dropping one of them must not produce a measurement.
+
+    ``--timeout-s 0.3`` and 200 Hz: the run must be over quickly whichever way it
+    goes (three paced frames today, one refused frame after the fix), and the
+    budget is loose enough that a refusal may look at more than one frame.
+    """
+    client = _ClientWithPartialTiming(dropped_key=dropped_key, ages=[0.030, 0.031, 0.032])
+    out = tmp_path / f"half-filled-{dropped_key}.csv"
+
+    code = latency.main(
+        [
+            "--host",
+            "127.0.0.1",
+            "--mode",
+            "rtt",
+            "--samples",
+            "3",
+            "--rate-hz",
+            "200",
+            "--timeout-s",
+            "0.3",
+            "--csv",
+            str(out),
+        ],
+        client_factory=_Factory(client),
+    )
+    captured = capsys.readouterr()
+
+    assert code == latency.EXIT_CLIENT_UNSUPPORTED, (
+        f"a timing face without {dropped_key!r} was accepted as a measurement: exit "
+        f"{code} (expected 9), csv_exists={out.exists()}; stderr: {captured.err!r}"
+    )
+    assert not out.exists(), (
+        f"a run refused for a half-filled timing face still wrote {out}: a CSV built "
+        f"from a face without {dropped_key!r} holds empty/{'nan'} cells that read like "
+        "a measurement"
+    )
+    assert "latest_request_timing" in captured.err, (
+        f"stderr does not name the half-filled face: {captured.err!r}"
+    )
+    # The key has to be named *in the missing-key clause*, not merely somewhere in
+    # stderr: the wording that follows the clause spells ``token`` / ``stamp`` /
+    # ``age`` out in prose, so ``dropped_key in captured.err`` was green for
+    # ``token`` even with the key list deleted from the message (verified by
+    # mutation: dropping ``missing_keys`` from the refusal left the ``token`` case
+    # green and turned the other three red).
+    assert _MISSING_KEYS_MARKER in captured.err, (
+        "the refusal never says which keys are missing, so an operator cannot tell "
+        f"which cell would have been blank: {captured.err!r}"
+    )
+    clause = _missing_key_clause(captured.err)
+    assert dropped_key in clause, (
+        f"the missing-key clause does not name {dropped_key!r}: clause={clause!r}, "
+        f"stderr={captured.err!r}"
+    )
+    names = _missing_key_names(captured.err)
+    assert names == {dropped_key}, (
+        f"the missing-key clause does not name exactly {dropped_key!r}: "
+        f"keys={sorted(names)!r}, clause={clause!r}, stderr={captured.err!r}; a clause "
+        "that lists all four keys, lists none, or runs past its terminator into the "
+        "prose sentence must not read as 'exactly the one key that is missing'"
+    )
+
+
+def test_main_should_measure_rtt_when_the_timing_face_carries_all_four_keys(
+    latency, tmp_path
+) -> None:
+    """R21: the four keys are *sufficient* -- a legal client is not refused.
+
+    The other half of R20's rule, and the reason R20 cannot be satisfied by
+    refusing every client: ``_FakeClient`` fills exactly ``token`` /
+    ``sent_monotonic_s`` / ``received_monotonic_s`` / ``age_s``, so this is the
+    shape the necessity set has to let through.  Locked: exit 0, one CSV row per
+    ``--samples``, and non-empty ``token`` / ``age_s`` cells -- precisely the cells
+    the half-filled variants blank out.
+    """
+    client = _FakeClient(ages=[0.030, 0.031, 0.032])
+    out = tmp_path / "complete-timing.csv"
+
+    code = latency.main(
+        [
+            "--host",
+            "127.0.0.1",
+            "--mode",
+            "rtt",
+            "--samples",
+            "3",
+            "--rate-hz",
+            "200",
+            "--timeout-s",
+            "0.3",
+            "--csv",
+            str(out),
+        ],
+        client_factory=_Factory(client),
+    )
+
+    assert code == latency.EXIT_OK, (
+        f"a client that fills all four timing keys must stay measurable, got {code}"
+    )
+    assert out.is_file(), f"the rtt run wrote no CSV at {out}"
+    with out.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 3, f"expected one row per requested sample, got {len(rows)}"
+    for row in rows:
+        assert row["token"] != "", f"row {row['sample_index']} has an empty token: {row}"
+        assert row["age_s"] != "", f"row {row['sample_index']} has an empty age_s: {row}"
+
+
+# The four necessary keys plus two a newer client might add: a superset of the
+# necessity set, not a different one.
+_EXTRA_TIMING_KEYS = {
+    "token": b"tok-extra",
+    "sent_monotonic_s": 1000.0,
+    "received_monotonic_s": 1000.030,
+    "age_s": 0.030,
+    "sent_unix_ns": 1_700_000_000_000_000_000,
+    "attempts": 1,
+}
+
+
+class _ClientWithExtraTimingKeys(_FakeClient):
+    """The four necessary timing keys plus two a newer client might add."""
+
+    def get_observation(self, include_cameras: bool = True) -> dict:
+        """Overwrite the timing face with the six-key shape after the frame."""
+        state = super().get_observation(include_cameras=include_cameras)
+        self.latest_request_timing = dict(_EXTRA_TIMING_KEYS)
+        return state
+
+
+def test_main_should_measure_rtt_when_the_timing_face_carries_extra_keys(latency, tmp_path) -> None:
+    """R22: the necessary set is "these four", not "exactly these four".
+
+    A newer client may add keys (a unix stamp, a retry counter); the refusal has to
+    be "one of the four is missing", never "the face is not exactly the four keys"
+    -- otherwise the probe would reject every client that grows a field.  This case
+    is what keeps R20 from being implemented as an equality check.
+    """
+    client = _ClientWithExtraTimingKeys(ages=[0.030, 0.031, 0.032])
+    out = tmp_path / "extra-timing-keys.csv"
+
+    code = latency.main(
+        [
+            "--host",
+            "127.0.0.1",
+            "--mode",
+            "rtt",
+            "--samples",
+            "2",
+            "--rate-hz",
+            "200",
+            "--timeout-s",
+            "0.3",
+            "--csv",
+            str(out),
+        ],
+        client_factory=_Factory(client),
+    )
+
+    assert code == latency.EXIT_OK, (
+        f"a timing face carrying extra keys is still measurable, got {code}"
+    )
+    assert out.is_file(), f"the rtt run wrote no CSV at {out}"
+    with out.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 2, f"expected one row per requested sample, got {len(rows)}"
+    for row in rows:
+        assert row["age_s"] != "", f"row {row['sample_index']} has an empty age_s: {row}"
+
+
+# ===========================================================================
+# W. Frozen feedback: the exit code names the cause, and the loop sleeps
+# ===========================================================================
+#
+# Section E froze the *tracking* half of a dead link (``FEEDBACK_STALL_LIMIT``).
+# The rtt half has exactly one outcome today: a frozen
+# ``client.observation_sequence`` ends in ``InsufficientSamples`` -> exit 7
+# ("insufficient samples"), whatever it was that stood still.  That wording sends
+# the operator to ``--timeout-s`` / ``--samples``, while the cause can be the
+# client's capability: a client that publishes ``latest_request_timing`` and never
+# fills it produces the same frozen, row-less run, and section T's per-growth
+# probe cannot see it because there is no growth to probe on.
+#
+# Two things are frozen in this section.
+#
+# 1. **The exit code says which cause it was** (``_FROZEN_SEQUENCE_CASES`` below).
+#    Frozen sequence + a never-filled timing face is a *capability* refusal (9)
+#    whose stderr must not talk about "insufficient samples"; frozen sequence + a
+#    filled timing face stays 7.  Both run through ``main()`` with a 50 ms budget,
+#    so neither can be mistaken for a slow run.
+# 2. **The loop waits instead of spinning.**  The pacing arithmetic *was*
+#    ``target_s = start_s + len(rows) * period_s``, so with 0 rows
+#    ``target_s == start_s`` and ``pause_s <= 0``: no sleep was issued and the
+#    loop polled as fast as the client answers until the deadline.  The current
+#    arm of that line is ``... if grew else now_s + period_s``
+#    (约 benchmarks/alohamini_io/measure_latency.py:1555): a poll that grew no row
+#    waits one whole period instead of collapsing onto ``start_s``.  Measured on
+#    this workspace before the fix (``~/pi-workspace/tmp-measure-latency-red/
+#    spin_measure.py``, frozen sequence, real ``time.sleep``, 50 ms budget):
+#    216,888 ``get_observation`` calls, i.e. ~4.3 M calls/s.  The bound in
+#    ``test_collect_rtt_samples_should_bound_the_observation_calls_when_the_sequence_is_frozen``
+#    is 25 for a 100 ms budget at 100 Hz: it locks the *order of magnitude* of the
+#    wait against the ``--rate-hz`` period (one 10 ms period per poll, plus
+#    slack), not the shape of the sleep, and the spin it separates from that is
+#    three to four orders above it.
+
+
+# id -> (client builder, name of the exit code the run must return).  The two
+# cases sit side by side on purpose: they are one rule, and a fix that returns 9
+# whenever the sequence is frozen breaks the second one.
+_FROZEN_SEQUENCE_CASES: dict[str, tuple[Any, str]] = {
+    "untimed_timing_face": (
+        lambda: _ClientWithEmptyTiming(sequences=[0]),
+        "EXIT_CLIENT_UNSUPPORTED",
+    ),
+    "timed_timing_face": (lambda: _FakeClient(sequences=[1]), "EXIT_INSUFFICIENT_SAMPLES"),
+}
+
+# Words that belong to the sampling-budget refusal only.  The capability refusal
+# must not use them: "insufficient samples" is the sentence that sends the field
+# operator to the wrong knob.
+_BUDGET_WORDS = ("insufficient samples",)
+
+
+@pytest.mark.parametrize("case_id", list(_FROZEN_SEQUENCE_CASES), ids=list(_FROZEN_SEQUENCE_CASES))
+def test_main_should_tell_a_frozen_sequence_with_an_untimed_face_from_a_timed_one(
+    latency, tmp_path, capsys, case_id: str
+) -> None:
+    """R23: frozen + never-filled face exits 9 (not 7); frozen + filled stays 7.
+
+    The empty-face case is the defect: the sequence never grows, so section T's
+    per-growth probe never runs, ``InsufficientSamples`` is raised at the deadline
+    and ``main`` prints "insufficient samples" -- the run reports a sampling-budget
+    problem for what is a client-capability problem.  The sequence is therefore
+    pinned at *zero* (``sequences=[0]``, so ``observation_sequence`` is 0 on every
+    frame and never grows): with ``sequences=[1]`` the first frame would already
+    grow, and that shape is refused as unfilled today already (R8), i.e. it cannot
+    show this defect.
+
+    The filled-face case is the guard rail: a client whose timing is fine and whose
+    feedback is simply frozen is *not* a capability problem, so the fix must keep
+    answering 7 there.  Asserting both in one parametrisation is what makes "9 only
+    when the face is untimed" a testable rule instead of a guess.
+
+    Asserted per case: the exit code; no CSV on disk (neither refusal has a row to
+    write); and for the capability case only, stderr neither says "insufficient
+    samples" nor leaves the fault unnamed -- it has to name
+    ``latest_request_timing``, like every other exit-9 refusal (R8/R11/R14).
+    """
+    build, code_attr = _FROZEN_SEQUENCE_CASES[case_id]
+    expected_code = getattr(latency, code_attr)
+    client = build()
+    out = tmp_path / f"frozen-{case_id}.csv"
+
+    code = latency.main(
+        [
+            "--host",
+            "127.0.0.1",
+            "--mode",
+            "rtt",
+            "--samples",
+            "3",
+            "--rate-hz",
+            "100",
+            "--timeout-s",
+            "0.05",
+            "--csv",
+            str(out),
+        ],
+        client_factory=_Factory(client),
+    )
+    captured = capsys.readouterr()
+    lowered = captured.err.lower()
+
+    assert code == expected_code, (
+        f"a frozen sequence ({case_id}) must exit {expected_code}, "
+        f"got {code}; stderr: {captured.err!r}"
+    )
+    assert not out.exists(), f"a refused run wrote {out}"
+    if expected_code == latency.EXIT_CLIENT_UNSUPPORTED:
+        assert not any(word in lowered for word in _BUDGET_WORDS), (
+            "the capability refusal reuses the sampling-budget wording, so the operator "
+            f"is sent to --timeout-s / --samples instead of the client: {captured.err!r}"
+        )
+        assert "latest_request_timing" in captured.err, (
+            f"stderr does not name the face whose absence refused the run: {captured.err!r}"
+        )
+
+
+class _SleepDrivenClock:
+    """Clock that moves only when the script sleeps -- the way a real loop waits.
+
+    ``__call__`` never advances (a wall clock read costs nothing to the run), so a
+    loop that computes a non-positive pause and skips ``sleep`` never leaves the
+    iteration: its deadline can only be reached through the injected sleeper.
+    ``sleeps`` records every pause the script issued, which is what a bound on the
+    poll count is really about.
+    """
+
+    def __init__(self, start: float = 0.0) -> None:
+        self.now = start
+        self.sleeps: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        """Advance the fake clock by the pause the script asked for."""
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+class _SpinGuardClient(_FakeClient):
+    """``_FakeClient`` that raises instead of letting a spinning loop run forever.
+
+    The frozen-sequence case is an infinite loop unless the loop waits, so a plain
+    fake would hang the test instead of failing it.  The guard turns the spin into
+    a ``RuntimeError("spin")`` at a hard cap -- a red with a number in it, not a
+    hung CI job.
+    """
+
+    def __init__(self, *, limit: int, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._limit = limit
+
+    def get_observation(self, include_cameras: bool = True) -> dict:
+        """Refuse to answer past the cap, which only a spinning loop reaches."""
+        if self.get_observation_calls >= self._limit:
+            raise RuntimeError("spin")
+        return super().get_observation(include_cameras=include_cameras)
+
+
+def test_collect_rtt_samples_should_bound_the_observation_calls_when_the_sequence_is_frozen(
+    latency,
+) -> None:
+    """R24: a frozen sequence must cost a bounded number of polls, not a spin.
+
+    ``collect_rtt_samples`` paces against ``start_s + len(rows) * period_s``.  With
+    no growth there is no row, so ``target_s == start_s``, ``pause_s <= 0`` and the
+    loop skips ``sleep`` entirely -- with a real client that is ~4.3 M
+    ``get_observation`` calls per second until the deadline (measured: 216,888
+    calls in 50 ms; the 10 s review run saw ~5.96e7).
+
+    The bound is ``2 * (timeout_s * rate_hz) + 5`` = 25 calls for a 100 ms budget
+    at 100 Hz.  It locks the *order of magnitude* of the wait against the
+    ``--rate-hz`` period, not the shape of the sleep:
+
+    * the slowest legal shape -- one poll per period -- needs 10 polls, and a loop
+      that sleeps the remaining budget in a single pause needs 1-2;
+    * the factor 2 covers a loop that polls once before and once after each
+      period, and the ``+ 5`` is slack for the first/last poll and for a refusal
+      that looks at a frame before deciding;
+    * the defect is three to four orders of magnitude above it (thousands of calls
+      inside one period), so no plausible paced implementation lands in between.
+
+    What the bound does exclude, deliberately: a wait an order of magnitude finer
+    than one sampling period.  A fixed 1 ms floor at 100 Hz costs ~100 polls in
+    the same budget, i.e. a loop polling at 1 kHz -- that is not pacing at
+    ``--rate-hz``, it only spends the CPU more slowly than a spin.  Anything at
+    the scale of one period (10 ms here, or the whole remaining budget in one
+    pause) fits.
+
+    The timing face is *filled* here (``_FakeClient``) and only the sequence is
+    frozen: that keeps this case about the pacing arithmetic alone, so it does not
+    depend on how the fix words the untimed-face refusal of R23.  The frozen run
+    must still end in ``InsufficientSamples`` with no rows -- waiting longer is not
+    an excuse to invent samples.
+    """
+    rate_hz = 100.0
+    timeout_s = 0.1
+    upper_bound = 2 * int(timeout_s * rate_hz) + 5  # 25
+    clock = _SleepDrivenClock()
+    rows: list[dict[str, Any]] = []
+    client = _SpinGuardClient(limit=2000, sequences=[0])
+
+    raised: BaseException | None = None
+    try:
+        latency.collect_rtt_samples(
+            client,
+            samples=3,
+            rate_hz=rate_hz,
+            timeout_s=timeout_s,
+            sleep=clock.sleep,
+            clock=clock,
+            rows_out=rows,
+        )
+    except Exception as exc:  # the guard's RuntimeError is the interesting failure
+        raised = exc
+
+    calls = client.get_observation_calls
+
+    assert isinstance(raised, latency.InsufficientSamples), (
+        "a frozen sequence must end in InsufficientSamples once the budget is over; "
+        f"got {type(raised).__name__}({raised}) after {calls} get_observation calls: "
+        "the loop never slept, so it polled until the spin guard stopped it"
+    )
+    assert rows == [], f"a run without a single growth still produced rows: {rows}"
+    assert calls <= upper_bound, (
+        f"a frozen sequence cost {calls} get_observation calls in a {timeout_s} s budget "
+        f"at {rate_hz} Hz (at most {upper_bound} paced polls): the loop is spinning "
+        "because pause_s <= 0 while it holds no rows"
+    )
+
+
+# ===========================================================================
+# X. Non-finite run shape: the rate the loop paces on and the budget it stops on
+# ===========================================================================
+#
+# Section R closed ``--control-hz`` against non-finite values; the two knobs the
+# *rtt* loop paces and stops on kept the finiteness-blind checks.
+#
+# 1. ``--rate-hz`` was checked with ``args.rate_hz <= 0.0``; the guard that closes
+#    that hole today is ``not (math.isfinite(args.rate_hz) and args.rate_hz > 0.0)``
+#    (约 benchmarks/alohamini_io/measure_latency.py:1273-1274).  ``inf`` and ``1e400``
+#    (argparse parses the latter to ``inf``) are ``> 0`` and pass; ``nan`` makes
+#    every comparison false, so it passes too.  ``collect_rtt_samples`` then
+#    computes ``period_s = 1.0 / rate_hz if rate_hz > 0 else 0.0``
+#    (约 measure_latency.py:1494): for ``nan`` that is ``0.0``, every target
+#    collapses onto "now", no sleep is issued and the run polls at the client's
+#    maximum speed -- the spin R24 bounds, reached through a second door.
+# 2. ``--timeout-s`` had no check at all; it is rejected today by the same
+#    finiteness shape (约 measure_latency.py:1294-1295).  ``nan`` / ``inf`` make
+#    ``deadline_s = start_s + timeout_s`` (约 measure_latency.py:1504) a value the
+#    ``now_s >= deadline_s`` test never satisfies (``nan`` compares false, ``inf``
+#    never arrives), so the run can never give up on its own; ``0`` and ``-1``
+#    make the budget already expired before the first frame, i.e. a run that read
+#    nothing (the give-up probe deliberately keeps that as
+#    ``InsufficientSamples``, so it is not even a loud failure).
+#
+# R25/R26 are parser-level on purpose: a nonsense run shape is a usage error (2)
+# before a socket is opened, and neither of them samples anything.  R27 covers
+# the direct caller the CLI cannot protect (the same split as section R's R-1 /
+# R-2 pair).
+
+
+@pytest.mark.parametrize(
+    "rate_hz",
+    ["nan", "inf", "1e400"],
+    ids=["nan", "inf", "overflow_to_inf"],
+)
+def test_parse_args_should_reject_a_non_finite_rate_hz(latency, capsys, rate_hz: str) -> None:
+    """R25: a non-finite ``--rate-hz`` is a usage error (2), never a full-speed run.
+
+    ``inf`` (and ``1e400``, which *is* ``inf`` after ``float()``) satisfies
+    ``> 0``, and ``nan`` satisfies nothing, so the ``<= 0.0`` check of
+    ``parse_args`` lets all three reach ``collect_rtt_samples``, where
+    ``period_s`` degenerates to ``0.0`` and the pacing is skipped: the frozen
+    sequence then costs a full-speed poll loop (R24 measures that shape, R27
+    reaches it without the CLI).
+
+    Asserted: exit code 2 (usage error, so no socket is opened) and the option
+    name on stderr, the shape ``--control-hz``'s non-finite case (R-1) uses.  The
+    legal value is parsed first on purpose -- an unknown or mistyped option also
+    exits 2, so without that guard this test would go green on a ``--rate-hz``
+    that no longer exists.
+    """
+    # Arrange: the option exists and a legal value reaches the namespace.
+    legal = latency.parse_args(["--host", "127.0.0.1", "--rate-hz", "30"])
+    assert getattr(legal, "rate_hz", None) == pytest.approx(30.0), (
+        "--rate-hz 30 does not parse, so the rejection below proves nothing"
+    )
+    capsys.readouterr()
+
+    # Act + Assert: the non-finite value is refused by the parser itself.
+    with pytest.raises(SystemExit) as excinfo:
+        latency.parse_args(["--host", "127.0.0.1", f"--rate-hz={rate_hz}"])
+
+    assert excinfo.value.code == 2, (
+        f"--rate-hz={rate_hz} exited with {excinfo.value.code} instead of the usage "
+        "error 2: a non-finite sampling rate reaches collect_rtt_samples, whose "
+        "period_s degenerates to 0.0 and turns the run into a full-speed poll loop"
+    )
+    message = capsys.readouterr().err.lower()
+    assert "rate-hz" in message, f"the error does not name the option: {message!r}"
+
+
+@pytest.mark.parametrize(
+    "timeout_s",
+    ["nan", "inf", "1e400", "0", "-1"],
+    ids=["nan", "inf", "overflow_to_inf", "zero", "negative"],
+)
+def test_parse_args_should_reject_a_nonsense_timeout_s(latency, capsys, timeout_s: str) -> None:
+    """R26: a non-finite or non-positive ``--timeout-s`` is a usage error (2).
+
+    ``--timeout-s`` is the only stop condition of the rtt run
+    (``deadline_s = start_s + timeout_s`` against the loop clock), and it is not
+    validated at all:
+
+    * ``nan`` / ``inf`` / ``1e400`` -> the deadline is never reached, so the loop
+      runs until ``--samples`` fresh frames arrive however long that takes -- with
+      a frozen sequence, until the operator kills it;
+    * ``0`` / ``-1`` -> the budget is already expired before the first
+      ``get_observation``, so the run collects nothing and reports
+      ``InsufficientSamples`` (exit 7) for a budget the operator typed wrong.
+
+    All five parse cleanly today, which is what makes this red.  Asserted: exit
+    code 2 and ``--timeout-s`` on stderr.  The legal budget is parsed first for
+    the same reason as in R25.
+    """
+    # Arrange: the option exists and a legal value reaches the namespace.
+    legal = latency.parse_args(["--host", "127.0.0.1", "--timeout-s", "10"])
+    assert getattr(legal, "timeout_s", None) == pytest.approx(10.0), (
+        "--timeout-s 10 does not parse, so the rejection below proves nothing"
+    )
+    capsys.readouterr()
+
+    # Act + Assert: the nonsense budget is refused by the parser itself.
+    with pytest.raises(SystemExit) as excinfo:
+        latency.parse_args(["--host", "127.0.0.1", f"--timeout-s={timeout_s}"])
+
+    assert excinfo.value.code == 2, (
+        f"--timeout-s={timeout_s} exited with {excinfo.value.code} instead of the "
+        "usage error 2: an unvalidated budget either never expires (nan/inf) or is "
+        "already over before the first frame (0/-1)"
+    )
+    message = capsys.readouterr().err.lower()
+    assert "timeout-s" in message, f"the error does not name the option: {message!r}"
+
+
+# The finest per-poll wait that still deserves the name "pacing" for this
+# measurement: 1 ms is already two orders below the 20 ms host loop period, and a
+# loop waiting 1 ms between polls is polling at 1 kHz, not sampling at
+# ``--rate-hz``.  R27's bound is derived from it (see the docstring).
+_FINEST_PACING_WAIT_S = 1e-3
+
+
+def test_collect_rtt_samples_should_not_spin_when_the_rate_is_not_finite(latency) -> None:
+    """R27: a direct caller's non-finite ``rate_hz`` must not turn the loop loose.
+
+    ``parse_args`` (R25) is not a guarantee for this function: a caller can hand
+    it ``rate_hz=float("nan")`` straight away.  ``period_s = 1.0 / rate_hz if
+    rate_hz > 0 else 0.0`` then yields ``0.0`` -- the same ``pause_s <= 0`` shape
+    R24 bounds for a frozen sequence -- so the loop never sleeps, never reaches
+    its deadline and polls at full speed until something outside stops it.
+
+    Reuses R24's harness: ``_SleepDrivenClock`` moves only when the loop sleeps,
+    so a spinning loop cannot reach this run's deadline, and ``_SpinGuardClient``
+    turns that spin into a ``RuntimeError`` at 2000 calls instead of hanging the
+    test.  The timing face is filled (``_FakeClient``) and only the sequence is
+    frozen, so this case is about the pacing arithmetic alone.
+
+    Locked, and what each part says:
+
+    * ``InsufficientSamples`` -- the run still has to *end*, and a 100 ms budget
+      with no fresh frame is a short budget, not a capability gap (the face is
+      timed);
+    * ``rows_out == []`` -- waiting longer is not an excuse to invent a row;
+    * ``get_observation_calls <= 2 * int(timeout_s / _FINEST_PACING_WAIT_S)`` =
+      **200** -- the poll count is bounded.  Derivation: whatever floor the fix
+      picks for one wait, the finest one that still paces at this measurement's
+      scale is 1 ms (``_FINEST_PACING_WAIT_S``), so a 100 ms budget fits at most
+      100 such polls; the factor 2 covers a poll before and after each pause.  The
+      defect is a full order of magnitude above the bound (2000 calls, where the
+      guard fires), and the guard itself must therefore never be reached by a
+      paced loop -- which is why the cap is 2000 and not, say, 250.
+    """
+    timeout_s = 0.1
+    upper_bound = 2 * int(timeout_s / _FINEST_PACING_WAIT_S)  # 200
+    clock = _SleepDrivenClock()
+    rows: list[dict[str, Any]] = []
+    client = _SpinGuardClient(limit=2000, sequences=[0])
+
+    raised: BaseException | None = None
+    try:
+        latency.collect_rtt_samples(
+            client,
+            samples=3,
+            rate_hz=float("nan"),
+            timeout_s=timeout_s,
+            sleep=clock.sleep,
+            clock=clock,
+            rows_out=rows,
+        )
+    except Exception as exc:  # the guard's RuntimeError is the interesting failure
+        raised = exc
+
+    calls = client.get_observation_calls
+
+    assert isinstance(raised, latency.InsufficientSamples), (
+        "a non-finite rate_hz must not open an unbounded loop: a 100 ms budget with "
+        f"no fresh frame has to end in InsufficientSamples; got "
+        f"{type(raised).__name__}({raised}) after {calls} get_observation calls "
+        f"({sum(clock.sleeps)} s of simulated wait in {len(clock.sleeps)} pauses)"
+    )
+    assert rows == [], f"a run without a single growth still produced rows: {rows}"
+    assert calls <= upper_bound, (
+        f"a non-finite rate_hz cost {calls} get_observation calls in a {timeout_s} s "
+        f"budget (at most {upper_bound} paced polls): period_s became 0.0, so the "
+        "loop never sleeps and polls at the client's maximum speed"
+    )
