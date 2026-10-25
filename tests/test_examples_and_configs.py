@@ -70,8 +70,8 @@ SITE_VALUES: dict[str, Any] = {
     "left_port": "/dev/am_arm_follower_left",
     "right_port": "/dev/am_arm_follower_right",
     "cameras": {},
-    "observation_request_window": 1,
-    "watchdog_timeout_ms": 500,
+    "observation_request_window": 3,
+    "watchdog_timeout_ms": 1000,
     "max_loop_freq_hz": 50,
 }
 

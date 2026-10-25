@@ -16,6 +16,7 @@
 | 已完成 | ADR D10 正文里的代码行号随 `arm_ik.py` 改动漂移 | 逐条核对引用的行号与当前文件一致 | 纯文档；本轮已逐条核正，提交 16e6ef9 |
 | 已完成 | `tests/test_arm_ik.py` 的 `T-IK-4.2` 有一处「六关节在区间内」的断言读的是夹紧后的 `q_deg`，对任何实现恒真；与 `T-IK-4.1` 修前的同形态缺陷 | 断言改读 `_solve_once` 的原始输出并比 `LIMIT_EPS_DEG`，且能构造出真外溢时该断言会失败 | 已改为读 _solve_once 的未夹紧原始输出并比 LIMIT_EPS_DEG（与 T-IK-4.1 共用 helper）；实测旧断言在真外溢时仍通过、新断言在真外溢时失败、正常场景通过。完成于提交 e85e828fdc31131cd9dfe858cf9d7454179e53db |
 | 待办 | 能力探测只验属性存在，未验内容。若客户端有 `latest_request_timing` 但值为空 dict（该字段在 `__init__` 里初始化为 `{}`），探测会放行，rtt 可能写出空值行。真实路径上 `connect()` 已填充，当前不可达。 | 首帧计时为空时也判 `9`，并有测试锁定 | 见 `docs/s4-field-smoke.md` 第 13 节 |
+| 待办 | `tests/test_examples_and_configs.py` 的 `SITE_VALUES` 冻结值仍是 `1` / `500` / `50`，与 `configs/site.yaml` 本轮改成的现场部署值 `3` / `1000` / `50` 不一致 | `test_site_yaml_values_are_frozen` 与 `test_site_yaml_loads_with_expected_settings` 转绿，且 `pytest tests` 回到 `1074 passed, 2 skipped` | 本轮改 `configs/site.yaml` 时发现；两处口径得先定一个（冻结值跟现场部署值，或 site.yaml 回退），本轮未动 `tests/` |
 
 ## 2 现场
 
@@ -26,6 +27,7 @@
 | 已完成 | 启动 Host 后重跑 `4.2-host-cmdline` 与 `4.3-host-config`，复核三个配置字段（3 / 1000 / 50 目前来自源码默认，不是运行中进程的实际生效值） | 两次输出能判出实际生效值，写进 `docs/s4-field-smoke.md` 第 8 节的实测记录 | 依 `docs/s4-field-smoke.md` 第 8 节 `4.2`/`4.3` 的判据；`4.2` 需 `ps -o cmd` 里出现 `python` 才算取到；2026-10-25 Host 启动后已核对，启动命令未含覆盖 observation_request_window / watchdog_timeout_ms / max_loop_freq_hz 的参数，三值确为源码默认 |
 | 待办 | 完成 S4 现场窗口的零运动部分与受控试动 | 按 `docs/s4-field-smoke.md` 第 11 节逐条勾选 | 逐条命令、判据、产物见该文档；现场执行以 `docs/s4-field-smoke.md` 为准，Pi 侧信息一律用 SSH 取（`ssh "$PI" '…'`），不靠口头转述 |
 | 待办 | v0.7.0 的退出码 `9` 与 `capture` 的 `null` 计时字段尚未在真机上验证（验证时 Host 已停止，rtt 停在连接阶段 exit 3）。 | Host 运行时对 Pi 跑一次 `measure --mode rtt`，得到 `9` 与那段 stderr | 需用户先拉起 Host |
+| 待办 | `docs/s4-field-smoke.md` 与 `configs/site.yaml` 的三个数值字段口径已在本次统一：`observation_request_window`、`watchdog_timeout_ms`、`max_loop_freq_hz` 取机器人侧现场部署值 `3` / `1000` / `50`（Pi `config_alohamini.py:110`、`:122`、`:125`，见 `docs/s4-field-smoke.md` 第 8 节）。本库自己的默认值 `1` / `500` / `50` 仍在 `configs/template.yaml`，两者不是同一份东西。 | 若后续现场改配置，`docs/s4-field-smoke.md` 第 8 节与 `configs/site.yaml` 同一次改完，且 `uv run --no-sync python -c "from alohamini_cartesian.config.overlay import load_settings; print(load_settings(template='configs/template.yaml', site='configs/site.yaml'))"` 不抛 `ConfigError` | 本次只改 `configs/site.yaml` 一处，`docs/s4-field-smoke.md` 原本已记录同一组值，未改 |
 
 ## 3 待定
 
@@ -41,4 +43,6 @@
 | 状态 | 事项 | 证据 |
 | --- | --- | --- |
 | 已完成 | 迁移收口：`benchmarks/alohamini_ik`（v0.3.0）、`benchmarks/alohamini_io` 两脚本与配套测试（v0.4.0）；测试 999 通过 / 2 跳过 | 提交 `d23be22`、`f624dd5`，tag `v0.4.0` |
+| 已完成 | 最小离线示例 `examples/minimal_dry_run.py`、两份配置样例 `configs/template.yaml` 与 `configs/site.yaml`、配套测试 `tests/test_examples_and_configs.py`；本轮测试 `1074 passed, 2 skipped` | 提交 `08c1318`（建示例与两份样例）、`c9baf3e`（site.yaml 证据路径更正、计数守卫加固）、`a175f49`（证据引用改绝对路径、守卫升级为 AST 与会话读数断言） |
+| 已完成 | V01–V13 准入基线文档 `docs/acceptance-baseline.md`，替代旧仓库按臂归档的 Gate A–E | 逐条软件证据可点开核对；实机侧 11 条未取、2 条部分，汇总见该文 2.3 节 |
 | 已完成 | S4 现场实施文档 | 提交 `41ace61` |

@@ -225,6 +225,10 @@ v0.7.0 给两个现场基准脚本加了客户端能力探测：`measure_latency
 
 本轮 `pytest tests` 报 `1056 passed, 2 skipped`。跳过仍是那两个 parity 文件缺 `lerobot`；`2` 不等于全部通过。在 Pi 当前 vendor（`main`，`ec65318f`）上跑 rtt 返回 `9` 是设计行为，不是故障。
 
+补一份最小离线示例 `examples/minimal_dry_run.py`，与两份配置样例 `configs/template.yaml`、`configs/site.yaml` 一起入库，配套测试 `tests/test_examples_and_configs.py` 用子进程读数与 AST 守卫钉住「dry-run 零发送」。本轮 `pytest tests` 报 `1074 passed, 2 skipped`，提交 `08c1318`、`c9baf3e`、`a175f49`。现场配置的三个数值字段（`observation_request_window`、`watchdog_timeout_ms`、`max_loop_freq_hz`）按机器人侧运行时的实际配置填写，取值 3 / 1000 / 50，出处见 [docs/s4-field-smoke.md](docs/s4-field-smoke.md) 第 8 节。
+
+准入基线改为 V01–V13，逐条给出软件证据与实机证据，见 [docs/acceptance-baseline.md](docs/acceptance-baseline.md)。它替代旧仓库按臂归档的 Gate A–E。
+
 - S4（剩余）：只做真机侧的现场验证——两个脚本对着真机 Host 跑一遍，产出配置样例。脚本迁移与离线测试在 v0.4.0 已完成，不属 S4。前置条件、逐条命令与验收判据见 [docs/s4-field-smoke.md](docs/s4-field-smoke.md)。
 
 ## 已知限制
@@ -245,7 +249,7 @@ uv run --no-sync ruff check .             # 代码风格
 
 本仓库没有 `uv.lock`，所以一律带 `--no-sync`：不带它的 `uv run` 会自行解析依赖并新写一个 `uv.lock`。`addopts = "-q"` 已经生效，自己再加 `-q` 会变成 `-qq` 并隐藏 `N passed` 汇总行；看不到汇总行时用 `-o addopts=""`。
 
-当前 `pytest tests` 报 `1056 passed, 2 skipped`。跳过项只剩两个 parity 文件缺 `lerobot`，构成见「已知限制」。测试不依赖真实设备，不联网。
+当前 `pytest tests` 报 `1074 passed, 2 skipped`。跳过项只剩两个 parity 文件缺 `lerobot`，构成见「已知限制」。测试不依赖真实设备，不联网。
 
 ## 目录结构
 
@@ -259,8 +263,12 @@ alohamini-cartesian-lib/
 ├── benchmarks/alohamini_io/capture_robot_fingerprint.py  # 现场采集对端 metadata 指纹，lerobot 惰性 import
 ├── benchmarks/alohamini_io/measure_latency.py            # 现场测时延，Mode B tracking 会真动机器人
 ├── docs/ADR.md                       # D1–D12 决策记录
+├── docs/acceptance-baseline.md       # V01–V13 准入基线：软件证据、实机证据与判据
 ├── docs/s4-field-smoke.md            # S4 现场实施：命令、判据、产物、退出码
 ├── docs/archive/migration-backlog.md # 迁移待办，已归档（迁移在 v0.4.0 完成）
+├── configs/template.yaml             # 配置模板（随库分发的默认值）
+├── configs/site.yaml                 # 本机现场配置
+├── examples/minimal_dry_run.py       # 最小离线示例，dry-run 零发送
 ├── src/alohamini_cartesian/
 │   ├── __init__.py                   # __version__ = "0.7.0"
 │   ├── py.typed
