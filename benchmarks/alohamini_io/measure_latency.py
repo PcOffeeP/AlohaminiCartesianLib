@@ -300,6 +300,11 @@ Exit codes
 8  the tracking hold (freeze) command was rejected, so the stop command did not
    reach the host: treat the robot as still moving.  Distinct from 1, where the
    hold was issued and the evidence is on disk.
+9  the connected client does not publish the capability rtt mode measures with
+   (``latest_request_timing``), so the request age cannot be measured at all:
+   the run was refused right after connecting, before the first request, and no
+   CSV was written -- not even a header.  ``--mode tracking`` does not read that
+   face and is unaffected.
 """
 
 from __future__ import annotations
@@ -332,6 +337,10 @@ EXIT_INSUFFICIENT_SAMPLES = 7
 # The freeze command itself was rejected: unlike 1, the stop command never
 # reached the host, so the robot may still be moving.
 EXIT_HOLD_FAILED = 8
+# The client cannot measure what this mode measures: it publishes no
+# ``latest_request_timing``, so there is no request age to record and the rtt run
+# is refused instead of writing a CSV of empty timing cells.
+EXIT_CLIENT_UNSUPPORTED = 9
 
 # One commanded step never exceeds this many degrees.
 MAX_STEP_DELTA_DEG = 1.0
@@ -452,6 +461,11 @@ SPAN_0_100 = 100.0
 # calibration triple; ``capture_robot_fingerprint.validate_metadata`` refuses any
 # other value before it stores a fingerprint, and Gate F applies the same rule.
 HOST_METADATA_SCHEMA_VERSION = 2
+# Client attributes rtt mode cannot run without.  ``latest_request_timing`` is the
+# face the request age is measured from; a vendor client that publishes only a
+# semantically different neighbour (``latest_safety_status``) is refused with
+# ``EXIT_CLIENT_UNSUPPORTED`` rather than sampled into empty columns.
+CLIENT_CAPABILITIES = ("latest_request_timing",)
 
 
 # The class name is frozen by tests/benchmarks: renaming it would break the
@@ -861,6 +875,20 @@ def _close_quietly(client: Any) -> None:
         return
     with contextlib.suppress(Exception):
         client.disconnect()
+
+
+def missing_client_capabilities(
+    client: Any, names: Sequence[str] = CLIENT_CAPABILITIES
+) -> list[str]:
+    """The client attributes of ``names`` the connected client does not publish.
+
+    Pure and offline, so the surface is testable without a robot.  The result
+    keeps the order of ``names`` and is empty when every face exists; the caller
+    names the missing one on stderr and refuses the run, because a silently
+    absent timing face would turn every rtt cell into an empty or ``NaN`` value
+    that reads like a measurement.
+    """
+    return [name for name in names if not hasattr(client, name)]
 
 
 def _prime_state_only_window(client: Any) -> None:
@@ -2138,6 +2166,27 @@ def main(
     # ``connect()`` prefilled the window with camera requests: replace them with
     # state-only ones before the first sample is taken.
     _prime_state_only_window(client)
+
+    # rtt mode reads ``latest_request_timing`` on every sampled frame, so a client
+    # that does not publish it cannot be measured at all: name the missing face
+    # and refuse before the first request.  Explicitly, never as a defaulted
+    # ``None`` -- empty timing cells would read like a measurement of zero.
+    if args.mode == "rtt":
+        missing = missing_client_capabilities(client)
+        if missing:
+            print(
+                "unsupported client: it publishes no "
+                + ", ".join(missing)
+                + ", so rtt cannot be measured.\n"
+                "  This vendor client reports no per-request timing (a neighbour such as "
+                "latest_safety_status is a different frame and is never substituted for it), "
+                "and the request age is exactly what this mode reads.\n"
+                "  Use a vendor version that publishes it and re-run; nothing was sampled "
+                "and no CSV was written.",
+                file=sys.stderr,
+            )
+            _close_quietly(client)
+            return EXIT_CLIENT_UNSUPPORTED
 
     try:
         if args.mode == "tracking":

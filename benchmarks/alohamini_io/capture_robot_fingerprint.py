@@ -31,6 +31,15 @@ if it had succeeded.  The payload is serialised with ``allow_nan=False``, so a
 value JSON cannot hold (``NaN``, ``Infinity``, ``bytes``) fails the run (exit 5)
 instead of producing a file that cannot be loaded back.
 
+What the client can measure is probed, not assumed: ``latest_request_timing``
+(the per-request age) and ``latest_control_status``.  A client that publishes
+neither -- the deployed vendor client publishes ``latest_safety_status``, a
+different frame under a different name, and is never substituted for either --
+still produces a complete payload: the fields it cannot measure are recorded as
+an explicit ``null`` (one warning names the missing attribute on stderr) instead
+of an invented ``0``.  Such a capture is not a failure, so the exit codes below
+are unchanged by a missing capability.
+
 Exit codes
 ----------
 0  payload written
@@ -68,6 +77,10 @@ EXIT_INVALID_METADATA = 6
 PAYLOAD_SCHEMA_VERSION = 1
 # Version of the host metadata face this script knows how to interpret.
 HOST_METADATA_SCHEMA_VERSION = 2
+# Client attributes the capture reads.  Recorded as ``None`` (JSON ``null``) when
+# the connected client does not publish one, never guessed and never replaced by
+# a semantically different neighbour.
+CLIENT_CAPABILITIES = ("latest_request_timing", "latest_control_status")
 
 DEFAULT_PORT = 5556
 # AlohaMini 2 Pro has 7 joints per arm (it adds ``wrist_yaw``); the client
@@ -153,6 +166,19 @@ def _close_quietly(client: Any) -> None:
         return
     with contextlib.suppress(Exception):
         client.disconnect()
+
+
+def missing_client_capabilities(
+    client: Any, names: Sequence[str] = CLIENT_CAPABILITIES
+) -> list[str]:
+    """The client attributes of ``names`` the connected client does not publish.
+
+    Pure and offline, so the surface is testable without a robot.  The result
+    keeps the order of ``names`` and is empty when every face exists; the caller
+    records an explicit ``null`` for what is missing instead of inventing a
+    number or reading a different frame under that name.
+    """
+    return [name for name in names if not hasattr(client, name)]
 
 
 def _prime_state_only_window(client: Any) -> None:
@@ -251,12 +277,25 @@ def collect_samples(
     frame we already recorded, so it is skipped instead of counted twice.  When
     the sequence never grows the run fails with ``InsufficientSamples`` rather
     than silently writing a thinner payload.
+
+    A client without the per-request timing face does not abort the capture: its
+    timing fields are recorded as an explicit ``None`` and one warning naming the
+    missing attribute is printed to stderr.  The warning is emitted once per call
+    so a run cannot bury stderr under one line per sample.
     """
     sleep_fn = time.sleep if sleep is None else sleep
     clock_fn = time.monotonic if clock is None else clock
     deadline_s = clock_fn() + timeout_s
     last_sequence = client.observation_sequence
     collected: list[dict[str, Any]] = []
+    timing_missing = "latest_request_timing" in missing_client_capabilities(client)
+    if timing_missing:
+        print(
+            "warning: the client publishes no latest_request_timing; age_s, sent_monotonic_s "
+            "and received_monotonic_s are recorded as null for every sample (the values are "
+            "missing, not zero).",
+            file=sys.stderr,
+        )
 
     while len(collected) < samples:
         now_s = clock_fn()
@@ -266,7 +305,7 @@ def collect_samples(
         sequence = client.observation_sequence
         if sequence > last_sequence:
             last_sequence = sequence
-            timing = dict(client.latest_request_timing or {})
+            timing = {} if timing_missing else dict(client.latest_request_timing or {})
             collected.append(_sample_from_timing(sequence, timing))
         pause_s = min(POLL_INTERVAL_S, max(0.0, deadline_s - now_s))
         if pause_s > 0.0:
@@ -439,7 +478,11 @@ def main(
         _close_quietly(client)
         return EXIT_CONNECT_FAILED
 
-    control_status = client.latest_control_status
+    # Read, never invented: a client without the control-status face (the vendor
+    # client publishes ``latest_safety_status``, a different frame) records
+    # ``null``.  Falling back to that neighbour would change what the payload
+    # means under the same key.
+    control_status = getattr(client, "latest_control_status", None)
     payload = build_payload(
         metadata=metadata,
         control_status=control_status,
