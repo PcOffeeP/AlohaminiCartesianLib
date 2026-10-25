@@ -81,9 +81,10 @@
 | 阶段 | 状态 | 依据 |
 | --- | --- | --- |
 | 阶段 0 到场核对 | 已做 | 证据目录 `stdout/0.*`，含 Pi 提交、`schema_version` 行、Host 进程与端口 |
-| P0：宿主广播 `robot_metadata.schema_version` 为整数 2 | 未通过，已两级确认 | 源码级：Pi `ec65318f` 的 `alohamini_host.py` 该行取值为 `1`；运行时：`capture` exit 6，报文 `invalid robot metadata: schema_version=1, expected 2.`。代码侧 Gate F 要求 `2`（`HOST_METADATA_SCHEMA_VERSION = 2`） |
-| 阶段 2 制造代码 Gate F 拒绝 | 已取得 | exit 6、零命令，报文 `Gate F refused: the host metadata schema_version is 1, expected 2.` |
-| 阶段 1 指纹与 RTT、阶段 3 受控试动 | 当前 vendor 上做不到 | 指纹被 P0 挡住（`capture` exit 6、不写盘）；RTT 缺 `latest_request_timing`，`measure --mode rtt` 按设计返回 9；试动要求宿主为 v2，而该机 metadata 每个电机还缺 `homing_offset` 与 `resolution` |
+| P0：宿主广播 `robot_metadata.schema_version` 为整数 2 | 已关闭 | Pi 上的运行时已从 v1 升级到含 metadata v2 的版本。完全跑通的路径 `/home/pi5/lerobot_alohamini`，HEAD `6aee1f81d503be98972d605ed32189221a674607`（`main` 与 `codex/alohamini-cartesian-teleop` 的合并提交链）。旧部署备份在 `/home/pi5/lerobot_alohamini.legacy-ec65318f-20261025`（`ec65318f` 加 6 个未提交改动，原样保留）。关闭判据：`capture` exit 0，且 JSON 里 `robot_metadata.schema_version=2`。升级后厂商测试 `60 passed`，`import lerobot` 落点为 `/home/pi5/lerobot_alohamini/src/lerobot/__init__.py` |
+| 阶段 1 零运动测量与指纹 | 已取得 | `capture` exit 0，`schema_version` 为 `2`，18 个电机的 `homing_offset` 与 `resolution` 全部有值，样本 5，与 codex 原分支逐字段对比 `field diffs: 0`。`measure --mode rtt` exit 0，`achieved_rate_hz=49.8`（请求 1000 Hz，受 Host 50 Hz 主循环封顶），`request_age_ms` p50 20.109，`net_rtt_estimate_ms` p50 6.176，`host_timing_missing=0/100`。这组 RTT 是 Pi 本机回环，不是 PC 到 Pi 的链路延迟 |
+| 阶段 2 制造代码 Gate F 拒绝 | 第一段已取得，第二段未验证 | 第一段：v1 宿主时期 exit 6、零命令，报文 `Gate F refused: the host metadata schema_version is 1, expected 2.`。第二段（换算字段不全时的拒绝）在 v2 宿主上未触发、未验证：现在 18/18 字段齐全，第二段不会拒 |
+| 阶段 3 受控试动（Mode B） | 未做 | 从未在真机执行，需要现场窗口与授权。P0 关闭不改变这一条需要授权 |
 | 阶段 4 配置样例 | 数据取齐，产物未落盘 | `stdout/4.*` 命令与日志齐备；证据目录 `configs/` 为空，仓库内无 `configs/` |
 
 证据目录：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261025/`。逐条命令与判据见 `docs/s4-field-smoke.md`。

@@ -69,6 +69,8 @@ Gate F refused: the host metadata schema_version is 1, expected 2.
 
 退出码 `6`，全程零运动命令。至此 P0 由「源码级为 1」升级为「运行时实测为 1」，两级证据一致。
 
+**2026-10-25 当日已关闭**：Pi 上的运行时升级到含 metadata v2 的版本，完全跑通的路径 `/home/pi5/lerobot_alohamini`，HEAD `6aee1f81d503be98972d605ed32189221a674607`。旧部署原样备份在 `/home/pi5/lerobot_alohamini.legacy-ec65318f-20261025`（`ec65318f` 加 6 个未提交改动）。关闭判据：`capture` exit 0，`robot_metadata.schema_version` 为 `2`，18 个电机的 `homing_offset` 与 `resolution` 全部有值；改名后厂商测试 `60 passed`。上面那段 v1 记录保留为历史，下文 P0 判断规则与分支照旧适用。
+
 下面两条命令用到第 3 节定义的 `PI` 与 `run`。先执行第 3 节的变量块与函数定义，再回到这里。
 
 ```bash
@@ -324,6 +326,8 @@ run 1.2-rtt-net uv run --no-sync python benchmarks/alohamini_io/measure_latency.
 
 判据：`exit 0` 且 CSV 有数据行。若返回 `9`，说明这份 vendor 的 client 不发布 `latest_request_timing`，rtt 无法测量——这是设计行为，按第 13 节记录，不当故障、不重试改参数。若返回 `3`，是连接问题，按第 12 节处置。
 
+在 Pi 上执行时必须把 `PYTHONPATH` 指向被测代码，否则会 import 到已安装的旧版本。采集脚本的 `default_client_factory()` 直接 `import lerobot`，不经过本库 adapter；不设 `PYTHONPATH` 时表现为指纹计时字段全 `null`，或 `measure --mode rtt` 返回退出码 `9`。这两类现象看着像代码缺陷，实际是跑错了代码。退出码 `9` 就是这样在真机上首次触发的，这条不再只有单元测试背书。
+
 1.3 部署形态（请求 30 Hz、窗口 3）：
 
 ```bash
@@ -365,7 +369,7 @@ run 1.3-rtt-deploy uv run --no-sync python benchmarks/alohamini_io/measure_laten
 
 现场最容易把顶层那个 `1` 当成失败原因。脚本只校验 `robot_metadata.schema_version == 2` 与 `motors` 非空映射，不校验每个电机的 8 个字段是否齐全。8 字段是 `id`、`model`、`normalization`、`drive_mode`、`range_min`、`range_max`、`homing_offset`、`resolution`，齐不齐由宿主决定，现场逐电机记录实际覆盖情况。
 
-实测（2026-10-25，Pi 提交 `ec65318f`）：`build_robot_metadata` 给每个电机只写 6 个键——`id`、`model`、`normalization`、`drive_mode`、`range_min`、`range_max`，**没有 `homing_offset`，也没有 `resolution`**。`robot_metadata` 顶层是 `schema_version`、`robot_model`、`motors`、`cameras` 四项。文档其它地方提到的「8 个字段」是代码里 `validate_metadata` 认识的完整字段集，不是 Pi 当前实际发出的字段集。
+实测（2026-10-25，Pi 提交 `ec65318f`）：`build_robot_metadata` 给每个电机只写 6 个键——`id`、`model`、`normalization`、`drive_mode`、`range_min`、`range_max`，**没有 `homing_offset`，也没有 `resolution`**。`robot_metadata` 顶层是 `schema_version`、`robot_model`、`motors`、`cameras` 四项。v2 宿主（提交 `6aee1f81`）上 18 个电机的这两个字段全部有值，无 `null`。文档其它地方提到的「8 个字段」是代码里 `validate_metadata` 认识的完整字段集，不是 Pi 当前实际发出的字段集。
 
 ## 6 阶段 2：制造一次代码 Gate F 的真实拒绝记录
 
@@ -429,7 +433,8 @@ PY
 判断规则：
 
 - 只有当某个电机的 `missing` 或 `bad` 非空时，它对应的关节才会在 Gate F 第二段被拒。
-- 在**当前 Pi 的 vendor 版本**上，即便把 `schema_version` 改成 2，`2.1-probe` 的输出也会是每个电机 `missing=['homing_offset','resolution']`（按实际键名判断）。Gate F 的第二段因此对所有关节都成立，也就是说**这条备用路径在该机上是可达的**，不是纸面路径。实测依据：Pi 的 `build_robot_metadata` 给每个电机只写 6 个键（`id`、`model`、`normalization`、`drive_mode`、`range_min`、`range_max`），没有 `homing_offset`，也没有 `resolution`；`robot_metadata` 顶层是 `schema_version`、`robot_model`、`motors`、`cameras` 四项。
+- v1 宿主（提交 `ec65318f`）上，`build_robot_metadata` 给每个电机只写 6 个键（`id`、`model`、`normalization`、`drive_mode`、`range_min`、`range_max`），没有 `homing_offset`，也没有 `resolution`；那时即便把 `schema_version` 改成 2，`2.1-probe` 的输出也会是每个电机 `missing=['homing_offset','resolution']`，第二段对所有关节都成立。
+- v2 宿主（提交 `6aee1f81`）上 18/18 电机字段齐全，`2.1-probe` 不会报 `missing`，Gate F 第二段不会被触发。这条拒绝路径在 v2 宿主上未验证。
 - 记录证据时必须写明命中的是哪一段。两种拒绝要分开：`schema_version` 不是 2 → Gate F 第一段拒绝；换算字段不全 → Gate F 第二段拒绝。
 - 若全部电机都齐全（其他厂商版本可能如此），本窗口触发不了 F 的第二段。此时只记录「v2 宿主下 Gate F 未触发」这一事实，理由写进 `TODO.md` 与 `$S4DIR/stdout/`（`2.1-probe-*` 已在盘上）。**不要为了造记录去改标定文件或伪造数据。**
 - 电机名到关节观测键（如 `arm_left_shoulder_pan.pos`）的对应关系本文未核实。现场用该电机的名字加 `--joint` 试一次，命令骨架如下，`--joint` 的取值按 `2.1` 输出里 `missing` 或 `bad` 非空的电机名改：
@@ -738,18 +743,22 @@ Pi 侧命令的实测范围（一条命令算一项）：
 
 | 已实测（2026-10-25） | 未实测 |
 | --- | --- |
-| `0.0-ssh-check`、`0.10-pi-ip`、`0.2-pi-commit`、`0.3-pi-schema`、`0.3b-schema-context`、`0.5-host-procs`、`0.6-ports`、`0.6b-ports-netstat`、`1.1-capture`、阶段 2 的 Gate B 探测与 Gate F 拒绝（`2.0-refusal-v1`）、`4.1-host-args`、`4.2-host-cmdline`、`4.3-host-config`、`4.3b-config-args`、`4.3c-config-classes`、`4.5-serial`、`4.5b-serial-pi`、`4.6-video`、`4.6b-video-pi`、`4.7-calib` | `0.4b-tools`、`0.4-pi-ls`、`1.2`、`1.3`、`2.1-probe`、阶段 3 的命令、`4.4-load-check` |
+| `0.0-ssh-check`、`0.10-pi-ip`、`0.2-pi-commit`、`0.3-pi-schema`、`0.3b-schema-context`、`0.5-host-procs`、`0.6-ports`、`0.6b-ports-netstat`、`1.1-capture`、`1.2`、`1.3`、阶段 2 的 Gate B 探测与 Gate F 拒绝（`2.0-refusal-v1`）、`4.1-host-args`、`4.2-host-cmdline`、`4.3-host-config`、`4.3b-config-args`、`4.3c-config-classes`、`4.5-serial`、`4.5b-serial-pi`、`4.6-video`、`4.6b-video-pi`、`4.7-calib` | `0.4b-tools`、`0.4-pi-ls`、`2.1-probe`、阶段 3 的命令、`4.4-load-check` |
 
 新增实测项的备注：
 
-- `1.1-capture`：在 Pi 侧以 conda python 执行，退出码 `3`（当时缺 `latest_request_timing`），未写 JSON。该现象已由 v0.7.0 的能力探测改为显式中止或记 `null`。
+- `1.1-capture`、`1.2`、`1.3`：已在 v2 宿主上实测通过（RTT 为 Pi 本机回环）。`1.1-capture` exit 0，`robot_metadata.schema_version` 为 `2`，18 个电机字段齐全；`1.2` / `1.3` exit 0，请求率受 Host 50 Hz 主循环封顶，`1.2` 组 `achieved_rate_hz=49.8`（请求 1000 Hz）。早先一次在 Pi 侧以 conda python 执行 `1.1-capture` 时退出码 `3`（当时缺 `latest_request_timing`），未写 JSON；该现象已由 v0.7.0 的能力探测改为显式中止或记 `null`。
 - 阶段 2 的 Gate B 探测：命中，列出可用关节。
 - 阶段 2 的 Gate F 拒绝（`2.0-refusal-v1`）：命中第一段，`schema_version` 为 1。
+- `2.1-probe`：本身未跑。v2 宿主下 18/18 电机字段齐全，Gate F 第二段不会被触发，探测结论会是「不拒」。第二段的拒绝路径仍未验证，见本节末尾。
 - `4.2-host-cmdline` 与 `4.3-host-config` 的「启动 Host 后复核」已做：Host 启动命令里没有覆盖 `observation_request_window`、`watchdog_timeout_ms`、`max_loop_freq_hz` 这三个字段的参数。
 
 未实测不等于不可用，但首次执行时要格外留意输出形态与本文档描述是否一致。
 
 - Mode B 从未在真机跑过。
+- Gate F 第二段（换算字段不全时的拒绝）在 v2 宿主上未触发、未验证：现在 18/18 字段齐全，第二段不会拒。要验它需构造换算字段不全的宿主，或注入测试。
+- 4 路相机在采集时全返回零帧（`Frame is None`），另有两次 ZMQ 请求超时。关节与 metadata 正常，所以未阻塞零运动阶段，但带图像的用例会拿到空帧。未排查。
+- RTT 数字是 Pi 本机回环，不能当网络延迟读。
 - 收尾 hold 的实际效果无证据。
 - exit 8 的真实触发路径无记录。
 - Action socket 无确认，`hold_issued` 不等于送达。
