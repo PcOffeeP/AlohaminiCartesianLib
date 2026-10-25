@@ -81,7 +81,11 @@ must turn this file red):
 * **silent short sampling** — returning fewer rows than requested instead of
   raising ``InsufficientSamples`` must fail the row-count assertions;
 * **missing-key tolerance in write_csv** — a row lacking a declared field must
-  raise ``KeyError`` rather than write a silently shifted line.
+  raise ``KeyError`` rather than write a silently shifted line;
+* **capability probe after the window prime** — moving the rtt probe back behind
+  ``_prime_state_only_window`` must fail the ``prime_calls == []`` assertion of
+  the exit-9 test, and dropping the prime from the tracking path must fail
+  section ``S``.
 
 .. warning::
    ``send_action`` may only be *called* inside a tracking function of the module
@@ -348,7 +352,9 @@ class _FakeClient:
     duration is ``host_durations[i]`` (default 0.004).  ``interrupt_at`` makes
     call ``i >= interrupt_at`` raise ``KeyboardInterrupt`` instead of answering,
     which is how an operator pressing Ctrl-C in the middle of a run looks to the
-    script.
+    script.  ``prime_calls`` records every window prime the script issues (the
+    ``include_cameras`` flag per call), so a test can see *whether* and *how* the
+    in-flight window was refilled and, crucially, *when*.
     """
 
     def __init__(
@@ -371,6 +377,7 @@ class _FakeClient:
         self.is_connected = False
         self.get_observation_calls = 0
         self.send_action_calls = 0
+        self.prime_calls: list[bool] = []
         self.sent_actions: list[dict] = []
         self.latest_request_timing: dict = {}
         self.latest_host_timing: dict = {}
@@ -396,6 +403,16 @@ class _FakeClient:
 
     def disconnect(self) -> None:
         self.is_connected = False
+
+    def prime_observation_request_window(self, include_cameras: bool = False) -> None:
+        """Record the window prime instead of refilling a real request queue.
+
+        The script calls this once per run, after ``connect()`` and before the
+        first sample, to replace the camera requests ``connect()`` queued with
+        state-only ones.  Only the flag is recorded: the observation counters
+        must stay exactly what the scripted run produces.
+        """
+        self.prime_calls.append(include_cameras)
 
     def get_observation(self, include_cameras: bool = True) -> dict:
         index = self.get_observation_calls
@@ -3455,6 +3472,13 @@ def test_main_should_refuse_rtt_before_sampling_when_the_face_is_absent(
     The refused run still owns the socket it opened, so it must hand it back: a
     refusal that returns without ``disconnect()`` leaks the connection for the
     rest of the process.
+
+    Ordering, locked here: the probe runs **before** ``_prime_state_only_window``.
+    The prime is the harness's first request on the wire, so a probe placed after
+    it would refuse only *after* spending traffic and would falsify the exit-code
+    documentation ("nothing was requested").  ``prime_calls == []`` is what makes
+    that order observable: with the probe moved back after the prime, the refusal
+    already costs one prime and this assertion turns red.
     """
     client = _ClientWithoutRequestTiming()
     out = tmp_path / "x.csv"
@@ -3485,6 +3509,10 @@ def test_main_should_refuse_rtt_before_sampling_when_the_face_is_absent(
         f"the probe sampled {client.get_observation_calls} frame(s) before refusing"
     )
     assert not out.exists(), f"a refused run wrote {out}"
+    assert client.prime_calls == [], (
+        "the exit 9 refusal came after the state-only window prime, so it already "
+        f"sent {len(client.prime_calls)} request(s): {client.prime_calls}"
+    )
     assert client.is_connected is False, (
         "the exit 9 refusal returned without closing the client it had connected"
     )
@@ -3528,3 +3556,78 @@ def test_main_should_still_write_the_full_rtt_csv_when_the_face_exists(latency, 
             "net_rtt_est_s",
         ):
             assert row[field] != "", f"row {row['sample_index']} has an empty {field}: {row}"
+
+
+# ===========================================================================
+# S. Ordering: the state-only window prime still happens on the tracking path
+# ===========================================================================
+#
+# Section R moved the capability probe *ahead* of
+# ``_prime_state_only_window(client)``.  The direction of that change is easy to
+# over-apply: deleting the prime, or moving it into the rtt branch only, would
+# leave a tracking run sampling a window that ``connect()`` filled with camera
+# requests — the JPEG encoding work of those frames then shows up in the first
+# rows and the prime's whole purpose is gone.  The test below pins the prime on
+# the tracking path and pins its flag to state-only.
+
+
+class _PrimedTrackingFake(_TrackingFake):
+    """``_TrackingFake`` plus the window prime the real client exposes.
+
+    ``_TrackingFake`` deliberately has no ``prime_observation_request_window``
+    (the script's ``getattr`` guard is what makes that legal), so this subclass
+    adds the recorder the ordering assertion needs and nothing else.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.prime_calls: list[bool] = []
+
+    def prime_observation_request_window(self, include_cameras: bool = False) -> None:
+        self.prime_calls.append(include_cameras)
+
+
+def test_main_should_prime_the_state_only_window_in_tracking_mode(
+    latency, tmp_path, capsys
+) -> None:
+    """``--mode tracking`` primes once, with ``include_cameras=False``.
+
+    The run is the shortest legal one (one step, a 50 ms settle budget) and its
+    outcome is asserted only so a refusal cannot pass for a primed run.
+    """
+    client = _PrimedTrackingFake()
+    out = tmp_path / "tracking.csv"
+
+    code = latency.main(
+        [
+            "--host",
+            "127.0.0.1",
+            "--mode",
+            "tracking",
+            "--enable-motion",
+            "--joint",
+            "arm_left_shoulder_pan",
+            "--steps",
+            "1",
+            "--settle-timeout-s",
+            "0.05",
+            "--rate-hz",
+            "200",
+            "--control-hz",
+            "50",
+            "--csv",
+            str(out),
+        ],
+        client_factory=_Factory(client),
+    )
+    printed = capsys.readouterr()
+
+    assert code == latency.EXIT_OK, f"the tracking run failed with {code}: {printed.err!r}"
+    assert len(client.prime_calls) == 1, (
+        f"the tracking run primed the window {len(client.prime_calls)} time(s): "
+        f"{client.prime_calls}"
+    )
+    assert client.prime_calls[0] is False, (
+        f"the tracking run primed with include_cameras={client.prime_calls[0]!r}, "
+        "so the camera frames the prime exists to drop would still be sampled"
+    )
