@@ -968,6 +968,36 @@ def synthetic_narrow_limits() -> dict[str, tuple[float, float]]:
     }
 
 
+def assert_raw_solve_within_injected_limits(
+    arm: Any,
+    seed: np.ndarray,
+    target_pose: np.ndarray,
+    limits_deg: dict[str, tuple[float, float]],
+    *,
+    premise: str,
+) -> None:
+    """前提断言：``_solve_once`` 的**原始未夹紧**解没有越过注入窗口。
+
+    T-IK-4.1 与 T-IK-4.2 共用这一段（两边的 ``spill_deg`` 计算与容差来源只此一份）。
+
+    为什么必须读原始解而不是 ``result.q_deg``：后者已经过 ``_clamp_to_joint_limits``，
+    被钉在 ``[lo, hi]`` 上，对它断言「在窗口内」对任何实现都成立、不可能变红。
+
+    容差只能来自被测模块自己的 ``LIMIT_EPS_DEG``（经 ``load_limit_clamp()`` 惰性导入），
+    本文件不手写第二份 ``1e-9``。
+    """
+    raw_solve = arm._solve_once(seed, target_pose, limits_deg, ORIENTATION_WEIGHT_DEFAULT)
+    raw_q_deg = np.asarray(raw_solve[0], dtype=float)
+    limit_eps_deg, _clamp = load_limit_clamp()
+    for name, value in zip(JOINT_NAMES, raw_q_deg, strict=True):
+        lo, hi = limits_deg[name]
+        spill_deg = max(lo - float(value), float(value) - hi, 0.0)
+        assert spill_deg < limit_eps_deg, (
+            f"原始解外溢超出容差 → 该构造不再是{premise}：{name}={float(value)!r} 度在注入"
+            f"限位 ({lo!r}, {hi!r}) 之外 {spill_deg!r} 度，容差 LIMIT_EPS_DEG={limit_eps_deg!r} 度"
+        )
+
+
 # ---------------------------------------------------------------------------
 # T-IK-4  JOINT_LIMIT vs RESIDUAL
 # ---------------------------------------------------------------------------
@@ -994,24 +1024,15 @@ def test_t_ik_4_1_physically_reachable_but_too_tight_limits_reports_residual() -
     # injected limits (real qpmad pins it ON the faces: shoulder_lift / elbow_flex /
     # wrist_flex land on theirs here), so the failure below cannot be a JOINT_LIMIT --
     # the only vote left that can reject it is the residual.
-    # The unclamped vector is read from `_solve_once` on purpose: `result.q_deg` has
-    # already been passed through `_clamp_to_joint_limits` (it is pinned onto
-    # [lo, hi] by construction), so the same assertion on the returned q would be
-    # true for ANY implementation and could never turn red.
-    # `load_limit_clamp()` (defined further down, T-IK-17 section) lazy-imports the
-    # tolerance from the module under test -- never a second hand-typed 1e-9 here.
-    raw_q_deg = np.asarray(
-        arm._solve_once(seed, FROZEN_OVER_LIMIT_TARGET_POSE, narrow, ORIENTATION_WEIGHT_DEFAULT)[0],
-        dtype=float,
+    # The premise reads `_solve_once` because `result.q_deg` has already been passed
+    # through `_clamp_to_joint_limits` (see the helper's docstring).
+    assert_raw_solve_within_injected_limits(
+        arm,
+        seed,
+        FROZEN_OVER_LIMIT_TARGET_POSE,
+        narrow,
+        premise="『未越限』格",
     )
-    limit_eps_deg, _clamp = load_limit_clamp()
-    for name, value in zip(JOINT_NAMES, raw_q_deg, strict=True):
-        lo, hi = narrow[name]
-        spill_deg = max(lo - float(value), float(value) - hi, 0.0)
-        assert spill_deg < limit_eps_deg, (
-            f"求解器外溢超出容差 → 该构造不再是『未越限』格：{name}={float(value)!r} 度在注入"
-            f"限位 ({lo!r}, {hi!r}) 之外 {spill_deg!r} 度，容差 LIMIT_EPS_DEG={limit_eps_deg!r} 度"
-        )
     # Premise: the residual really is over the limit.
     assert result.ok is False, "an excessive residual must not report ok=True"
     assert result.position_error_m > SOLVE_RESIDUAL_LIMIT_M, result.position_error_m
@@ -1031,15 +1052,33 @@ def test_t_ik_4_2_within_synthetic_limits_target_is_unaffected() -> None:
     seed = np.asarray(SOLVE_SEED_Q, dtype=float)
     narrow = synthetic_narrow_limits()
 
+    # 前提先、结论后（与 T-IK-4.1 同款排布）：本用例守的是「这个构造下的原始解真的没有
+    # 碰到注入窗口」。该断言必须排在 `arm.solve(...)` **之前**——否则前提被结论遮蔽：
+    # 真外溢时 solve 先把解夹回 [lo, hi] 并报 reason='JOINT_LIMIT'，`result.ok is True`
+    # 会先失败，维护者被引去查分类，而「原始解外溢」这条断言在断言层面从未兑现鉴别力。
+    #
+    # 真实 qpmad 把限位当硬约束，原始解几乎不可能外溢：本构造为内点解，实测六关节外溢
+    # 恰好 0.0 度（T-IK-4.1 那类压面构造实测 1.776e-15 度），
+    # 所以本断言守的是「构造前提本身没漂移」——构造变了、种子变了、限位窗口写法变了，
+    # 用例会先在这里停下，而不是悄悄退化成一条恒真断言。
+    #
+    # 为什么必须读 `_solve_once` 的原始解而不是 `result.q_deg`：后者已经过
+    # `_clamp_to_joint_limits`，被钉在 [lo, hi] 上，对它断言「在窗口内」对任何实现都
+    # 成立、不可能变红（实测：把原始解推到 `hi + 1.0` 度后，该断言照样六个关节全绿）。
+    # 容差与 T-IK-4.1 同源，只取自 `load_limit_clamp()`。
+    assert_raw_solve_within_injected_limits(
+        arm,
+        seed,
+        FROZEN_WITHIN_LIMIT_TARGET_POSE,
+        narrow,
+        premise="『限位内的目标』",
+    )
+
     result = arm.solve(seed, FROZEN_WITHIN_LIMIT_TARGET_POSE, narrow)
 
     assert result.ok is True, f"within-limit target must not be rejected (reason={result.reason!r})"
     assert result.reason is None
     assert result.position_error_m <= SOLVE_RESIDUAL_LIMIT_M, result.position_error_m
-    q_deg = np.asarray(result.q_deg, dtype=float)
-    for name, value in zip(JOINT_NAMES, q_deg, strict=True):
-        lo, hi = narrow[name]
-        assert lo <= value <= hi, f"{name}={value} outside synthetic limits ({lo}, {hi})"
 
 
 # ---------------------------------------------------------------------------

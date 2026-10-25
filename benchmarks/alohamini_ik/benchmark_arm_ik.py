@@ -38,6 +38,8 @@ DEFAULT_WARMUP = 10
 DEFAULT_SEED = 0
 
 RESIDUAL_LIMIT_M = 0.005
+# Performance budget (30 Hz ⇒ p99 ≤ 7 ms solve, ≤ 15 ms per step). The judgement
+# built on these numbers is the pure function `within_budget()` below.
 SOLVE_BUDGET_MS = 7.0
 STEP_BUDGET_MS = 15.0
 
@@ -145,6 +147,15 @@ def _percentile(values: list[float] | np.ndarray, pct: float) -> float:
     return float(np.percentile(values, pct))
 
 
+def within_budget(solve_p99_ms: float, step_p99_ms: float) -> bool:
+    """Return whether the measured percentiles satisfy the performance budget.
+
+    判据是纯函数：测试用构造耗时直接验证它；脚本自身仍真跑真计时，只把实测到的
+    两个 p99 交给它判定。
+    """
+    return bool(solve_p99_ms <= SOLVE_BUDGET_MS and step_p99_ms <= STEP_BUDGET_MS)
+
+
 def run_benchmark(urdf_path: Path, steps: int, warmup: int, seed: int) -> dict[str, Any]:
     """运行一次基准并返回 JSON 报告字典（键名即 CLI `--json` 的输出契约）。"""
     profile = ArmKinematicProfile(
@@ -230,7 +241,9 @@ def run_benchmark(urdf_path: Path, steps: int, warmup: int, seed: int) -> dict[s
     solve_p99 = _percentile(solve_times_ms, 99.0)
     step_p99 = _percentile(step_times_ms, 99.0)
 
-    within_budget = bool(solve_p99 <= SOLVE_BUDGET_MS and step_p99 <= STEP_BUDGET_MS)
+    # Runtime module-level lookup: the judge is the single source of truth for the
+    # budget verdict (tests monkeypatch the module attribute to prove it).
+    budget_ok = within_budget(solve_p99, step_p99)
 
     report: dict[str, Any] = {
         "urdf": str(urdf_path),
@@ -251,7 +264,7 @@ def run_benchmark(urdf_path: Path, steps: int, warmup: int, seed: int) -> dict[s
         "residual_limit_m": RESIDUAL_LIMIT_M,
         "failure_count": failure_count,
         "success_count": success_count,
-        "within_budget": within_budget,
+        "within_budget": budget_ok,
     }
     return report
 
