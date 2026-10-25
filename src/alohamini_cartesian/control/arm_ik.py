@@ -461,10 +461,14 @@ class ArmIK:
                 solve_time_s=solve_time_s,
             )
 
+        # T-IK-19: ``ok`` folds two independent votes; the failure reason keeps
+        # them apart.  An over-limit solution outranks an excessive residual
+        # (JOINT_LIMIT), and an in-limit solution that only misses the target is
+        # RESIDUAL.
         return IKResult(
             q_deg=q_sol_deg,
             ok=False,
-            reason="JOINT_LIMIT",
+            reason="JOINT_LIMIT" if not within_limits else "RESIDUAL",
             position_error_m=position_error_m,
             orientation_error_deg=orientation_error_deg,
             iterations=iterations,

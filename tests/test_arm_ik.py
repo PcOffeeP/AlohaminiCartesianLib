@@ -842,10 +842,21 @@ def test_t_ik_3_1_unreachable_target_reports_residual_failure(label: str) -> Non
 # ===========================================================================
 #
 # Cycle 3 refines the failure semantics of `ArmIK.solve`:
-# - T-IK-4  a physically reachable target that only needs to *exceed the
-#           injected joint limits* must fail with reason "JOINT_LIMIT" (not the
-#           catch-all "RESIDUAL"), while a target reachable inside those same
-#           limits is unaffected;
+# - T-IK-4  the tight-window construction below does NOT spill past the injected
+#           limits: real qpmad stops the solution ON the limit faces, so the
+#           solve fails because the window is too tight for the target -- i.e.
+#           an IN-LIMIT solution whose residual exceeds `residual_limit_m`.
+#           Under the failure-reason contract that is "RESIDUAL", and T-IK-4.1
+#           therefore asserts RESIDUAL while proving both premises: the RAW
+#           (unclamped) `_solve_once` output stays inside [lo, hi] within
+#           `LIMIT_EPS_DEG`, and the residual is over the limit.  The raw solve is
+#           read on purpose -- `result.q_deg` has already been clamped onto
+#           [lo, hi] by `_clamp_to_joint_limits`, so asserting "inside the limits"
+#           on it would hold for ANY implementation and prove nothing.
+#           A target reachable inside the same limits stays unaffected (T-IK-4.2).
+#           "JOINT_LIMIT" is covered by constructions that produce a REAL
+#           over-limit solution: T-IK-17.11 and T-IK-19.1 / T-IK-19.2 (both fake
+#           the solver and push one joint past its face);
 # - T-IK-5  a NON-FINITE q_seed / target_pose must fail cleanly with reason
 #           "NON_FINITE" (no bare exception escaping solve, no polluted q_deg);
 # - T-IK-6  the orientation goal is SOFT (default `orientation_weight=0.01`,
@@ -870,19 +881,35 @@ def test_t_ik_3_1_unreachable_target_reports_residual_failure(label: str) -> Non
 # - `iterations >= 1` is asserted on the new NON_FINITE path too, per the
 #   acceptance wording ("iterations >= 1");
 # - the synthetic limits are deliberately NOT physical limits: they are a tiny
-#   +/-5 deg window purely to force the over-limit condition, and are labelled as
-#   such.
+#   +/-5 deg window purely to force a "too tight" condition (the solver stays
+#   inside the window and misses the target by more than `residual_limit_m`),
+#   and are labelled as such.
 #
 # Discriminative intent (a reasonable but WRONG implementation must fail):
-# - one catch-all failure reason ("RESIDUAL")            -> T-IK-4;
+# - one catch-all failure reason ("JOINT_LIMIT" for every failure, i.e. dropping
+#   `within_limits` from the classification)              -> T-IK-4.1 + T-IK-11.1
+#   (both construct an in-limit solution with an excessive residual and require
+#   RESIDUAL); the mirror error (one catch-all "RESIDUAL") is caught by
+#   T-IK-17.11 + T-IK-19.1 / 19.2;
 # - a classifer that flags JOINT_LIMIT whenever the solution sits on a limit
 #   boundary (would also mis-flag the physically-unreachable T-IK-3 target,
-#   whose solution is pinned at +/-170 deg)               -> T-IK-3 + T-IK-4;
+#   whose solution is pinned at +/-170 deg)  -> T-IK-3 + T-IK-17.1 + T-IK-17.12;
 # - NaN/Inf passing through to the solver (raises RuntimeError today) or being
 #   returned as a polluted q_deg                          -> T-IK-5;
 # - treating orientation as a hard constraint / rejecting on orientation error,
 #   or silently zeroing the recorded orientation error    -> T-IK-6;
 # - dropping/omitting the timing fields on a failure return -> T-IK-13.
+#
+# 本轮变更（T-IK-4）：T-IK-4.1 的旧期望值是错的 —— 旧名
+# `..._over_synthetic_limits_reports_joint_limit` + 旧断言 `reason == "JOINT_LIMIT"` 把实现
+# 缺陷固化了（当时末段把「未越限、只是残差超标」也报成 JOINT_LIMIT）。该缺陷模式的现场
+# 观测是「六关节都在区间内、位置误差约 0.074 m 却报 JOINT_LIMIT」；`0.074` 与问题报告里的
+# 那次观测同量级，但本仓库 `evidence/` 目录内**没有该次运行的书面记录，未复核** —— 它只
+# 用来给这个缺陷模式起名字，不承担证据作用。实测本构造的 6 个关节全部落在注入区间内、残差
+# 0.024745 m > 0.005 m，按新契约属 RESIDUAL：用例改名为
+# `..._too_tight_limits_reports_residual`，期望值改 RESIDUAL，并加两条前提断言（**未夹紧**
+# 解在闭区间内 + 残差超标），使该结论由构造本身自证，而不是只换一个字符串。同类修正同步到
+# `T-IK-11.1`：label `joint_limit` 改名 `over_tight_limits`、期望改 RESIDUAL。
 
 ORIENTATION_WEIGHT_DEFAULT = 0.01
 SYNTHETIC_LIMITS_HALF_WIDTH_DEG = 5.0
@@ -893,6 +920,10 @@ SOLVE_SEED_Q = SOLVE_UNREACHABLE_SEED_Q
 # World pose of `left_Fixed_Jaw` at q = (10, -20, 45, -40, 20, -10) deg.
 # Physically reachable (the wide-limit premise below asserts ok=True), but it
 # requires elbow_flex = 45 deg, i.e. > 1.5x the +/-5 deg synthetic window.
+# NOTE on the name: "OVER_LIMIT" means the target REQUIRES a joint value outside the
+# injected window -- it does NOT mean the returned solution leaves the window.  Real
+# qpmad pins the solution inside the window and misses the target instead (the
+# resulting failure is RESIDUAL, see T-IK-4.1).
 FROZEN_OVER_LIMIT_TARGET_POSE = np.array(
     [
         [-0.8593112659133991, -0.31132779182580217, -0.4057821512969504, -0.049415875459843814],
@@ -942,27 +973,55 @@ def synthetic_narrow_limits() -> dict[str, tuple[float, float]]:
 # ---------------------------------------------------------------------------
 
 
-def test_t_ik_4_1_physically_reachable_but_over_synthetic_limits_reports_joint_limit() -> None:
-    """T-IK-4.1：物理可达但超出注入限位时报 JOINT_LIMIT。"""
+def test_t_ik_4_1_physically_reachable_but_too_tight_limits_reports_residual() -> None:
+    """T-IK-4.1：物理可达但注入限位过紧（解停在限位面内、残差超标）时报 RESIDUAL。"""
     pytest.importorskip("placo", reason="ArmIK 的数值求解需要可选依赖 placo")
     _arm_ik, arm = make_arm_ik()
     seed = np.asarray(SOLVE_SEED_Q, dtype=float)
 
     # Premise: the target IS physically reachable -- with wide limits it solves.
-    # If this ever breaks the case stops being a "needs over-limit" case, so it
+    # If this ever breaks the case stops being a "limits too tight" case, so it
     # is asserted rather than assumed.
     wide = arm.solve(seed, FROZEN_OVER_LIMIT_TARGET_POSE, limits_for())
     assert wide.ok is True, (
         f"test premise broken: target unreachable even with wide limits ({wide.reason!r})"
     )
 
-    result = arm.solve(seed, FROZEN_OVER_LIMIT_TARGET_POSE, synthetic_narrow_limits())
+    narrow = synthetic_narrow_limits()
+    result = arm.solve(seed, FROZEN_OVER_LIMIT_TARGET_POSE, narrow)
 
-    assert result.ok is False, "over-limit target must not report ok=True"
-    assert result.reason == "JOINT_LIMIT", (
-        f"reachable-but-over-limit target must be JOINT_LIMIT, got {result.reason!r}"
+    # Premise: the RAW solver output for this construction does NOT spill past the
+    # injected limits (real qpmad pins it ON the faces: shoulder_lift / elbow_flex /
+    # wrist_flex land on theirs here), so the failure below cannot be a JOINT_LIMIT --
+    # the only vote left that can reject it is the residual.
+    # The unclamped vector is read from `_solve_once` on purpose: `result.q_deg` has
+    # already been passed through `_clamp_to_joint_limits` (it is pinned onto
+    # [lo, hi] by construction), so the same assertion on the returned q would be
+    # true for ANY implementation and could never turn red.
+    # `load_limit_clamp()` (defined further down, T-IK-17 section) lazy-imports the
+    # tolerance from the module under test -- never a second hand-typed 1e-9 here.
+    raw_q_deg = np.asarray(
+        arm._solve_once(seed, FROZEN_OVER_LIMIT_TARGET_POSE, narrow, ORIENTATION_WEIGHT_DEFAULT)[0],
+        dtype=float,
     )
+    limit_eps_deg, _clamp = load_limit_clamp()
+    for name, value in zip(JOINT_NAMES, raw_q_deg, strict=True):
+        lo, hi = narrow[name]
+        spill_deg = max(lo - float(value), float(value) - hi, 0.0)
+        assert spill_deg < limit_eps_deg, (
+            f"求解器外溢超出容差 → 该构造不再是『未越限』格：{name}={float(value)!r} 度在注入"
+            f"限位 ({lo!r}, {hi!r}) 之外 {spill_deg!r} 度，容差 LIMIT_EPS_DEG={limit_eps_deg!r} 度"
+        )
+    # Premise: the residual really is over the limit.
+    assert result.ok is False, "an excessive residual must not report ok=True"
     assert result.position_error_m > SOLVE_RESIDUAL_LIMIT_M, result.position_error_m
+
+    # Conclusion: in-limit + excessive residual -> RESIDUAL.  JOINT_LIMIT is reserved for a
+    # solution that actually leaves [lo, hi] (T-IK-17.11 / T-IK-19.1 / T-IK-19.2).
+    assert result.reason == "RESIDUAL", (
+        "an in-limit solution that misses the target by more than residual_limit_m must be "
+        f"RESIDUAL, not JOINT_LIMIT, got {result.reason!r}"
+    )
 
 
 def test_t_ik_4_2_within_synthetic_limits_target_is_unaffected() -> None:
@@ -1370,14 +1429,16 @@ def make_solve_case(label: str) -> tuple[Any, ...]:
         target = SOLVE_UNREACHABLE_SEED_POSE.copy()
         target[:3, 3] += np.asarray((1.0, 1.0, 1.0), dtype=float)
         return arm, seed, target, limits_for(lo=-170.0, hi=170.0), False, "RESIDUAL"
-    if label == "joint_limit":
+    if label == "over_tight_limits":
+        # 注入的 ±5 度窗口太紧：解被约束停在区间内、残差超标，因此是 RESIDUAL
+        # （不是 JOINT_LIMIT），理由与 T-IK-4.1 / T-IK-19.4 同构。
         return (
             arm,
             seed,
             FROZEN_OVER_LIMIT_TARGET_POSE.copy(),
             synthetic_narrow_limits(),
             False,
-            "JOINT_LIMIT",
+            "RESIDUAL",
         )
     if label == "non_finite":
         seed = seed.copy()
@@ -1388,12 +1449,20 @@ def make_solve_case(label: str) -> tuple[Any, ...]:
 
 @pytest.mark.parametrize(
     ("label", "expected_reason"),
-    [("residual", "RESIDUAL"), ("joint_limit", "JOINT_LIMIT"), ("non_finite", "NON_FINITE")],
+    [
+        ("residual", "RESIDUAL"),
+        ("over_tight_limits", "RESIDUAL"),
+        ("non_finite", "NON_FINITE"),
+    ],
 )
 def test_t_ik_11_1_failed_solve_does_not_mutate_caller_inputs(
     label: str, expected_reason: str
 ) -> None:
     """T-IK-11.1：失败的 solve 不写回调用方的 seed/target 缓冲。"""
+    # 本参数化里没有 ``JOINT_LIMIT`` 一格：真实求解器造不出端到端 ``JOINT_LIMIT`` —— 本构造
+    # 的未夹紧解只在 1e-15 度级压面外溢（远小于 ``LIMIT_EPS_DEG``，见 T-IK-4.1 的前提断言），
+    # 改 ``make_solve_case`` 去造它就是造不可能的场景。该路径的输入不可变性覆盖在
+    # ``T-IK-19.1``（假求解器把某关节推到限位面外 1e-3 度）。
     pytest.importorskip("placo", reason="ArmIK 的数值求解需要可选依赖 placo")
     arm, seed, target, limits, expected_ok, reason = make_solve_case(label)
     assert expected_ok is False and reason == expected_reason
@@ -1407,6 +1476,13 @@ def test_t_ik_11_1_failed_solve_does_not_mutate_caller_inputs(
     result = arm.solve(seed, target, limits)
 
     assert result.ok is False
+    if label == "over_tight_limits":
+        # 本 case 的失败只能来自残差：位置残差超过 residual_limit_m。
+        # 这里**不再**断言「六个关节都落在注入区间内」：``result.q_deg`` 已经过
+        # ``_clamp_to_joint_limits`` 夹紧，那种断言对任何实现恒真、证不到「求解器不外溢」，
+        # 声称 self-proving 就是假的。本构造的「未越限」由 ``reason == "RESIDUAL"`` 与残差
+        # 断言共同体现；未夹紧解的真实外溢断言在 T-IK-4.1。
+        assert result.position_error_m > SOLVE_RESIDUAL_LIMIT_M, result.position_error_m
     assert result.reason == expected_reason, result.reason
     assert np.array_equal(seed, seed_before, equal_nan=True), "solve wrote into the caller's q_seed"
     assert np.array_equal(target, target_before, equal_nan=True), (
@@ -1414,7 +1490,7 @@ def test_t_ik_11_1_failed_solve_does_not_mutate_caller_inputs(
     )
 
 
-@pytest.mark.parametrize("label", ["success", "residual", "joint_limit", "non_finite"])
+@pytest.mark.parametrize("label", ["success", "residual", "over_tight_limits", "non_finite"])
 def test_t_ik_11_2_repeated_identical_calls_are_deterministic(label: str) -> None:
     """T-IK-11.2：重复的相同调用结果确定。"""
     pytest.importorskip("placo", reason="ArmIK 的数值求解需要可选依赖 placo")
@@ -1595,8 +1671,9 @@ def test_t_ik_10_5_tilde_urdf_path_is_expanded_for_fk_and_solve(
 # 鉴别力（合理但错误的实现会挂）：
 # - 保留闭区间严格比较 -> 第 1 条先红（ok=False / reason=JOINT_LIMIT）；
 # - 放宽判定但忘记夹紧 -> 第 3 条红（q 仍外溢 1.4e-14 度）；
-# - 为通过而删掉越界判定 / 放宽残差 -> T-IK-4.1 仍要求「物理可达但超注入限位」
-#   的目标报 JOINT_LIMIT，两条要求不能同时被削弱。
+# - 为通过而删掉越界判定 / 放宽残差 -> T-IK-17.11（真实越界）与 T-IK-19.1 / 19.2
+#   （越限优先）仍要求越限报 JOINT_LIMIT，两条要求不能同时被削弱。（注：T-IK-4.1 不属
+#   此列 —— 它的构造是「注入限位过紧、未越限、残差超标」，按新契约是 RESIDUAL。）
 #
 # 说明（外部 oracle 取舍）：目标位姿由被测 ``fk()`` 从其自身边界姿态取得，不是冻结
 # 外部字面量。本段只检验限位分类，不检验 FK 数值；FK 的数值正确性已由 T-IK-1 用
@@ -1980,14 +2057,40 @@ def solve_with_faked_solver(
     monkeypatch: pytest.MonkeyPatch,
     injected_limits: dict[str, tuple[float, float]],
     q_injected: np.ndarray,
+    *,
+    q_urdf: np.ndarray | None = None,
+    position_error_urdf_m: float = 1e-6,
+    position_error_injected_m: float = 1e-6,
 ) -> tuple[Any, dict[str, int]]:
     """用假 ``_solve_once`` 驱动一次 ``solve()``，返回 (结果, 两次调用的计数)。
 
     ``q_injected`` 是「注入限位那次」求解要返回的关节解；URDF 限位那次固定返回干净的
     种子解（残差同样达标），保证流程不会停在 RESIDUAL 分支。
+
+    T-IK-19 起残差与 URDF 那次的解也可以指定（关键字参数，默认值等于原来硬编码的
+    ``1e-6`` 残差 + ``SOLVE_SEED_Q``，因此 T-IK-17.11/17.12 的调用与语义不变）：分类矩阵
+    需要分别制造「残差达标」与「残差超标」两行，而 ``solve()`` 两次调用用的是两个不同的
+    限位字典，残差必须按调用分开指定。
+
+    Args:
+        monkeypatch: pytest 的 monkeypatch 夹具，用于替换 ``_solve_once``。
+        injected_limits: 传给 ``solve()`` 的注入限位（也是假实现识别「注入那次」的身份凭据）。
+        q_injected: 「注入限位那次」返回的关节解（度）。
+        q_urdf: 「URDF 限位那次」返回的关节解（度）；``None`` 时用 ``SOLVE_SEED_Q``。
+            这个向量**同时充当传给 ``solve()`` 的 ``q_current_deg`` 种子**（旧行为就是如此：
+            ``solve()`` 的种子与 URDF 那次求解返回的解合用一个值）。除 ``T-IK-19.1`` 外没有
+            调用方传它，省略它就完全等价于旧行为；``T-IK-19.1`` 显式传入只是为了拿住那个数组
+            对象，在 ``solve()`` 前后比对，验证调用方缓冲区未被改写。
+        position_error_urdf_m: 「URDF 限位那次」返回的位置残差（米）。
+        position_error_injected_m: 「注入限位那次」返回的位置残差（米）。
+
+    Returns:
+        ``(solve() 的结果, 两次调用的计数)``。
     """
     arm_ik, arm = make_arm_ik()
-    q_urdf = np.asarray(SOLVE_SEED_Q, dtype=float)
+    q_urdf_solution = (
+        np.asarray(SOLVE_SEED_Q, dtype=float) if q_urdf is None else np.asarray(q_urdf, dtype=float)
+    )
     calls = {"urdf": 0, "injected": 0}
 
     def fake_solve_once(
@@ -1997,19 +2100,21 @@ def solve_with_faked_solver(
         limits_deg: dict[str, tuple[float, float]],
         orientation_weight: float,
     ) -> tuple[np.ndarray, float, float, int, float, np.ndarray]:
-        """返回残差达标的解；按注入字典的对象身份区分 URDF 那次与注入那次。"""
-        del q_current_deg, target_pose, orientation_weight  # 本次只测限位分类接线
+        """返回指定残差的解；按注入字典的对象身份区分 URDF 那次与注入那次。"""
+        del q_current_deg, target_pose, orientation_weight  # 本次只测失败分类接线
         if limits_deg is injected_limits:
             calls["injected"] += 1
             q_deg = q_injected
+            position_error_m = position_error_injected_m
         else:
             calls["urdf"] += 1
-            q_deg = q_urdf
+            q_deg = q_urdf_solution
+            position_error_m = position_error_urdf_m
         # (q_deg, position_error_m, orientation_error_deg, iterations, solve_time_s, pose)
-        return np.asarray(q_deg, dtype=float).copy(), 1e-6, 0.0, 1, 1e-4, np.eye(4)
+        return np.asarray(q_deg, dtype=float).copy(), position_error_m, 0.0, 1, 1e-4, np.eye(4)
 
     monkeypatch.setattr(arm_ik.ArmIK, "_solve_once", fake_solve_once)
-    result = arm.solve(q_urdf, np.eye(4), injected_limits)
+    result = arm.solve(q_urdf_solution, np.eye(4), injected_limits)
     return result, calls
 
 
@@ -2880,3 +2985,285 @@ def test_t_ik_18_15_huge_integer_joint_limit_never_raises_type_error() -> None:
         assert hasattr(result, field), (
             f"solve() must return an IKResult (missing {field!r}): {result!r}"
         )
+
+
+# ===========================================================================
+# T-IK-19  失败分类矩阵：joint limit vs residual
+# ===========================================================================
+#
+# 缺陷（本轮修复前）：``ArmIK.solve`` 末段把「未越限、只是残差超标」也报成 ``JOINT_LIMIT``。
+# 现状代码（``control/arm_ik.py`` 约 :448-470）：先算
+# ``ok = position_error_m <= residual_limit_m and within_limits``，随后不 ok 就**一律**
+# ``reason="JOINT_LIMIT"`` —— ``within_limits`` 这个判别信息在末段被丢掉了。问题报告记录了
+# 一个现场现象：「六个关节全部落在注入区间内、位置误差 0.074 m、却报 JOINT_LIMIT」—— 调用方据此
+# 以为「角度被限位挡住」，而真实原因是够不到目标（与 T-IK-3 / T-IK-13.2 的 RESIDUAL 同一类）。
+# **证据状态**：``0.074`` 与那份问题报告中的现场观测同量级；本仓库 ``evidence/`` 目录内
+# **没有该次运行的书面记录，未复核**，因此它不作为已核实的事实引用（见 AGENTS.md 第 3 节）。
+#
+# 四格契约（本段钉住的语义矩阵，每格一条用例）：
+#
+# | 注入限位那次是否越限 | 残差是否超标 | ok    | reason        |
+# | -------------------- | ------------ | ----- | ------------- |
+# | 越限                 | 达标         | False | "JOINT_LIMIT" |
+# | 越限                 | 超标         | False | "JOINT_LIMIT" |  <- 越限优先
+# | 未越限               | 达标         | True  | None          |
+# | 未越限               | 超标         | False | "RESIDUAL"    |
+#
+# 第二行说明「越限」这一票优先：既越限又够不到目标时必须报限位（那是调用方能动手修的一
+# 侧），不得降级成残差。第一行与第三行把「越限」与「残差」各自单独钉住，第四行是本轮的
+# 红点 —— 它要求实现把 ``within_limits`` 真的读出来做分流。
+#
+# 为什么必须用假求解器（``monkeypatch`` 掉 ``ArmIK._solve_once``）：
+# 真实 qpmad 在注入限位下几乎不外溢（T-IK-17 段实测 1e-15 ~ 1e-14 度，落在
+# ``LIMIT_EPS_DEG`` 容差内），而且解一旦被限位约束住，残差自然就超标 —— 于是「越限且残差
+# 达标」「未越限且残差超标」两格在真实求解器下**造不出来**。假实现按「注入限位字典的对象
+# 身份」区分 ``solve()`` 的两次调用（先用 URDF 限位判物理可达性、再用注入限位做分类），并
+# 把两次的 q 与残差**分开指定**：URDF 那次一律达标，保证流程不会提前停在 URDF 的 RESIDUAL
+# 分支 —— 于是下面的失败结论只可能来自末段分类，而不是残差或求解器噪声。
+# 每条用例都断言前提 ``calls == {"urdf": 1, "injected": 1}``：如果 ``solve()`` 以后改掉
+# 「两次求解」的结构、或不再把调用方的字典原样透传，失败会明确报「前提破了」，而不是伪装
+# 成分类错误。
+#
+# 参数取值：越限幅度取 ``hi + 1e-3`` 度（与 T-IK-17.11 同一量级：比容差上界 1e-6 大三个
+# 数量级，是任何合理实现都必须判越界的真实越限）；「残差超标」取 0.074 m，与问题报告中的
+# 现场观测同量级（``residual_limit_m`` 默认 0.005 m 的约 15 倍）；本仓库 ``evidence/``
+# 目录内没有该次运行的书面记录、未复核，它在本段只承担「合成残差量级」的角色。
+#
+# 鉴别力（合理但错误的实现会挂在哪一格）：
+# - 现状「不 ok 就一律 JOINT_LIMIT」             -> 第 4 格红（本轮红点）；
+# - 「不 ok 就一律 RESIDUAL」（丢掉限位信息）     -> 第 1、2 格红；
+# - 「在限位内就 ok=True」（丢掉残差）            -> 第 4 格红（ok=True 与 reason 都挂）；
+# - 「先看残差、超标就 RESIDUAL」（不区分优先级） -> 第 2 格红（越限时该是 JOINT_LIMIT）；
+# - 拿第一次（URDF 限位）求解的残差做分类         -> 第 4 格红（URDF 那次的 1e-6 达标）；
+# - ``within_limits`` 写反（越限当未越限）        -> 第 1、3 格红。
+
+T_IK_19_LIMITS_DEG = (-170.0, 170.0)
+T_IK_19_OVER_LIMIT_JOINT = "left_wrist_roll"
+T_IK_19_OVER_LIMIT_INDEX = JOINT_NAMES.index(T_IK_19_OVER_LIMIT_JOINT)
+# 越面幅度（度）：同 T-IK-17.11，比 LIMIT_EPS_DEG 大得多，属真实越限而非浮点末位。
+T_IK_19_OVER_LIMIT_DEG = 1e-3
+# 残差达标 / 超标的两个值（米）。0.074 与问题报告中的现场观测同量级，但本仓库 `evidence/`
+# 目录内无该次运行的书面记录、未复核：它只是合成残差量级，**不承担证据作用**。
+T_IK_19_ACCEPTABLE_RESIDUAL_M = 1e-6
+T_IK_19_EXCESSIVE_RESIDUAL_M = 0.074
+
+
+def t_ik_19_injected_case(
+    over_limit: bool,
+) -> tuple[dict[str, tuple[float, float]], np.ndarray]:
+    """构造「注入限位 + 注入那次求解返回的关节解」。
+
+    ``over_limit=False`` 时返回种子解（六个关节都落在 ±170 限位内部，不会触发夹紧）；
+    ``over_limit=True`` 时把探针关节推到上限面之外 ``T_IK_19_OVER_LIMIT_DEG`` 度。
+    """
+    limits = limits_for(lo=T_IK_19_LIMITS_DEG[0], hi=T_IK_19_LIMITS_DEG[1])
+    q_injected = np.asarray(SOLVE_SEED_Q, dtype=float)
+    if over_limit:
+        _lo_deg, hi_deg = limits[T_IK_19_OVER_LIMIT_JOINT]
+        q_injected[T_IK_19_OVER_LIMIT_INDEX] = hi_deg + T_IK_19_OVER_LIMIT_DEG
+    return limits, q_injected
+
+
+def describe_t_ik_19_outcome(
+    result: Any, limits: dict[str, tuple[float, float]], q_unclamped: Any
+) -> str:
+    """拼一句分类诊断：reason / 残差 / 越界关节名与幅度（用于断言失败消息）。
+
+    Args:
+        result: ``solve()`` 返回的 IKResult。
+        limits: 本次注入的限位（度）。
+        q_unclamped: **未被夹紧**的关节向量，即假求解器那次返回的 q —— 越界幅度就是相对它算
+            的。不能传 ``result.q_deg``：它已被 ``_clamp_to_joint_limits`` 夹到 [lo, hi] 上，
+            据此算出来的 violations 几乎永远为空（打印 ``none (all joints inside [lo, hi])``），
+            恰好丢掉最想看的越限量。
+
+    Returns:
+        形如 ``reason=... position_error_m=... violations=[...]`` 的单行文本。
+    """
+    eps, _clamp = load_limit_clamp()
+    values = np.asarray(q_unclamped, dtype=float)
+    violations: list[str] = []
+    for name, value in zip(JOINT_NAMES, values, strict=True):
+        lo_deg, hi_deg = limits[name]
+        if float(value) > hi_deg + eps:
+            violations.append(f"{name}={float(value) - hi_deg:+0.6g} deg over hi={hi_deg!r}")
+        elif float(value) < lo_deg - eps:
+            violations.append(f"{name}={float(value) - lo_deg:+0.6g} deg under lo={lo_deg!r}")
+    return (
+        f"reason={result.reason!r}, ok={result.ok!r}, "
+        f"position_error_m={result.position_error_m!r} "
+        f"(residual_limit_m={SOLVE_RESIDUAL_LIMIT_M!r}), "
+        f"unclamped violations="
+        f"{violations if violations else 'none (all joints inside [lo, hi])'}"
+    )
+
+
+def test_t_ik_19_1_over_limit_with_acceptable_residual_reports_joint_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T-IK-19.1：越限 + 残差达标 -> ok=False / JOINT_LIMIT。
+
+    本用例同时是 ``JOINT_LIMIT`` 路径「不写调用方入参」的**唯一覆盖**：端到端真实求解器
+    造不出该分类（注入限位下的未夹紧解只在 1e-15 度级外溢，落在 ``LIMIT_EPS_DEG`` 内，见
+    T-IK-4.1 的前提断言），只有假求解器能确定性制造「残差达标 + 真实越限」。所以这里显式传入
+    ``q_urdf`` 去拿住种子数组、并保留注入限位字典对象，在 ``solve()`` 前后逐项比对。
+    """
+    pytest.importorskip("placo", reason="ArmIK 的数值求解需要可选依赖 placo")
+    limits, q_injected = t_ik_19_injected_case(over_limit=True)
+    # float64 上 solve 内的 ``np.asarray(..., dtype=float)`` 会别名到调用方缓冲区（而不是
+    # 复制），于是「实现原地写入」是可观测的。
+    q_seed = np.asarray(SOLVE_SEED_Q, dtype=float)
+    q_seed_before = q_seed.copy()
+    limits_before = dict(limits)
+
+    result, calls = solve_with_faked_solver(
+        monkeypatch,
+        limits,
+        q_injected,
+        q_urdf=q_seed,
+        position_error_injected_m=T_IK_19_ACCEPTABLE_RESIDUAL_M,
+    )
+
+    # 前提：两次求解都走了假实现（结构未变、注入字典按身份透传）。
+    assert calls == {"urdf": 1, "injected": 1}, calls
+    # 前提：残差本来就达标 —— 下面的失败只可能来自限位分类。
+    assert result.position_error_m == pytest.approx(T_IK_19_ACCEPTABLE_RESIDUAL_M)
+    assert result.position_error_m <= SOLVE_RESIDUAL_LIMIT_M, result.position_error_m
+
+    q_deg = np.asarray(result.q_deg, dtype=float)
+    _lo_face, hi_face = limits[T_IK_19_OVER_LIMIT_JOINT]
+    assert result.ok is False, (
+        "over-limit solution with acceptable residual must not report ok=True: "
+        + describe_t_ik_19_outcome(result, limits, q_injected)
+    )
+    assert result.reason == "JOINT_LIMIT", (
+        "over-limit + acceptable residual must be JOINT_LIMIT: "
+        + describe_t_ik_19_outcome(result, limits, q_injected)
+    )
+    # 越限那次被判越限，返回的该关节仍被夹回限位面（容差只放宽「判内」，不放宽返回值）。
+    assert float(q_deg[T_IK_19_OVER_LIMIT_INDEX]) == hi_face, (
+        f"{T_IK_19_OVER_LIMIT_JOINT} should be clamped onto hi={hi_face!r}, got "
+        f"{float(q_deg[T_IK_19_OVER_LIMIT_INDEX])!r} ("
+        + describe_t_ik_19_outcome(result, limits, q_injected)
+        + ")"
+    )
+    # 输入不可变性：调用方传入的种子数组与注入限位字典在 solve() 前后逐项相等。
+    assert np.array_equal(q_seed, q_seed_before), "solve() wrote into the caller's q_seed buffer"
+    assert limits == limits_before, (
+        f"solve() wrote into the caller's joint_limits_deg: {limits!r} != {limits_before!r}"
+    )
+
+
+def test_t_ik_19_2_over_limit_wins_over_excessive_residual(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T-IK-19.2：越限 + 残差超标 -> ok=False / JOINT_LIMIT（越限优先）。"""
+    # 鉴别力：把分类写成「先看残差、超标就 RESIDUAL」的实现会让本格红 —— 既越限又够不到
+    # 时，调用方能动手修的是角度那一侧，必须报限位而不是残差。
+    pytest.importorskip("placo", reason="ArmIK 的数值求解需要可选依赖 placo")
+    limits, q_injected = t_ik_19_injected_case(over_limit=True)
+
+    result, calls = solve_with_faked_solver(
+        monkeypatch,
+        limits,
+        q_injected,
+        position_error_injected_m=T_IK_19_EXCESSIVE_RESIDUAL_M,
+    )
+
+    assert calls == {"urdf": 1, "injected": 1}, calls
+    # 前提：超标的是注入那次（URDF 那次达标，已由 calls 与下面的残差等值断言共同锁定）。
+    assert result.position_error_m == pytest.approx(T_IK_19_EXCESSIVE_RESIDUAL_M)
+    assert result.position_error_m > SOLVE_RESIDUAL_LIMIT_M, result.position_error_m
+
+    q_deg = np.asarray(result.q_deg, dtype=float)
+    _lo_face, hi_face = limits[T_IK_19_OVER_LIMIT_JOINT]
+    assert result.ok is False, (
+        "over-limit solution must not report ok=True even when the residual is excessive: "
+        + describe_t_ik_19_outcome(result, limits, q_injected)
+    )
+    assert result.reason == "JOINT_LIMIT", (
+        "an over-limit joint wins over an excessive residual, so the reason must be "
+        "JOINT_LIMIT: " + describe_t_ik_19_outcome(result, limits, q_injected)
+    )
+    assert float(q_deg[T_IK_19_OVER_LIMIT_INDEX]) == hi_face, (
+        f"{T_IK_19_OVER_LIMIT_JOINT} should be clamped onto hi={hi_face!r}, got "
+        f"{float(q_deg[T_IK_19_OVER_LIMIT_INDEX])!r} ("
+        + describe_t_ik_19_outcome(result, limits, q_injected)
+        + ")"
+    )
+
+
+def test_t_ik_19_3_within_limits_with_acceptable_residual_is_ok(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T-IK-19.3：未越限 + 残差达标 -> ok=True / reason=None。"""
+    # 鉴别力：把分类写成恒 False / 恒带 reason（例如「限位内也报 JOINT_LIMIT」）的实现让
+    # 本格红；它与第 4 格合起来说明 reason 真的依赖那两票，而不是被某个常量钉死。
+    pytest.importorskip("placo", reason="ArmIK 的数值求解需要可选依赖 placo")
+    limits, q_injected = t_ik_19_injected_case(over_limit=False)
+
+    result, calls = solve_with_faked_solver(
+        monkeypatch,
+        limits,
+        q_injected,
+        position_error_injected_m=T_IK_19_ACCEPTABLE_RESIDUAL_M,
+    )
+
+    assert calls == {"urdf": 1, "injected": 1}, calls
+    assert result.position_error_m == pytest.approx(T_IK_19_ACCEPTABLE_RESIDUAL_M)
+
+    q_deg = np.asarray(result.q_deg, dtype=float)
+    assert result.ok is True, (
+        "in-limit solution with an acceptable residual must report ok=True: "
+        + describe_t_ik_19_outcome(result, limits, q_injected)
+    )
+    assert result.reason is None, "ok=True must come with reason=None: " + describe_t_ik_19_outcome(
+        result, limits, q_injected
+    )
+    # 未越限时返回向量必须逐分量等于注入解（没有任何夹紧发生）。
+    assert np.array_equal(q_deg, q_injected), (q_deg, q_injected)
+
+
+def test_t_ik_19_4_within_limits_with_excessive_residual_reports_residual(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T-IK-19.4：未越限 + 残差超标 -> ok=False / RESIDUAL（本轮的红点）。"""
+    # 本格对的就是问题报告里「六关节全在注入区间内、位置误差约 0.074 m」那一类现象（该数字
+    # 未复核，只是合成量级，见段首的证据状态）。修复前实现把 ``within_limits`` 丢掉，一律报
+    # JOINT_LIMIT，本格据此变红。
+    # 鉴别力：现状实现、以及任何「在限位内就 ok=True」（丢掉残差）的实现都会在本格红。
+    pytest.importorskip("placo", reason="ArmIK 的数值求解需要可选依赖 placo")
+    limits, q_injected = t_ik_19_injected_case(over_limit=False)
+
+    result, calls = solve_with_faked_solver(
+        monkeypatch,
+        limits,
+        q_injected,
+        position_error_injected_m=T_IK_19_EXCESSIVE_RESIDUAL_M,
+    )
+
+    assert calls == {"urdf": 1, "injected": 1}, calls
+    # 前提：残差确实超标（若这条路走的是 URDF 那次，它达标，不会到这里来）。
+    assert result.position_error_m == pytest.approx(T_IK_19_EXCESSIVE_RESIDUAL_M)
+    assert result.position_error_m > SOLVE_RESIDUAL_LIMIT_M, result.position_error_m
+
+    # 前提：本格那条解本来就在闭区间内 —— 本格的失败不可能来自限位。
+    # 这里直接看**未夹紧**的注入解：``result.q_deg`` 已经被 ``_clamp_to_joint_limits`` 夹到
+    # [lo, hi] 上，对它断言「在区间内」对任何实现恒真、起不到前提作用。
+    for name, value in zip(JOINT_NAMES, q_injected, strict=True):
+        lo_deg, hi_deg = limits[name]
+        assert lo_deg <= float(value) <= hi_deg, (
+            f"test premise broken: {name}={float(value)!r} outside injected limits "
+            f"({lo_deg!r}, {hi_deg!r}); this case must exercise an in-limit solution ("
+            + describe_t_ik_19_outcome(result, limits, q_injected)
+            + ")"
+        )
+
+    assert result.ok is False, (
+        "an excessive residual must not report ok=True: "
+        + describe_t_ik_19_outcome(result, limits, q_injected)
+    )
+    assert result.reason == "RESIDUAL", (
+        "an in-limit solution that misses the target by more than residual_limit_m must be "
+        "RESIDUAL, not JOINT_LIMIT: " + describe_t_ik_19_outcome(result, limits, q_injected)
+    )

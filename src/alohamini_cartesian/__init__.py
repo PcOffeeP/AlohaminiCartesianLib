@@ -7,4 +7,4 @@
 在函数内惰性 import，核心依赖仍只有 numpy）。
 """
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
