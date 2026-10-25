@@ -302,9 +302,10 @@ Exit codes
    hold was issued and the evidence is on disk.
 9  the connected client does not publish the capability rtt mode measures with
    (``latest_request_timing``), so the request age cannot be measured at all:
-   the run was refused right after connecting, before the first request, and no
-   CSV was written -- not even a header.  ``--mode tracking`` does not read that
-   face and is unaffected.
+   the run was refused as soon as ``connect()`` returned, before the state-only
+   window prime sends its first request and before the first sampled frame, and
+   no CSV was written -- not even a header.  ``--mode tracking`` does not read
+   that face and is unaffected.
 """
 
 from __future__ import annotations
@@ -2163,14 +2164,13 @@ def main(
         _close_quietly(client)
         return EXIT_CONNECT_FAILED
 
-    # ``connect()`` prefilled the window with camera requests: replace them with
-    # state-only ones before the first sample is taken.
-    _prime_state_only_window(client)
-
     # rtt mode reads ``latest_request_timing`` on every sampled frame, so a client
     # that does not publish it cannot be measured at all: name the missing face
-    # and refuse before the first request.  Explicitly, never as a defaulted
-    # ``None`` -- empty timing cells would read like a measurement of zero.
+    # and refuse here, ahead of ``_prime_state_only_window`` -- that prime sends
+    # this harness's first state-only request, so probing after it would make the
+    # refusal cost traffic and break the "before any request" claim.  Explicitly,
+    # never as a defaulted ``None`` -- empty timing cells would read like a
+    # measurement of zero.
     if args.mode == "rtt":
         missing = missing_client_capabilities(client)
         if missing:
@@ -2187,6 +2187,10 @@ def main(
             )
             _close_quietly(client)
             return EXIT_CLIENT_UNSUPPORTED
+
+    # ``connect()`` prefilled the window with camera requests: replace them with
+    # state-only ones before the first sample is taken.
+    _prime_state_only_window(client)
 
     try:
         if args.mode == "tracking":
