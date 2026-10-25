@@ -49,10 +49,10 @@ git log --oneline -3                    # 最近提交
 - **pytest 不要再追加 `-q`**：`addopts = "-q"` 已生效，再加会变成 `-qq` 并隐藏 `N passed, M skipped` 汇总行。要看汇总行用 `uv run --no-sync python -m pytest tests -o addopts=""`。
 - 本包已以 editable 方式装进 `.venv`，`uv run --no-sync` 直接复用，不必先 `pip install -e .`。
 
-## 6 项目现状（v0.5.0）
+## 6 项目现状（v0.6.0）
 
 - 已建成：`adapter`（与厂商软件打交道的唯一入口）、`capability`（探测对端具备哪些能力）、`config`（配置分层覆盖）、`control`（控制层）、`kinematics`（运动学与关节换算）、`benchmarks`（离线 IK 基准 `benchmarks/alohamini_ik/benchmark_arm_ik.py`，现场采集与测量脚本 `benchmarks/alohamini_io/capture_robot_fingerprint.py` 与 `benchmarks/alohamini_io/measure_latency.py`）
-- 测试：1027 条实跑通过，2 条跳过
+- 测试：1031 条实跑通过，2 条跳过
 - 跳过的原因：两个 parity 文件需要 `lerobot` 做对照（`tests/test_control_api_lerobot_parity.py`、`tests/test_kinematics_lerobot_parity.py`）。**这不等于全部通过**，引用时必须说清
 - 未完成：现场 smoke（S4）与配置样例。`benchmarks/alohamini_io` 两脚本与其配套测试已在 v0.4.0 迁入并有离线测试，但从未对着真机 Host 跑过，见 `docs/s4-field-smoke.md`
 - 仓库现状：`v0.2.0`、`v0.3.0`、`v0.4.0` 三个 tag 均为 annotated（`git cat-file -t` 报 `tag`）。`v0.2.0` 指向 `3fd41e4`（`feat: 迁移控制层与运动学到独立库（v0.2.0）`）；`v0.3.0` 指向 `4281f2b`（`release: v0.3.0 版本号与文档同步`）；`v0.4.0` 指向本次文档提交（代码提交 `d23be22`）；未配置 remote，全部提交只在本地
@@ -65,9 +65,9 @@ git log --oneline -3                    # 最近提交
 
 ## 8 相关位置
 
-- 决策记录：`docs/ADR.md`（D1–D10）
+- 决策记录：`docs/ADR.md`（D1–D11）
 - 现场实施：`docs/s4-field-smoke.md`（S4 到现场的逐条命令、判据与产物）
 - 迁移归档：`docs/archive/migration-backlog.md`（迁移已在 v0.4.0 完成）
 - 待办清单：`TODO.md`
-- 实测数据：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/`
+- 实测数据：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/`（目录内 `README.md` 写了命名约定）
 - 旧仓库（只读参考）：`/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini-cartesian-teleop`

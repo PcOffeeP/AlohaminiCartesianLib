@@ -11,7 +11,9 @@
 | 已完成 | `src/alohamini_cartesian/control/arm_ik.py` 的 `solve()` 增加限位校验：有限性、`lo > hi`、`lo == hi`，违规抛 `ValueError` | 由 `T-IK-18.x` 系列用例守护 | 与 `joint_adapter.py:262` 的 `Inverted URDF limit` 做法对齐；对外契约变更，需追加 ADR D10；已完成，提交 57d4e6d |
 | 已完成 | 多余关节键的处理定为「忽略」，并加用例钉住 | 由 `T-IK-18.x` 系列用例守护 | 现状已是忽略，缺的是契约与用例；已完成，提交 57d4e6d |
 | 已完成 | `memoryview` 绕过限位形态判据、大整数在 `np.deg2rad` 抛裸 `TypeError` 两个洞已修 | 由 `T-IK-18.14` / `T-IK-18.15` 守护 | 本轮修复 |
-| 待办 | `JOINT_LIMIT` 失败分类误标：残差超标的失败被标成 `JOINT_LIMIT`（`arm_ik.py:452-467`） | 分类矩阵用例（在限位内/外 × 残差达标/超标）逐格通过 | 先定「两者同时成立」时 `JOINT_LIMIT` 优先，再改实现；会改既有用例期望值 |
+| 已完成 | `JOINT_LIMIT` 失败分类误标：残差超标的失败被标成 `JOINT_LIMIT`（`arm_ik.py:468-476`） | 分类矩阵用例（在限位内/外 × 残差达标/超标）逐格通过 | 先定「两者同时成立」时 `JOINT_LIMIT` 优先，再改实现；已完成，提交 16e6ef9 |
+| 待办 | `tests/benchmarks/test_benchmark_arm_ik.py` 在机器满载时偶发 1–5 条红（`14_x` / `15_x` 系列），与业务改动无因果 | 满载下连跑 20 次零红，或改成不依赖墙钟的判据 | 既有问题，HEAD 版可复现；会让将来真实的红被误判成新 bug |
+| 待办 | ADR D10 正文里的代码行号随 `arm_ik.py` 改动漂移 | 逐条核对引用的行号与当前文件一致 | 纯文档 |
 
 ## 2 现场
 
@@ -24,8 +26,8 @@
 
 | 状态 | 事项 | 判据 | 备注 |
 | --- | --- | --- | --- |
-| 待定 | 极大但有限的限位（`abs` 远超实际量级，如 `(2**63, 2**64)`）是否要在入口设上限，还是维持现状以 placo 的 `QPError: Infeasible QP` 收场 | 定下后要么在入口加量级上限并补用例，要么在 ADR D10 明确记录维持现状 | 目前维持现状，见 ADR D10「已知代价之五」 |
-| 待定 | 证据目录长期位置：固定在 `~/pi-workspace/alohamini-cartesian-teleop/evidence/`，还是本库内另立 `evidence/` | 定下后在 `AGENTS.md` 第 8 节与现场文档同步 | 目前沿用外部目录 |
+| 已完成 | 极大但有限的限位（`abs` 远超实际量级，如 `(2**63, 2**64)`）是否要在入口设上限，还是维持现状以 placo 的 `QPError: Infeasible QP` 收场 | 定下后要么在入口加量级上限并补用例，要么在 ADR D10 明确记录维持现状 | 评估后维持现状，见 ADR D10 |
+| 已完成 | 证据目录长期位置：固定在 `~/pi-workspace/alohamini-cartesian-teleop/evidence/`，还是本库内另立 `evidence/` | 定下后在 `AGENTS.md` 第 8 节与现场文档同步 | 维持外部目录，命名约定见该目录 README 与 `docs/s4-field-smoke.md` 第 9 节 |
 
 ## 4 已完成
 
