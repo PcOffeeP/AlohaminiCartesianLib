@@ -236,7 +236,7 @@ v0.7.0 给两个现场基准脚本加了客户端能力探测：`measure_latency
 - 未装 `kinematics` extra 时，`tests/test_arm_ik.py` 的数值参数实例、`tests/test_control_controller.py` 的 2 条真 IK 用例与 `tests/benchmarks/test_benchmark_arm_ik.py` 因缺 `placo` 跳过。开发环境已装该 extra，本机这部分真跑。
 - 缺 `lerobot` 时，`tests/test_kinematics_lerobot_parity.py` 与 `tests/test_control_api_lerobot_parity.py` 在收集期整体跳过。这两个文件用真实 `FeetechMotorsBus` 与 `AlohaMiniClient` 作 oracle 做差分对照，所以与真实总线的整环对照未在最小环境执行。
 - `connect(...)` 必须注入 `client_factory`。默认工厂恒抛 `RuntimeUnavailable`，没有内部 import `lerobot` 的退路。
-- `benchmarks/alohamini_io` 的两个脚本已入库，配套测试离线跑通 176 条用例，但从未对着真机 Host 跑过。缺三样证据：`schema_version == 2` 的实际取值没有样本；`measure_latency.py` 的 Mode B `tracking` 会真动机器人，未跑过；Gate F（运行时门禁，决定这次测量能不能发命令）的真实拒绝路径未跑过。现场怎么补齐这些证据见 [docs/s4-field-smoke.md](docs/s4-field-smoke.md)。
+- 两个现场脚本已在真机上跑过一次（2026-10-25）：`schema_version = 2` 的指纹已取得（18 个电机、换算字段齐全）；Mode B 试动跑了五次（腕部达成 87.9%、肩部两轴未跟随）；Gate F 第一段有真实拒绝记录（退出码 6、零命令）。仍未取到的：Gate F 第二段、跨机 RTT、右臂试动、相机非空帧。汇总见 [docs/field-results.md](docs/field-results.md)；现场怎么执行见 [docs/s4-field-smoke.md](docs/s4-field-smoke.md)。
 
 ## 开发与测试
 
@@ -257,13 +257,14 @@ uv run --no-sync ruff check .             # 代码风格
 alohamini-cartesian-lib/
 ├── pyproject.toml                    # 包元数据、extras、dev 组、pytest 与 ruff 配置
 ├── README.md
-├── TODO.md                          # 待办清单，Agent 与人都要维护
+├── TODO.md                          # 目标与待办：整体目标 → 阶段目标 → 小目标 → 工程债
 ├── .gitignore
 ├── benchmarks/alohamini_ik/benchmark_arm_ik.py           # FK 与数值 IK 基准脚本
 ├── benchmarks/alohamini_io/capture_robot_fingerprint.py  # 现场采集对端 metadata 指纹，lerobot 惰性 import
 ├── benchmarks/alohamini_io/measure_latency.py            # 现场测时延，Mode B tracking 会真动机器人
-├── docs/ADR.md                       # D1–D12 决策记录
+├── docs/ADR.md                       # D1–D13 决策记录
 ├── docs/acceptance-baseline.md       # V01–V13 准入基线：软件证据、实机证据与判据
+├── docs/field-results.md             # 现场验证结果台账：按时间倒序的结论与数字
 ├── docs/s4-field-smoke.md            # S4 现场实施：命令、判据、产物、退出码
 ├── docs/archive/migration-backlog.md # 迁移待办，已归档（迁移在 v0.4.0 完成）
 ├── configs/template.yaml             # 配置模板（随库分发的默认值）

@@ -141,6 +141,8 @@ mkdir -p "$S4DIR"/{capture,rtt,tracking,configs,stdout}
 
 Pi 的系统时区设成 `Europe/London`，日志显示的时间等于 UTC。本地时间是 UTC+8，钟点比日志里的数字大 8 小时：日志里的 `09:5x` 对应本地 `17:5x`。
 
+该结论来自现场 `date` 与 `timedatectl` 的屏幕输出，未落盘到证据目录；证据目录内唯一可核的时间依据是 `date -u` 生成的 UTC 时间戳。
+
 因此本文凡涉及现场时间，都写明是 UTC 还是本地时间。`$S4DIR` 与 `$STAMP` 按 UTC 生成（`date -u`），产物文件名里的时间也一律是 UTC。
 
 ### 在哪跑
@@ -392,6 +394,8 @@ run 1.3-rtt-deploy uv run --no-sync python benchmarks/alohamini_io/measure_laten
 
 2026-10-25 已实际执行本条路径并取得拒绝记录，命中 Gate F 第一段（版本判断），报文见第 2 节实测记录。
 
+步骤号与证据文件的对照：本文的 `2.0-refusal-v1` 对应证据文件 `stdout/2.2b-gateF-attempt-20261025T074158Z.{cmd,log,exit}`（exit `6`、零命令）；`2.1-probe` 未按本节命令运行，同一项检查实际由 `stdout/5.1-probe21-20261025T094457Z.log` 完成，输出为 18 个电机逐项 `missing=[] bad=[]`。
+
 宿主仍是 `schema_version=1` 时，跑
 
 ```bash
@@ -442,7 +446,7 @@ PY
 - v1 宿主（2026-10-25 UTC 07:00 前后的提交 `ec65318f`）上，`build_robot_metadata` 给每个电机只写 6 个键（`id`、`model`、`normalization`、`drive_mode`、`range_min`、`range_max`），没有 `homing_offset`，也没有 `resolution`；那时即便把 `schema_version` 改成 2，`2.1-probe` 的输出也会是每个电机 `missing=['homing_offset','resolution']`，第二段对所有关节都成立。
 - v2 宿主（同日 UTC 09:33 之后的提交 `6aee1f81`）上 18/18 电机字段齐全，`2.1-probe` 不会报 `missing`，Gate F 第二段不会被触发。这条拒绝路径在 v2 宿主上未验证。
 - 记录证据时必须写明命中的是哪一段。两种拒绝要分开：`schema_version` 不是 2 → Gate F 第一段拒绝；换算字段不全 → Gate F 第二段拒绝。
-- 若全部电机都齐全（其他厂商版本可能如此），本窗口触发不了 F 的第二段。此时只记录「v2 宿主下 Gate F 未触发」这一事实，理由写进 `TODO.md` 与 `$S4DIR/stdout/`（`2.1-probe-*` 已在盘上）。**不要为了造记录去改标定文件或伪造数据。**
+- 若全部电机都齐全（其他厂商版本可能如此），本窗口触发不了 F 的第二段。此时只记录「v2 宿主下 Gate F 未触发」这一事实，理由写进 `TODO.md` 与 `$S4DIR/stdout/`（`5.1-probe21-*` 已在盘上）。**不要为了造记录去改标定文件或伪造数据。**
 - 电机名到关节观测键（如 `arm_left_shoulder_pan.pos`）的对应关系本文未核实。现场用该电机的名字加 `--joint` 试一次，命令骨架如下，`--joint` 的取值按 `2.1` 输出里 `missing` 或 `bad` 非空的电机名改：
 
 ```bash
@@ -702,6 +706,8 @@ $S4DIR/                       # = ~/pi-workspace/alohamini-cartesian-teleop/evid
 
 只有这五个子目录。新的产物种类不改目录结构，按上表归位。
 
+2026-10-25 那次窗口实际取到了什么、数字是多少、每个数字对应哪个文件，已汇总到 [docs/field-results.md](field-results.md)。要查现场结果先看那份台账；本文只管怎么执行。
+
 ### rtt 模式 CSV：18 列
 
 一行是一个被接受的观测请求。
@@ -785,6 +791,8 @@ Pi 侧命令的实测范围（一条命令算一项）：
 | --- | --- |
 | `0.0-ssh-check`、`0.10-pi-ip`、`0.2-pi-commit`、`0.3-pi-schema`、`0.3b-schema-context`、`0.5-host-procs`、`0.6-ports`、`0.6b-ports-netstat`、`1.1-capture`、`1.2`、`1.3`、阶段 2 的 Gate B 探测与 Gate F 拒绝（`2.0-refusal-v1`）、`4.1-host-args`、`4.2-host-cmdline`、`4.3-host-config`、`4.3b-config-args`、`4.3c-config-classes`、`4.5-serial`、`4.5b-serial-pi`、`4.6-video`、`4.6b-video-pi`、`4.7-calib`、阶段 3 的 `3.1-tracking`（五次运行） | `0.4b-tools`、`0.4-pi-ls`、`2.1-probe`、`4.4-load-check` |
 
+步骤号与证据文件的对照：`2.0-refusal-v1` → `stdout/2.2b-gateF-attempt-20261025T074158Z.{cmd,log,exit}`（exit `6`、零命令）；`2.1-probe` 未按本文命令运行，同一项检查由 `stdout/5.1-probe21-20261025T094457Z.log` 完成，输出为 18 个电机逐项 `missing=[] bad=[]`。
+
 新增实测项的备注：
 
 - `1.1-capture`、`1.2`、`1.3`：已在 v2 宿主上实测通过（RTT 为 Pi 本机回环）。`1.1-capture` exit 0，`robot_metadata.schema_version` 为 `2`，18 个电机字段齐全；`1.2` / `1.3` exit 0，请求率受 Host 50 Hz 主循环封顶，`1.2` 组 `achieved_rate_hz=49.8`（请求 1000 Hz）。早先一次在 Pi 侧以 conda python 执行 `1.1-capture` 时退出码 `3`（该时点 vendor 为升级前的 `ec65318f`，不提供 `latest_request_timing`；升级后的 `6aee1f81` 提供该面），未写 JSON；该现象已由 v0.7.0 的能力探测改为显式中止或记 `null`。
@@ -799,7 +807,7 @@ Pi 侧命令的实测范围（一条命令算一项）：
 - Mode B 只在 2026-10-25 跑过五次，都是左臂单关节、每步 1°。右臂、多关节联动、更大的单步行程都未跑过，见第 7 节实测表。
 - `tracking` CSV 的 `received_monotonic_s` 一列五份全空。按第 10 节的列定义，该列记的是本步越过 90% 那一帧的到达时刻；五份的 `rise_90_time_s` 也全空，说明没有帧记到 90% 交点，该列随之空。两者同因这一条是推论，未单独验证。后果是算不出「命令发出到反馈到达」的时延：`t_send_monotonic_s` 有值、到达时刻没有，本轮只能算位置与误差。要补这一列，先把 `--settle-tolerance-deg` 取到小于 0.1 × delta（即小于 0.1°）让交点出现，再确认脚本在该帧写入到达时刻。
 - Gate F 第二段（换算字段不全时的拒绝）在 v2 宿主上未触发、未验证：现在 18/18 字段齐全，第二段不会拒。要验它需构造换算字段不全的宿主，或注入测试。
-- 4 路相机在采集时全返回零帧（`Frame is None`），另有两次 ZMQ 请求超时。关节与 metadata 正常，所以未阻塞零运动阶段，但带图像的用例会拿到空帧。未排查。
+- 4 路相机在采集时全返回零帧（stderr 出现 `Frame is None`），另有两次 ZMQ 请求超时。该条来自现场采集时的观察，证据目录内没有零帧记录，也没有任何图像文件，**这一条在目录内没有直接证据**；下次采集时应把该 stderr 落盘。关节与 metadata 正常，所以未阻塞零运动阶段，但带图像的用例会拿到空帧。未排查。
 - RTT 数字是 Pi 本机回环，不能当网络延迟读。
 - 收尾 hold 的实际效果无证据。
 - exit 8 的真实触发路径无记录。
@@ -841,7 +849,7 @@ Pi 侧命令的实测范围（一条命令算一项）：
 
 - `currents_ma` 仍不可用作负载或扭矩判据。静止态 `currents_ma` 与寄存器 `Present_Load` 都是 0，说明静止时确实无负载；这不能反推运动过程中的负载。
 - 扭矩状态已由寄存器读数为**开着**：四台都是 `Torque_Enable=1`、`Lock=0`。这与「手推不动」一致：位置模式下扭矩开着，人手推就是顶着位置环。
-- 肩部与腕部在寄存器配置上找不出差别。`Torque_Limit`、`Max_Torque_Limit`、`P`/`I`/`D`、`Operating_Mode` 四项四台逐项相同；`Protection_Current` 唯一的不同是按型号分组，把 ID1 与 ID6 分在同一组（同为 sts3250、310），而这两台的达成率分别是 8.8% 与 87.9%。因此寄存器配置差异解释不了达成率差异。
+- 肩部与腕部在寄存器配置上找不出差别。`Torque_Limit`、`Max_Torque_Limit`、`P`/`I`/`D`、`Operating_Mode` 四项四台逐项相同；有差异的五项全部随型号变化，没有任何一项按达成率分组：`Protection_Current`（310 / 500）、`Minimum_Startup_Force`（0 / 8）、`CW/CCW_Dead_Zone`（0 / 2）、`Protection_Time`（200 / 250）、`Unloading_Condition`（45 / 44）。ID1 与 ID6 同属 sts3250 一组（例如 `Protection_Current` 都是 310），而这两台的达成率分别是 8.8% 与 87.9%。因此寄存器配置差异解释不了达成率差异。
 - `{Torque_Enable=1, Lock=0}` 这个组合不是本库与厂商 fork 的常规写路径能留下的状态。厂商 `feetech.py` 的 `disable_torque()` 写 `{Torque_Enable=0, Lock=0}`，`enable_torque()` 写 `{1, 1}`（`lerobot_alohamini/src/lerobot/motors/feetech/feetech.py:293`、`:304`），两条都产生不出 `{1, 0}`；本库 `src/` 里没有对这两个寄存器的写入。**写入者身份未识别。** 源码侧 `configure()` 无条件调 `disable_torque()` 预测扭矩应为 0，实测为 1，两者冲突：是这次运行路径上该调用没走到，还是之后被别的写入者覆盖，两点都未验证。
 
 ### Pi 上的 client 只发布部分计时面
@@ -873,7 +881,7 @@ payload 的 10 个顶层键与 `schema_version = 1` 不变；缺能力不改变 
 
 ## 14 待裁决事项
 
-无。原「证据目录是否长期固定」一条已定：维持外部目录，见 `TODO.md` 第 3 节。
+无。原「证据目录是否长期固定」一条已定：维持外部目录，见 `AGENTS.md` 第 8 节。
 
 ## 附录 A：两个脚本的完整参数表
 

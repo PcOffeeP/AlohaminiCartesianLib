@@ -37,7 +37,7 @@
 | 测试 | `1074 passed, 2 skipped` |
 | 跳过的两条 | `tests/test_control_api_lerobot_parity.py`、`tests/test_kinematics_lerobot_parity.py`，需要 `lerobot` 做对照；**不等于全部通过** |
 | 核心依赖与 `lerobot` 引用位置 | 核心只依赖 numpy；`lerobot` 只在 `adapter/protocol.py` 被 import，由 `tests/test_capability.py` 的 AST 断言守着 |
-| 决策记录 | `docs/ADR.md` 现有 D1–D12 |
+| 决策记录 | `docs/ADR.md` 现有 D1–D13 |
 
 ### 4.2 已实现能力
 
@@ -107,9 +107,10 @@
 | 文档 | 管什么 | 冲突时谁优先 |
 | --- | --- | --- |
 | 设计规范：`/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini-cartesian-teleop/docs/alohamini-control/Alohamini-control-design.md`（自标 SSOT，尚未迁入本库） | 接口契约、状态机、Gate A–E、决策 D001–D018 | 设计口径以它为准 |
-| `docs/ADR.md` | 本库落地时的取舍与代价（D1–D12） | 与本库代码冲突时以它为准；与设计规范冲突时以设计规范为准 |
+| `docs/ADR.md` | 本库落地时的取舍与代价（D1–D13） | 与本库代码冲突时以它为准；与设计规范冲突时以设计规范为准 |
 | `docs/s4-field-smoke.md` | 现场逐条命令、判据、产物、退出码 | 现场怎么执行以它为准 |
-| `TODO.md` | 未完成事项与判据 | 事项状态以它为准 |
+| `docs/field-results.md` | 现场实际取到的结论与数字，按时间倒序，每条给证据文件 | 现场拿到了什么以它为准；数字与本文第 4.4 节或现场手册不一致时，以它引的证据文件为准 |
+| `TODO.md` | 接下来要做的事、判据与影响面（整体目标 → 阶段目标 → 小目标 → 跨阶段工程债） | 事项状态与优先级以它为准 |
 
 ### 命名对照：两组 Gate 不是一回事
 

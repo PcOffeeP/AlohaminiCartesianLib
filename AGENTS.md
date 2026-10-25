@@ -33,7 +33,7 @@
 - 不修改本地 fork `/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini` 与 Pi 上的上游部署。旧仓库 `lerobot_alohamini-cartesian-teleop` 已退役，不再作为参考。
 - 不自动推送远程、不改写历史（不 amend、不 force push）。
 - 提交只用显式路径，禁止 `git add -A`。
-- 待办清单在仓库根 `TODO.md`。开工前先读它；发现自己没做完的、或发现新缺口，当场追加一行，不要只在对话里记；完成一项就改状态并写上提交哈希。
+- 待办清单在仓库根 `TODO.md`，只记接下来要做的事（整体目标 → 阶段目标 → 小目标 → 跨阶段工程债）。开工前先读它；发现自己没做完的、或发现新缺口，当场追加一行，不要只在对话里记。做完的事项从 `TODO.md` 移除：设计取舍写进 `docs/ADR.md`，现场数字写进 `docs/field-results.md`，提交哈希写在提交信息里。
 
 ## 5 怎么自检
 
@@ -67,9 +67,10 @@ git log --oneline -3                    # 最近提交
 
 ## 8 相关位置
 
-- 决策记录：`docs/ADR.md`（D1–D12）
+- 决策记录：`docs/ADR.md`（D1–D13）
 - 现场实施：`docs/s4-field-smoke.md`（S4 到现场的逐条命令、判据与产物）
+- 现场结果：`docs/field-results.md`（按时间倒序的结论与数字；查现场到底拿到了什么，先看这里，再看证据目录原文件）
 - 迁移归档：`docs/archive/migration-backlog.md`（迁移已在 v0.4.0 完成）
-- 待办清单：`TODO.md`
+- 待办清单：`TODO.md`（只记接下来要做的事，结构为整体目标 → 阶段目标 → 小目标 → 跨阶段工程债）
 - 实测数据：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/`（目录内 `README.md` 写了命名约定）
 - 设计规范（SSOT，在已退役的旧仓库路径下，尚未迁入本库）：`/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini-cartesian-teleop/docs/alohamini-control/Alohamini-control-design.md`
