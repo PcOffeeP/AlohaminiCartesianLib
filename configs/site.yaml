@@ -1,6 +1,8 @@
 # 本机（AlohaMini 2 Pro）的现场配置：覆盖 template.yaml，再被环境变量 ALOHAMINI_* 覆盖。
 # 已实测事实只用于下方对应字段：双臂设备路径 /dev/am_arm_follower_left → ttyACM0、
-# /dev/am_arm_follower_right → ttyACM1；标定文件在厂商仓库 robots/alohamini/AlohaMiniRobot.json。
+# /dev/am_arm_follower_right → ttyACM1。标定文件在 Pi 上：
+# /home/pi5/.cache/huggingface/lerobot/calibration/robots/alohamini/AlohaMiniRobot.json
+# （证据 evidence/s4-20261025/stdout/4.7-calib-20261025T070057Z.log）。
 
 # 这台机器是 AlohaMini 2 Pro，型号名取自 kinematics/model_specs.py 的合法取值。
 robot_model: alohamini2pro

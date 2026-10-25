@@ -11,6 +11,10 @@
   ``overlay.SETTINGS_FIELDS``，取值等于冻结值，且 site 覆盖 template。
 - C：``examples/`` 下任何 ``*.py`` 都不引用 ``lerobot``（本库只有
   ``src/alohamini_cartesian/adapter/protocol.py`` 可以引用它）。
+- D：契约 A 的「0 次发送」不能是靠硬编码打印出来的假绿。源码级要求示例真的断言
+  ``send_action_calls == 0`` 且该计数器在源码里出现至少 3 次（初始化 / 自增 / 断言 + 打印）；
+  行为级要求把示例模块从路径加载后，``_FakeTransport.send_action_calls`` 会随调用自增
+  （0 → 1 → 2），而不是常量，并真的满足 ``RobotTransport`` 协议。
 
 全程离线：不连设备、不联网，唯一的外部动作是拉起一个子进程跑示例脚本。读真实配置时
 一律传 ``check_devices=False``（本机没有这些 ``/dev`` 节点），并传 ``env={}`` 让断言不
@@ -19,14 +23,19 @@
 
 from __future__ import annotations
 
+import importlib.util
+import re
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pytest
 import yaml
 
+from alohamini_cartesian.adapter.protocol import RobotTransport
 from alohamini_cartesian.config.overlay import SETTINGS_FIELDS, load_settings
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -238,3 +247,85 @@ def test_examples_do_not_import_lerobot() -> None:
     ]
 
     assert not offenders, f"这些示例引用了 lerobot（仅 adapter/protocol.py 允许）: {offenders}"
+
+
+# ---------------------------------------------------------------------------
+# 契约 D：防「硬编码 0 次发送」假绿
+# ---------------------------------------------------------------------------
+
+# 示例源码里必须存在的「真断言」形态：``assert <obj>.send_action_calls == 0``。
+SEND_ACTION_ZERO_ASSERT_RE = re.compile(r"assert\s+\w+\.send_action_calls\s*==\s*0")
+
+# 计数器在源码里至少出现这么多次：``__init__`` 初始化、``send_action`` 自增、断言、打印。
+MIN_SEND_ACTION_COUNTER_REFS = 3
+
+
+@pytest.fixture(scope="module")
+def example_module() -> ModuleType:
+    """从文件路径加载 ``examples/minimal_dry_run.py`` 为模块，供行为级守卫复用。
+
+    不往 ``sys.path`` 里塞 ``examples/``（避免污染），也不 import 本测试模块的私有 helper。
+    示例已用 ``if __name__ == "__main__":`` 收口，因此加载本身不会执行 ``main()``。
+
+    Returns:
+        已执行模块级代码、但未调用 ``main()`` 的示例模块对象。
+    """
+    spec = importlib.util.spec_from_file_location("_example_minimal_dry_run", EXAMPLE_PATH)
+    assert spec is not None, f"无法为示例脚本构建模块 spec: {EXAMPLE_PATH}"
+    loader = spec.loader
+    assert loader is not None, f"示例脚本的模块 spec 没有 loader: {EXAMPLE_PATH}"
+
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+
+    return module
+
+
+def test_example_source_asserts_real_send_action_counter() -> None:
+    """契约 D：示例源码里必须存在 ``assert <obj>.send_action_calls == 0``，不能只打印字面量。"""
+    source = EXAMPLE_PATH.read_text(encoding="utf-8")
+
+    assert SEND_ACTION_ZERO_ASSERT_RE.search(source), (
+        "示例必须断言 send_action_calls == 0，不能只打印字面量「0 次发送」；"
+        f"未在 {EXAMPLE_PATH} 中找到形如 `assert <obj>.send_action_calls == 0` 的语句"
+    )
+
+    counter_refs = source.count("send_action_calls")
+    assert counter_refs >= MIN_SEND_ACTION_COUNTER_REFS, (
+        f"示例源码中 send_action_calls 只出现 {counter_refs} 次，少于要求的"
+        f" {MIN_SEND_ACTION_COUNTER_REFS} 次（初始化 / 自增 / 断言 + 打印）：{EXAMPLE_PATH}"
+    )
+
+
+def test_example_fake_transport_counter_increments_per_send(example_module: ModuleType) -> None:
+    """契约 D：示例的假 transport 真实现协议，且 ``send_action_calls`` 随下发自增而非常量。"""
+    # 取示例模块里的常量与替身，不在这里复制一份关节角（ruff B009 禁绝常量 getattr）。
+    fake_transport_cls = example_module._FakeTransport
+    start_q_deg = example_module._START_Q_DEG
+
+    transport = fake_transport_cls(start_q_deg)
+
+    assert transport.send_action_calls == 0, "新建 transport 的 send_action_calls 应为 0"
+
+    transport.send_action({"arm_left_shoulder_pan.pos": 0.0})
+    assert transport.send_action_calls == 1, (
+        "第一次 send_action 后 send_action_calls 应为 1（计数器必须自增，不能是常量）"
+    )
+
+    transport.send_action({"arm_left_shoulder_pan.pos": 0.0})
+    assert transport.send_action_calls == 2, "第二次 send_action 后 send_action_calls 应为 2"
+
+    assert isinstance(transport, RobotTransport), (
+        "示例的假 transport 必须真实现 RobotTransport 协议"
+        "（get_observation / send_action / prime_observation_request_window）"
+    )
+
+    observation = transport.get_observation()
+    assert isinstance(observation, Mapping), (
+        f"get_observation 必须返回 Mapping，实际类型 {type(observation)}"
+    )
+
+    transport.prime_observation_request_window(include_cameras=False)
+    assert transport.prime_calls == 1, (
+        "prime_observation_request_window 调用一次后 prime_calls 应为 1"
+    )
