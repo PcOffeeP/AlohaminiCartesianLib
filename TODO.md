@@ -10,7 +10,7 @@
 
 完成判据：`docs/acceptance-baseline.md` 的 V01–V13 全部「实机证据」列填实。
 
-当前：软件侧 10/13 有证据；实机侧 0 条全实、3 条部分（V01、V10、V12），其余 10 条未取。
+当前：软件侧 10/13 有证据；实机侧 1 条全实（V12）、2 条部分（V01、V10），其余 10 条未取。
 
 ## 2 阶段目标
 
@@ -73,3 +73,5 @@
 | 四键齐但某键为 `None` 的端到端形态（`{key: None}`）无测试锁定，而模块 docstring 声称会拒 | 加一条端到端测试 | 「`None` 算缺键」这条口径的可复核性 | 本轮实测 `age_s=None`：exit `9`、无 CSV、缺键子句为裸键名 `age_s`（行为正确，只有代码路径、无端到端测试） |
 | 拒绝文案的子句标题仍是 `missing key(s):`，而条目可能是 `age_s (negative value (-0.5))`（值坏而非缺失） | 定下降级方案（例如标题保留、在 `, so ` 之后补一句说明） | 运维读 stderr 时的可理解性 | 标题被既有测试锁住（`tests/benchmarks/test_measure_latency.py:4467` 的 `_MISSING_KEYS_MARKER = "missing key(s):"`），不得改；本轮未动文案骨架 |
 | `README.md` 的 v0.7.0 段（约 `:224`、`:230`）仍只写「缺该属性 → 退出码 `9`」与「三种形态见 D12」，未提值形态判据（键在但值不可用也算 `9`） | 同步 README 的判据描述 | 对外文档与实现的一致性 | 本轮授权不含 README，未同步 |
+| 本库没有内置编码器分辨率表：`resolve_deg_per_unit(model_resolution=...)` 的表由调用方注入，`src/` 内无 `MODEL_RESOLUTION` 常量，`kinematics/model_specs.py` 的 `ROBOT_SPECS` 只有型号/导程/轮半径 | 在 `src/` 内提供内置型号→分辨率表，或在 `docs/ADR.md` 写明「`resolution` 只来自 v2 指纹」这条前提并用测试锁定只有标定文件时的 `ConversionUnavailable` 路径 | V12 与 V10 第二段的换算前提 | 未修：目前靠 v2 指纹自带的 `resolution` 覆盖 18/18 电机，只有标定文件时无法算出 `deg_per_unit`（抛 `ConversionUnavailable`） |
+| 左右夹爪标定的 `range` 宽度差异大：`arm_left_gripper` 51 tick（`range_0_100` 下 4.48° 行程），`arm_right_gripper` 1469 tick（129.14°） | 查清两侧夹爪 `range` 宽度差异的原因（装配 / 标定 / 固件限位），或写明这种差异对夹爪指令行程读法的影响 | V02 / 右臂试动时夹爪行程是否符合预期 | 未确认原因，本轮只记录 |
