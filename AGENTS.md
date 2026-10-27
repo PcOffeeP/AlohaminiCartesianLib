@@ -35,6 +35,8 @@
 - 提交只用显式路径，禁止 `git add -A`。
 - 待办清单在仓库根 `TODO.md`，只记接下来要做的事（整体目标 → 阶段目标 → 小目标 → 跨阶段工程债）。开工前先读它；发现自己没做完的、或发现新缺口，当场追加一行，不要只在对话里记。做完的事项从 `TODO.md` 移除：设计取舍写进 `docs/ADR.md`，现场数字写进 `docs/field-results.md`，提交哈希写在提交信息里。
 
+上面前两条硬约束的完整表述（禁止 import 的深层模块、能力判据不看版本号）与守着它们的机器守卫，见 `docs/library-guide.md` 的「约束与机器守卫」小节。
+
 ## 5 怎么自检
 
 ```bash
@@ -53,21 +55,41 @@ git log --oneline -3                    # 最近提交
 
 ## 6 项目现状（v0.7.0）
 
-- 已建成：`adapter`（与厂商软件打交道的唯一入口）、`capability`（探测对端具备哪些能力）、`config`（配置分层覆盖）、`control`（控制层）、`kinematics`（运动学与关节换算）、`benchmarks`（离线 IK 基准 `benchmarks/alohamini_ik/benchmark_arm_ik.py`，现场采集与测量脚本 `benchmarks/alohamini_io/capture_robot_fingerprint.py` 与 `benchmarks/alohamini_io/measure_latency.py`）
-- 测试：1275 条实跑通过，2 条跳过
-- 跳过的原因：两个 parity 文件需要 `lerobot` 做对照（`tests/test_control_api_lerobot_parity.py`、`tests/test_kinematics_lerobot_parity.py`）。**这不等于全部通过**，引用时必须说清
-- 已完成（2026-10-25）：现场 smoke 的零运动部分与首次受控试动已执行；两份配置样例已入库。剩余见 `TODO.md` 的阶段目标与小目标。
-- 仓库现状：`v0.2.0`、`v0.3.0`、`v0.4.0` 三个 tag 均为 annotated（`git cat-file -t` 报 `tag`）。`v0.2.0` 指向 `3fd41e4`（`feat: 迁移控制层与运动学到独立库（v0.2.0）`）；`v0.3.0` 指向 `4281f2b`（`release: v0.3.0 版本号与文档同步`）；`v0.4.0` 指向本次文档提交（代码提交 `d23be22`）；未配置 remote，全部提交只在本地
+版本 `0.7.0`（`src/alohamini_cartesian/__init__.py`）。测试 `1275 passed, 2 skipped`：跳过的 2 条是两个 parity 文件需要 `lerobot` 做对照（`tests/test_control_api_lerobot_parity.py`、`tests/test_kinematics_lerobot_parity.py`），在收集期整体跳过。**这不等于全部通过**，引用时必须说清。
+
+已建成模块：
+
+- `adapter`：与厂商软件打交道的唯一入口（`protocol.py`）
+- `capability`：探测对端具备哪些能力、单位换算裁决
+- `config`：配置分层覆盖
+- `control`：会话与句柄、命令状态机、单臂控制器、FK 与数值 IK
+- `kinematics`：型号规格表、关节单位换算、URDF
+- `benchmarks/alohamini_ik`：离线 IK 基准 `benchmark_arm_ik.py`
+- `benchmarks/alohamini_io`：现场采集 `capture_robot_fingerprint.py` 与测量 `measure_latency.py`
+
+每个版本改了什么、当时测试多少条，见 `docs/changelog.md`。仓库现状：`v0.2.0`、`v0.3.0`、`v0.4.0` 三个 tag 均为 annotated；`v0.2.0` 指向 `3fd41e4`，`v0.3.0` 指向 `4281f2b`，`v0.4.0` 指向代码提交 `d23be22` 之后的文档提交；未配置 remote，全部提交只在本地。
+
+### 6.1 已知限制
+
+- 未装 `kinematics` extra 时，`tests/test_arm_ik.py` 的数值参数实例、`tests/test_control_controller.py` 的 2 条真 IK 用例与 `tests/benchmarks/test_benchmark_arm_ik.py` 因缺 `placo` 跳过。开发环境已装该 extra，本机这部分真跑。
+- 缺 `lerobot` 时，`tests/test_kinematics_lerobot_parity.py` 与 `tests/test_control_api_lerobot_parity.py` 在收集期整体跳过。这两个文件用真实 `FeetechMotorsBus` 与 `AlohaMiniClient` 作 oracle 做差分对照，所以与真实总线的整环对照未在最小环境执行。
+- `connect(...)` 必须注入 `client_factory`。默认工厂恒抛 `RuntimeUnavailable`，没有内部 import `lerobot` 的退路。
+- 两个现场脚本已在真机上跑过一次（2026-10-25）：`schema_version = 2` 的指纹已取得（18 个电机、换算字段齐全）；Mode B 试动跑了五次（腕部达成 87.9%、肩部两轴未跟随）；Gate F 第一段有真实拒绝记录（退出码 6、零命令）。仍未取到的：Gate F 第二段、跨机 RTT、右臂试动、相机非空帧。汇总见 `docs/field-results.md`；现场怎么执行见 `docs/s4-field-smoke.md`。
+- S4 剩余部分：受控试动只跑过左臂单关节，肩部两轴未跟随，原因待定位；右臂、底盘与升降、跨机 RTT 未测。
+
+### 6.2 下一步
+
+见 `TODO.md`。当前焦点是 A 阶段的两个肩部关节为什么只走约 1 tick，以及 D 阶段版本兼容性检查的运行时调用点。
 
 ## 7 待决事项
 
-1. `placo` 依赖形态——已决：声明 `kinematics` extra（`placo>=0.10.1,<0.11`）并装进开发环境，接受 numpy 落到 2.3.x，见 `docs/ADR.md` D8
-2. `benchmarks/` 迁移时机——已迁完（`benchmarks/alohamini_ik` 在 v0.3.0，`benchmarks/alohamini_io` 在 v0.4.0），现场验证的进度：真机 metadata 取值、Mode B 试动、Gate F 第一段拒绝、配置样例采集均已完成（2026-10-25）；仍缺 Gate F 第二段、跨机 RTT、右臂试动、相机非空帧。逐条见 `docs/field-results.md`，迁移决策见 `docs/ADR.md` D3 与 D9，现场步骤见 `docs/s4-field-smoke.md`
-3. 旧仓库那 49 例线上协议测试是否搬入（测的是厂商侧模块，本库不包含）——已决：不迁，见 D7
+已决事项见 `docs/ADR.md` D7、D8、D9；现场验证进度见 `docs/field-results.md`。
 
 ## 8 相关位置
 
-- 决策记录：`docs/ADR.md`（D1–D15）
+- 决策记录：`docs/ADR.md`（D1–D16）
+- 变更记录：`docs/changelog.md`（v0.2.0 → v0.7.0，逐版改了什么、当时测试多少条）
+- 库使用与接口：`docs/library-guide.md`（配置覆盖、能力探测与单位换算、控制层、公开 API、约束与机器守卫）
 - 现场实施：`docs/s4-field-smoke.md`（S4 到现场的逐条命令、判据与产物）
 - 现场结果：`docs/field-results.md`（按时间倒序的结论与数字；查现场到底拿到了什么，先看这里，再看证据目录原文件）
 - 迁移归档：`docs/archive/migration-backlog.md`（迁移已在 v0.4.0 完成）
