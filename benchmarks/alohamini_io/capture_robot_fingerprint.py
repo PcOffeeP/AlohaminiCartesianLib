@@ -55,6 +55,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import math
 import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -247,6 +248,20 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     # range is checked here so no socket is ever opened for it.
     if args.samples < 1:
         parser.error(f"--samples must be >= 1 (got {args.samples})")
+    # ``--timeout-s`` is the only stop condition of a capture
+    # (``deadline_s = clock() + timeout_s``), and it is checked with the same
+    # ``not (math.isfinite(x) and x > 0.0)`` shape as ``measure_latency.py``:
+    # ``inf`` (and ``1e400``, which ``float()`` turns into ``inf``) never expires;
+    # ``nan`` never expires *and* spins, because ``now_s >= deadline_s`` is false
+    # forever and ``pause_s = min(POLL_INTERVAL_S, max(0.0, deadline_s - now_s))``
+    # is ``0.0`` (``max(0.0, nan) == 0.0``), so the poll pause is skipped
+    # entirely.  ``0`` / negative values expire the budget before the first frame
+    # and used to surface as ``InsufficientSamples`` (4), i.e. a sampling problem
+    # the operator did not have.  All five are usage errors (2) instead -- the
+    # exit-code table itself does not move: 4 keeps its meaning (the sequence
+    # froze / too few fresh samples within a *legal* budget).
+    if not (math.isfinite(args.timeout_s) and args.timeout_s > 0.0):
+        parser.error(f"--timeout-s must be a finite number > 0 (got {args.timeout_s})")
     return args
 
 

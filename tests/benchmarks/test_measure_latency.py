@@ -6506,3 +6506,275 @@ def test_collect_rtt_samples_should_not_let_duplicate_frames_throttle_the_row_ra
         f"in {calls} get_observation calls, because every duplicate frame waits a "
         "whole period (idle_pause_s) instead of pacing the next sampling deadline"
     )
+
+
+# ===========================================================================
+# R28-R31: the rest of the numeric knobs reject non-finite values, and the
+# queue/prefetch terms have exactly one reading
+# ===========================================================================
+#
+# ``--rate-hz`` / ``--timeout-s`` / ``--control-hz`` already carry the
+# ``not (math.isfinite(x) and x > 0.0)`` shape (R25/R26).  The four knobs below
+# were left with a sign-only check, which ``nan`` (every comparison false) and
+# ``inf`` (``> 0`` is true) both walk through.  The tests here pin the same
+# shape for them, plus the one thing the shape cannot fix on its own: the CSV
+# path and the report path used to normalise ``host_loop_hz`` differently, so a
+# *direct* caller's ``nan`` produced ``queue_bound_s=0.04`` in the rows and
+# ``queue_bound_ms=0.000`` in the report of the same run.
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "1e400"], ids=["nan", "inf", "overflow_to_inf"])
+def test_parse_args_should_reject_a_non_finite_host_loop_hz(latency, capsys, value: str) -> None:
+    """R28: a non-finite ``--host-loop-hz`` is a usage error (2), never a run.
+
+    ``inf`` is ``> 0`` and ``nan`` makes ``<= 0.0`` false, so the sign-only check
+    let all three through (``1e400`` *is* ``inf`` after ``float()``).  ``inf``
+    then makes ``phase_bound_s`` and ``queue_bound_s`` collapse to ``0.0``, and
+    ``nan`` is read two ways at once: the CSV path falls back to
+    ``HOST_LOOP_HZ_UPPER_BOUND`` while the report path hands the raw ``nan`` to
+    ``effective_request_window``, whose ``rate_hz >= nan`` is false -- so the same
+    run prints ``queue_bound_s=0.04`` in the CSV and ``queue_bound_ms=0.000`` in
+    the report.  The parser refuses the value before any socket is opened, which
+    is the only entry of the knob, so neither path can ever see it.
+
+    Asserted: exit code 2 and the option name on stderr, the shape R25 uses.  The
+    legal value is parsed first on purpose -- an unknown option also exits 2, so
+    without that guard this test would go green on an option that no longer
+    exists.
+    """
+    # Arrange: the option exists and a legal value reaches the namespace.
+    legal = latency.parse_args(["--host", "127.0.0.1", "--host-loop-hz", "20"])
+    assert getattr(legal, "host_loop_hz", None) == pytest.approx(20.0), (
+        "--host-loop-hz 20 does not parse, so the rejection below proves nothing"
+    )
+    capsys.readouterr()
+
+    # Act + Assert: the non-finite value is refused by the parser itself.
+    with pytest.raises(SystemExit) as excinfo:
+        latency.parse_args(["--host", "127.0.0.1", f"--host-loop-hz={value}"])
+
+    assert excinfo.value.code == 2, (
+        f"--host-loop-hz={value} exited with {excinfo.value.code} instead of the usage "
+        "error 2: a non-finite host loop rate makes the phase/queue terms collapse to "
+        "0.0 (inf) or be read two contradictory ways (nan)"
+    )
+    message = capsys.readouterr().err.lower()
+    assert "host-loop-hz" in message, f"the error does not name the option: {message!r}"
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "1e400"], ids=["nan", "inf", "overflow_to_inf"])
+def test_parse_args_should_reject_a_non_finite_settle_timeout_s(
+    latency, capsys, value: str
+) -> None:
+    """R29: a non-finite ``--settle-timeout-s`` is a usage error (2).
+
+    The knob is one stop condition of a tracking run; ``inf`` never expires and
+    ``nan`` makes every ``now - started >= budget`` comparison false, so a joint
+    that never settles runs until the operator kills the process.  The legal
+    value is parsed first for the same reason as in R25.
+    """
+    legal = latency.parse_args(["--host", "127.0.0.1", "--settle-timeout-s", "5"])
+    assert getattr(legal, "settle_timeout_s", None) == pytest.approx(5.0), (
+        "--settle-timeout-s 5 does not parse, so the rejection below proves nothing"
+    )
+    capsys.readouterr()
+
+    with pytest.raises(SystemExit) as excinfo:
+        latency.parse_args(["--host", "127.0.0.1", f"--settle-timeout-s={value}"])
+
+    assert excinfo.value.code == 2, (
+        f"--settle-timeout-s={value} exited with {excinfo.value.code} instead of the "
+        "usage error 2: a non-finite settle budget never expires"
+    )
+    message = capsys.readouterr().err.lower()
+    assert "settle-timeout-s" in message, f"the error does not name the option: {message!r}"
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "1e400"], ids=["nan", "inf", "overflow_to_inf"])
+def test_parse_args_should_reject_a_non_finite_settle_tolerance_deg(
+    latency, capsys, value: str
+) -> None:
+    """R30: a non-finite ``--settle-tolerance-deg`` is a usage error (2).
+
+    ``nan`` makes ``residual >= tolerance`` false forever (no step is ever
+    settled, so every row keeps its settle columns empty) and ``inf`` settles the
+    first poll (``rise_90_time_s`` empty in every row) -- both silently, which is
+    what the cross-check against the effective ``--delta-deg`` cannot catch
+    because ``nan >= delta`` and ``delta >= inf`` are false too.  ``0`` stays
+    legal: the semantics are "settled when the residual is at or below the
+    tolerance" (``test_parse_args_should_keep_a_zero_settle_tolerance_legal``).
+    """
+    legal = latency.parse_args(["--host", "127.0.0.1", "--settle-tolerance-deg", "0.2"])
+    assert getattr(legal, "settle_tolerance_deg", None) == pytest.approx(0.2), (
+        "--settle-tolerance-deg 0.2 does not parse, so the rejection below proves nothing"
+    )
+    capsys.readouterr()
+
+    with pytest.raises(SystemExit) as excinfo:
+        latency.parse_args(["--host", "127.0.0.1", f"--settle-tolerance-deg={value}"])
+
+    assert excinfo.value.code == 2, (
+        f"--settle-tolerance-deg={value} exited with {excinfo.value.code} instead of the "
+        "usage error 2: a non-finite tolerance settles every step (inf) or none (nan)"
+    )
+    message = capsys.readouterr().err.lower()
+    assert "settle-tolerance-deg" in message, f"the error does not name the option: {message!r}"
+
+
+def test_parse_args_should_keep_a_zero_settle_tolerance_legal(latency) -> None:
+    """R30: ``--settle-tolerance-deg 0`` stays legal -- the bound is ``>= 0``.
+
+    Nothing is tightened here on purpose: the documented semantics are "a step
+    counts as settled when the residual is at or below the tolerance", so ``0``
+    is the strictest *legal* setting, not a nonsense one.
+    """
+    args = latency.parse_args(["--host", "127.0.0.1", "--settle-tolerance-deg", "0"])
+
+    assert args.settle_tolerance_deg == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "1e400"], ids=["nan", "inf", "overflow_to_inf"])
+def test_parse_args_should_reject_a_non_finite_delta_deg(latency, capsys, value: str) -> None:
+    """R31: a non-finite ``--delta-deg`` is a usage error (2).
+
+    ``inf`` is ``> 0`` and passes the sign check; ``resolve_delta_deg`` then
+    clamps it to ``MAX_STEP_DELTA_DEG``, so the run silently commands a step the
+    operator never asked for instead of refusing a value that cannot be a step.
+    ``nan`` makes ``<= 0.0`` false and survives to ``min(nan, cap)``, i.e. every
+    step-size comparison in the tracking path is false.  The legal value is
+    parsed first for the same reason as in R25.
+    """
+    legal = latency.parse_args(["--host", "127.0.0.1", "--delta-deg", "0.5"])
+    assert getattr(legal, "delta_deg", None) == pytest.approx(0.5), (
+        "--delta-deg 0.5 does not parse, so the rejection below proves nothing"
+    )
+    capsys.readouterr()
+
+    with pytest.raises(SystemExit) as excinfo:
+        latency.parse_args(["--host", "127.0.0.1", f"--delta-deg={value}"])
+
+    assert excinfo.value.code == 2, (
+        f"--delta-deg={value} exited with {excinfo.value.code} instead of the usage "
+        "error 2: a non-finite step is silently clamped (inf) or poisons every "
+        "step-size comparison (nan)"
+    )
+    message = capsys.readouterr().err.lower()
+    assert "delta-deg" in message, f"the error does not name the option: {message!r}"
+
+
+@pytest.mark.parametrize("value", ["0", "-1"], ids=["zero", "negative"])
+def test_parse_args_should_reject_a_non_positive_delta_deg(latency, capsys, value: str) -> None:
+    """R31: ``--delta-deg 0`` / negative stay usage errors (2) -- no regression.
+
+    The finiteness check is added *around* this rule, not instead of it: a
+    non-positive step commands nothing, so it keeps its own refusal (and its own
+    wording) rather than being folded into the cross-check that would blame the
+    clamp for a value the operator typed.
+    """
+    with pytest.raises(SystemExit) as excinfo:
+        latency.parse_args(["--host", "127.0.0.1", f"--delta-deg={value}"])
+
+    assert excinfo.value.code == 2, (
+        f"--delta-deg={value} exited with {excinfo.value.code} instead of the usage "
+        "error 2: a non-positive step commands nothing"
+    )
+    message = capsys.readouterr().err.lower()
+    assert "delta-deg" in message, f"the error does not name the option: {message!r}"
+
+
+_QUEUE_TERM_PATTERN = re.compile(
+    r"(queued_window|queue_bound_ms|prefetch_bound_ms|queue_mean_ms|prefetch_mean_ms)=([0-9.]+)"
+)
+
+
+def _report_queue_terms(report: str) -> dict[str, float]:
+    """The queue/prefetch cells of the report's ``request_window=...`` line.
+
+    Parsed from the text on purpose: the point of the test is what the operator
+    *sees*, so an implementation that computes the right number and prints
+    another one has to fail.
+    """
+    line = next((line for line in report.splitlines() if "queued_window=" in line), None)
+    assert line is not None, f"the report prints no queue/prefetch line: {report!r}"
+    terms = dict(_QUEUE_TERM_PATTERN.findall(line))
+    assert len(terms) == 5, f"the report line does not state all five terms: {line!r}"
+    return {key: float(value) for key, value in terms.items()}
+
+
+def _rtt_row(latency, args, host_loop_hz: float) -> dict:
+    """One CSV-shaped row for ``args``, exactly as ``_request_row`` builds it."""
+    return latency.net_rtt_estimate_s(
+        0.030,
+        {},
+        host_loop_hz=host_loop_hz,
+        request_window=int(args.request_window),
+        rate_hz=float(args.rate_hz),
+    )
+
+
+@pytest.mark.parametrize(
+    ("extra_argv", "expected_queued_window"),
+    [
+        (["--rate-hz", "50", "--host-loop-hz", "20", "--request-window", "3"], 3),
+        (["--rate-hz", "10", "--host-loop-hz", "50", "--request-window", "3"], 1),
+    ],
+    ids=["queue_gate_open", "queue_gate_closed"],
+)
+def test_rtt_report_should_print_the_same_queue_terms_as_the_rows(
+    latency, extra_argv: list[str], expected_queued_window: int
+) -> None:
+    """R28: the report subtracts exactly the queue/prefetch term the CSV row does.
+
+    The report's own comment promises that it may not print a queue term the CSV
+    did not subtract, so the two are derived from the same ``--rate-hz`` /
+    ``--host-loop-hz`` pair.  Two shapes, because the gate has to agree in both
+    directions: at or above the host rate the window stays queued (2 / 20 Hz =
+    100 ms over a 3-request window) and below it the queue term is genuinely
+    absent (0 ms), which is the case a "print the raw window" implementation
+    would get wrong in the opposite direction.
+    """
+    args = latency.parse_args(["--host", "127.0.0.1", *extra_argv])
+    row = _rtt_row(latency, args, float(args.host_loop_hz))
+
+    terms = _report_queue_terms(latency._format_rtt_report([row], args, 1.0))
+
+    assert terms["queued_window"] == expected_queued_window, (
+        f"the report gates the window differently than the rows: {terms}"
+    )
+    assert terms["queue_bound_ms"] == pytest.approx(row["queue_bound_s"] * 1000.0, abs=1e-6)
+    assert terms["queue_mean_ms"] == pytest.approx(row["queue_mean_s"] * 1000.0, abs=1e-6)
+    assert terms["prefetch_bound_ms"] == pytest.approx(row["prefetch_bound_s"] * 1000.0, abs=1e-6)
+    assert terms["prefetch_mean_ms"] == pytest.approx(row["prefetch_mean_s"] * 1000.0, abs=1e-6)
+
+
+@pytest.mark.parametrize("host_loop_hz", [float("nan"), 0.0, -1.0], ids=["nan", "zero", "negative"])
+def test_rtt_report_should_agree_with_the_rows_for_an_unusable_host_loop_hz(
+    latency, host_loop_hz: float
+) -> None:
+    """R28: a direct caller's unusable ``host_loop_hz`` is read one way, not two.
+
+    The CLI refuses a non-finite ``--host-loop-hz``, so this is the residual
+    path: ``net_rtt_estimate_s`` (and the CSV it feeds) falls back to
+    ``HOST_LOOP_HZ_UPPER_BOUND`` when the value cannot be a period, while
+    ``_format_rtt_report`` used to hand the raw value to
+    ``effective_request_window``.  For ``nan`` that gate is ``rate_hz >= nan``,
+    i.e. always false, so the same row reported ``queue_bound_s=0.04`` and
+    ``queue_bound_ms=0.000`` at once.  Both sides now go through one
+    normalisation, so the report's queue and prefetch terms equal the row's.
+    """
+    args = latency.parse_args(["--host", "127.0.0.1", "--rate-hz", "50", "--request-window", "3"])
+    args.host_loop_hz = host_loop_hz
+    row = _rtt_row(latency, args, host_loop_hz)
+    # The fallback is the upper bound, which the 50 Hz request rate keeps up with:
+    # the window stays queued, exactly as ``net_rtt_estimate_s`` computed it.
+    assert row["queue_bound_s"] == pytest.approx(2 / latency.HOST_LOOP_HZ_UPPER_BOUND)
+
+    terms = _report_queue_terms(latency._format_rtt_report([row], args, 1.0))
+
+    assert terms["queued_window"] == 3, (
+        f"the report read host_loop_hz={host_loop_hz!r} differently than the rows: {terms}"
+    )
+    assert terms["queue_bound_ms"] == pytest.approx(row["queue_bound_s"] * 1000.0, abs=1e-6)
+    assert terms["queue_mean_ms"] == pytest.approx(row["queue_mean_s"] * 1000.0, abs=1e-6)
+    assert terms["prefetch_bound_ms"] == pytest.approx(row["prefetch_bound_s"] * 1000.0, abs=1e-6)
+    assert terms["prefetch_mean_ms"] == pytest.approx(row["prefetch_mean_s"] * 1000.0, abs=1e-6)

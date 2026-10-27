@@ -26,8 +26,9 @@ What the tests below lock down (the banners group them by topic):
   6 invalid metadata, each reachable through ``main`` without a traceback;
 * **write failures** — an unwritable ``--out`` and an unserialisable value both
   map to ``EXIT_WRITE_FAILED`` with ``write`` on stderr;
-* **CLI validation** — ``--samples < 1`` is a usage error (2) from
-  ``parse_args``, not a failed connection (3).
+* **CLI validation** — ``--samples < 1`` and a non-finite or non-positive
+  ``--timeout-s`` are usage errors (2) from ``parse_args``, not a failed
+  connection (3) and not a sample-starvation exit (4).
 
 Regression intent (each entry is a plausible-but-wrong implementation that
 must turn this file red):
@@ -636,6 +637,63 @@ def test_parse_args_should_reject_a_non_positive_sample_count(fingerprint, argv:
         fingerprint.parse_args(["--host", "127.0.0.1", *argv])
 
     assert excinfo.value.code == 2
+
+
+@pytest.mark.parametrize(
+    "timeout_s",
+    ["nan", "inf", "1e400", "0", "-1"],
+    ids=["nan", "inf", "overflow_to_inf", "zero", "negative"],
+)
+def test_parse_args_should_reject_a_nonsense_timeout_s(fingerprint, capsys, timeout_s: str) -> None:
+    """``--timeout-s`` is validated like ``measure_latency.py``'s, before any socket.
+
+    ``--timeout-s`` is the *only* stop condition of a capture, and it was not
+    validated at all, so all five values parsed cleanly and reached
+    ``collect_samples`` (``deadline_s = clock() + timeout_s``):
+
+    * ``inf`` (and ``1e400``, which ``float()`` turns into ``inf``) never expires;
+    * ``nan`` never expires *and* spins: ``now_s >= deadline_s`` is false forever
+      and ``pause_s = min(POLL_INTERVAL_S, max(0.0, deadline_s - now_s))`` is
+      ``0.0`` because ``max(0.0, nan) == 0.0``, so the poll pause is skipped
+      entirely;
+    * ``0`` / ``-1`` expire the budget before the first frame and were reported as
+      ``InsufficientSamples`` (exit 4) for a budget the operator typed wrong.
+
+    Ruling: all five are now a usage error (2), the shape the rtt benchmark uses
+    and the same ``not (math.isfinite(x) and x > 0.0)`` test.  The exit-code table
+    does not move -- ``4`` keeps its meaning (the sequence froze / not enough fresh
+    samples within a *legal* budget) and simply stops being reachable from a
+    nonsense budget.
+
+    Asserted: exit code 2 and ``--timeout-s`` on stderr, and the legal budget is
+    parsed first on purpose -- an unknown option also exits 2, so without that
+    guard this test would go green on an option that no longer exists.
+    """
+    # Arrange: the option exists and a legal value reaches the namespace.
+    legal = fingerprint.parse_args(["--host", "127.0.0.1", "--timeout-s", "5"])
+    assert getattr(legal, "timeout_s", None) == pytest.approx(5.0), (
+        "--timeout-s 5 does not parse, so the rejection below proves nothing"
+    )
+    capsys.readouterr()
+
+    # Act + Assert: the nonsense budget is refused by the parser itself.
+    with pytest.raises(SystemExit) as excinfo:
+        fingerprint.parse_args(["--host", "127.0.0.1", f"--timeout-s={timeout_s}"])
+
+    assert excinfo.value.code == 2, (
+        f"--timeout-s={timeout_s} exited with {excinfo.value.code} instead of the usage "
+        "error 2: an unvalidated budget either never expires (nan/inf, and nan also "
+        "skips the poll pause) or is already over before the first frame (0/-1)"
+    )
+    message = capsys.readouterr().err.lower()
+    assert "timeout-s" in message, f"the error does not name the option: {message!r}"
+
+
+def test_parse_args_should_keep_a_legal_timeout_s(fingerprint) -> None:
+    """The validated budget still parses and keeps the value the operator typed."""
+    args = fingerprint.parse_args(["--host", "127.0.0.1", "--timeout-s", "5"])
+
+    assert args.timeout_s == pytest.approx(5.0)
 
 
 # ===========================================================================

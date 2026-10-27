@@ -938,11 +938,29 @@ def host_sample_duration_s(host_timing: Mapping[str, Any] | None) -> float | Non
     return duration_s
 
 
+def _host_loop_hz_or_upper_bound(host_loop_hz: float) -> float:
+    """``host_loop_hz`` when it can serve as a period source, else the upper bound.
+
+    The one normalisation every consumer of the knob goes through.  The CSV path
+    already fell back to ``HOST_LOOP_HZ_UPPER_BOUND`` here while
+    ``_format_rtt_report`` handed the raw value to ``effective_request_window``,
+    whose gate is ``rate_hz >= host_loop_hz``: a direct caller's ``nan`` was read
+    as 50 Hz by the rows and as "the request rate is never at or above the host
+    rate" by the report, so one run printed ``queue_bound_s=0.04`` in the CSV and
+    ``queue_bound_ms=0.000`` in the report that must not contradict it.  The CLI
+    rejects a non-finite ``--host-loop-hz`` outright (exit 2), so this only
+    decides what a direct caller sees -- and a finite positive value is returned
+    unchanged, so no printed number moves.  The positive test is load-bearing:
+    ``nan`` fails it (every comparison is false), a ``<= 0.0`` test would not.
+    """
+    return host_loop_hz if host_loop_hz > 0.0 else HOST_LOOP_HZ_UPPER_BOUND
+
+
 def _queue_terms_s(
     request_window: int, host_loop_hz: float = HOST_LOOP_HZ_UPPER_BOUND
 ) -> tuple[float, float]:
     """Bound and mean of the host queueing time for ``request_window`` requests in flight."""
-    loop_hz = host_loop_hz if host_loop_hz > 0.0 else HOST_LOOP_HZ_UPPER_BOUND
+    loop_hz = _host_loop_hz_or_upper_bound(host_loop_hz)
     queued_requests = max(0, int(request_window) - 1)
     queue_bound_s = queued_requests / loop_hz
     return queue_bound_s, queue_bound_s / 2.0
@@ -984,7 +1002,7 @@ def _prefetch_terms_s(
     """
     if rate_hz is None:
         return 0.0, 0.0
-    loop_hz = host_loop_hz if host_loop_hz > 0.0 else HOST_LOOP_HZ_UPPER_BOUND
+    loop_hz = _host_loop_hz_or_upper_bound(host_loop_hz)
     rate = _finite_or_none(rate_hz)
     # A non-positive client rate is rejected by the CLI; if it ever reaches here
     # the host period is the only defensible period of a client call.
@@ -1012,7 +1030,7 @@ def net_rtt_estimate_s(
     round-1 numbers are reproduced exactly; ``rate_hz=None`` switches the
     prefetch term off and reproduces the round-3 numbers instead.
     """
-    loop_hz = host_loop_hz if host_loop_hz > 0.0 else HOST_LOOP_HZ_UPPER_BOUND
+    loop_hz = _host_loop_hz_or_upper_bound(host_loop_hz)
     phase_bound_s = 1.0 / loop_hz
     phase_mean_s = phase_bound_s / 2.0
     window = _finite_or_none(request_window)
@@ -1494,8 +1512,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error(f"--control-hz must be a finite number >= 1 (got {args.control_hz})")
     if args.request_window < 1:
         parser.error(f"--request-window must be >= 1 (got {args.request_window})")
-    if args.host_loop_hz <= 0.0:
-        parser.error(f"--host-loop-hz must be > 0 (got {args.host_loop_hz})")
+    # ``inf`` is ``> 0`` and ``1 / inf == 0.0``, so the phase and queue terms both
+    # collapse to zero for a host that cannot be that fast; ``nan`` makes every
+    # comparison false and used to be read two ways at once (the rows fall back to
+    # ``HOST_LOOP_HZ_UPPER_BOUND``, the report's ``effective_request_window``
+    # reads the raw value).  ``1e400`` is ``inf`` after ``float()``.  Same
+    # ``not (a and b)`` shape as ``--control-hz``: ``x <= 0.0`` alone lets ``nan``
+    # through.
+    if not (math.isfinite(args.host_loop_hz) and args.host_loop_hz > 0.0):
+        parser.error(f"--host-loop-hz must be a finite number > 0 (got {args.host_loop_hz})")
     # ``--timeout-s`` is the only stop condition of the rtt loop
     # (``deadline_s = start_s + timeout_s``): ``inf`` never arrives and ``nan``
     # makes ``now_s >= deadline_s`` false forever, so a frozen sequence would run
@@ -1510,16 +1535,38 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     # settle judgement meaningless.
     if args.steps <= 0:
         parser.error(f"--steps must be >= 1 (got {args.steps})")
-    if args.settle_timeout_s <= 0.0:
-        parser.error(f"--settle-timeout-s must be > 0 (got {args.settle_timeout_s})")
-    if args.settle_tolerance_deg < 0.0:
-        parser.error(f"--settle-tolerance-deg must be >= 0 (got {args.settle_tolerance_deg})")
+    # The settle budget is a stop condition of a tracking run, so ``inf`` never
+    # expires and ``nan`` makes every "is this step still settling" comparison
+    # false: a joint that never settles runs until the operator kills the process.
+    # ``1e400`` is ``inf`` after ``float()``.  Finiteness and sign in one
+    # ``not (a and b)`` test for the same reason as ``--control-hz``: a sign-only
+    # ``<= 0.0`` check is false for ``nan``.
+    if not (math.isfinite(args.settle_timeout_s) and args.settle_timeout_s > 0.0):
+        parser.error(
+            f"--settle-timeout-s must be a finite number > 0 (got {args.settle_timeout_s})"
+        )
+    # ``0`` stays legal: a step is settled when the residual is at or below the
+    # tolerance, so ``0`` is the strictest legal setting and the bound is
+    # ``>= 0``.  What is refused is a non-finite tolerance, which the cross-check
+    # below cannot catch -- ``nan >= delta`` is false (no step would ever count as
+    # settled, emptying the settle columns) and ``delta >= inf`` is false too.
+    if not (math.isfinite(args.settle_tolerance_deg) and args.settle_tolerance_deg >= 0.0):
+        parser.error(
+            f"--settle-tolerance-deg must be a finite number >= 0 (got {args.settle_tolerance_deg})"
+        )
     # A non-positive step is not a step.  Checked before the tolerance cross-check
     # below, which would otherwise blame the clamp for a value the operator typed:
     # ``--delta-deg 0`` used to surface as "settle-tolerance-deg must be below the
     # effective --delta-deg ... delta 0.0 deg after the 1.0 deg clamp".
-    if args.delta_deg <= 0.0:
-        parser.error(f"--delta-deg must be > 0 (got {args.delta_deg})")
+    # ``inf`` is ``> 0`` and would pass a sign-only check, after which
+    # ``resolve_delta_deg`` silently clamps it to ``MAX_STEP_DELTA_DEG``: the run
+    # would command a step the operator never asked for instead of refusing a
+    # value that cannot be a step.  ``nan`` fails every step-size comparison
+    # downstream.  ``1e400`` is ``inf`` after ``float()``.  ``0`` and negative
+    # values keep their own refusal (below), so the finiteness test is added
+    # around that rule, not instead of it.
+    if not (math.isfinite(args.delta_deg) and args.delta_deg > 0.0):
+        parser.error(f"--delta-deg must be a finite number > 0 (got {args.delta_deg})")
     # A tolerance at or above the step the run actually takes judges the joint
     # settled on the first poll, which leaves ``rise_90`` empty in every row.  The
     # reference is the CLAMPED step (``resolve_delta_deg``): ``--delta-deg 5.0``
@@ -1888,13 +1935,17 @@ def _format_rtt_report(
     achieved = _achieved_rate_hz(len(rows), elapsed_s)
     # Same gates as the rows: the report may not print a queue or prefetch term
     # the CSV did not subtract (a drained window queues nothing when the request
-    # rate is slower; the prefetch wait is always counted).
+    # rate is slower; the prefetch wait is always counted).  That includes the
+    # loop rate itself: the rows normalise an unusable ``host_loop_hz`` to
+    # ``HOST_LOOP_HZ_UPPER_BOUND``, so the report gates the window with that same
+    # value instead of the raw flag (see ``_host_loop_hz_or_upper_bound``).
+    report_loop_hz = _host_loop_hz_or_upper_bound(float(args.host_loop_hz))
     queued_window = effective_request_window(
-        int(args.request_window), float(args.rate_hz), float(args.host_loop_hz)
+        int(args.request_window), float(args.rate_hz), report_loop_hz
     )
-    queue_bound_s, queue_mean_s = _queue_terms_s(queued_window, float(args.host_loop_hz))
+    queue_bound_s, queue_mean_s = _queue_terms_s(queued_window, report_loop_hz)
     prefetch_bound_s, prefetch_mean_s = _prefetch_terms_s(
-        int(args.request_window), float(args.rate_hz), float(args.host_loop_hz)
+        int(args.request_window), float(args.rate_hz), report_loop_hz
     )
     # Printed next to achieved_rate_hz on purpose: at a low sampling rate the
     # idle time of one sampling period dominates age_s (see module docstring),
