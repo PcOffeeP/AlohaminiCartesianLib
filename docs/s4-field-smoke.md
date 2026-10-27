@@ -591,17 +591,26 @@ run 4.3c-config-classes ssh "$PI" 'sed -n "95,145p" ~/lerobot_alohamini/src/lero
 - 将来厂商版本若新增入口，以 `4.2` 的实际输出为准。
 - 写进现场 YAML 的必须是「实际生效的那个值」，并在 `$S4DIR/stdout/` 里留下取得它的命令（`4.x-*.cmd`）与输出（`4.x-*.log`）。
 
-已实测记录（2026-10-25 UTC 07:00 前后，该时点 Pi HEAD 为 `ec65318f`，Host 未运行）：
+已实测取值来路（2026-10-25 UTC 07:00 前后，该时点 Pi HEAD 为 `ec65318f`，Host 未运行）。本表只记「这些数字怎么来的」：**数字本身以 `configs/site.yaml` 为准**，本节不再复制一份当权威。2026-10-25 实测到的三个数字记在 `configs/site.yaml` 的注释里（每个字段一行，写明取自哪个 `config_alohamini.py` 行号）；后续现场改配置改 `configs/site.yaml`，不要回来改本表。
 
-| 字段 | 实测/推定值 | 依据 |
+| 字段 | 现场值 | 依据（来路） |
 | --- | --- | --- |
-| `observation_request_window` | 3 | `config_alohamini.py:110`（`AlohaMiniHostConfig` 源码默认）；该项无命令行入口 |
-| `watchdog_timeout_ms` | 1000 | `config_alohamini.py:122` |
-| `max_loop_freq_hz` | 50 | `config_alohamini.py:125` |
+| `observation_request_window` | 见 `configs/site.yaml` 的 `observation_request_window` | `config_alohamini.py:110`（`AlohaMiniHostConfig` 源码默认）；该项无命令行入口 |
+| `watchdog_timeout_ms` | 见 `configs/site.yaml` 的 `watchdog_timeout_ms` | `config_alohamini.py:122` |
+| `max_loop_freq_hz` | 见 `configs/site.yaml` 的 `max_loop_freq_hz` | `config_alohamini.py:125` |
 
 Host 未运行，所以这三个值是**源码默认**，不是「运行中进程的实际生效值」。`config_alohamini.py` 在 Pi 工作区是未提交修改状态，取值以工作区文件为准，与当时 HEAD `ec65318f` 的差异未核对。启动 Host 后应重跑 `4.2`/`4.3` 复核。
 
 同日 Host 启动后复核：Host 实际启动命令为 `/home/pi5/miniconda3/envs/lerobot_alohamini/bin/python -m lerobot.robots.alohamini.alohamini_host --robot_model alohamini2pro`，未包含任何覆盖这三个字段的参数，与上表「源码默认即实际生效值」一致。
+
+两份 YAML 的分工：
+
+| 文件 | 是什么 | 三个数值字段 |
+| --- | --- | --- |
+| `configs/template.yaml` | 随库分发的通用默认，换机器可原样使用 | `1` / `500` / `50`，取自 `src/alohamini_cartesian/config/overlay.py` 的 `AlohaMiniSettings` 默认值 |
+| `configs/site.yaml` | 本机现场值，即 Host 进程实际生效的那份 | 本节现场数字的唯一出口，见文件内注释 |
+
+覆盖顺序：默认值 → template → site → 环境变量（`ALOHAMINI_*`），由 `overlay.py` 的 `load_settings` 实现。两份一起加载的契约由 `tests/test_examples_and_configs.py` 的 `test_template_and_site_load_together_and_the_three_fields_follow_site_yaml` 锁定：三个字段的值等于直接从 `configs/site.yaml` 原文读出来的值。所以本节不再另记一份数字——上面那张表保留的是来路，不是取值。
 
 另外四个字段的取值：
 
@@ -655,7 +664,7 @@ run 4.4b-load-check-deploy uv run --no-sync python -c "from pathlib import Path;
 
 现场易错点：`robot_model` 的两处默认值不一致。本库 `src/alohamini_cartesian/config/overlay.py` 的 `AlohaMiniSettings.robot_model` 默认值是 `alohamini1`（`overlay.py:51`）；两个现场脚本的 `DEFAULT_ROBOT_MODEL` 都是 `alohamini2pro`（`benchmarks/alohamini_io/capture_robot_fingerprint.py:76`、`benchmarks/alohamini_io/measure_latency.py:360`）。现场机型是 AlohaMini 2 Pro，而 `measure_latency.py` 的代码 Gate C 要求宿主 metadata 的 `robot_model` 与 `--robot-model` 相等（`measure_latency.py:1437`）。所以现场 YAML 必须显式写 `robot_model: alohamini2pro`，不能用模板里的 `alohamini1`，否则配置表达的意思与真机不符。
 
-两份配置样例已入库：`configs/template.yaml` 与 `configs/site.yaml`。现场值见第 8 节，读取验证用 `load_settings(template=..., site=...)`。
+两份配置样例已入库：`configs/template.yaml` 与 `configs/site.yaml`。现场值见 `configs/site.yaml`（来路见本节），读取验证用 `load_settings(template=..., site=...)`。
 
 本阶段产物：`configs/template.yaml`、`configs/site.yaml`，以及 `stdout/4.1-host-args-*`、`4.2-host-cmdline-*`、`4.3-host-config-*`、`4.3b-config-args-*`、`4.3c-config-classes-*`、`4.4-load-check-*`、`4.5-serial-*`、`4.5b-serial-pi-*`、`4.6-video-*`、`4.6b-video-pi-*`、`4.7-calib-*`。`4.4b-load-check-deploy` 本次未跑，无产物。
 

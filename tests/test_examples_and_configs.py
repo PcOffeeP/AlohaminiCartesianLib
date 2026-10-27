@@ -43,7 +43,12 @@ import pytest
 import yaml
 
 from alohamini_cartesian.adapter.protocol import RobotTransport
-from alohamini_cartesian.config.overlay import SETTINGS_FIELDS, load_settings
+from alohamini_cartesian.config.overlay import (
+    INT_FIELDS,
+    SETTINGS_FIELDS,
+    ConfigError,
+    load_settings,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES_DIR = REPO_ROOT / "examples"
@@ -219,6 +224,40 @@ def test_site_overrides_template_when_both_are_loaded() -> None:
 
     assert settings.left_port == "/dev/am_arm_follower_left"
     assert settings.robot_model == "alohamini2pro"
+
+
+def test_template_and_site_load_together_and_the_three_fields_follow_site_yaml() -> None:
+    """契约 B：三个数值字段跟着 ``configs/site.yaml`` 原文走，两份 YAML 能一起加载。
+
+    两份 YAML 分工不同，不是同一份东西：``template.yaml`` 是随库分发的通用默认（取自
+    ``overlay.py`` 的 ``AlohaMiniSettings``），``site.yaml`` 是本机现场值，也就是
+    ``docs/s4-field-smoke.md`` 第 8 节写的那个口径——现场数字以 ``configs/site.yaml``
+    为唯一出口，文档不再另存一份。
+
+    所以期望值**不在这里硬编码、也不借 ``SITE_VALUES``**（那是「取值被冻结」的另一条契约，
+    与「文档指向哪份文件」无关）：直接从 ``configs/site.yaml`` 原文用 ``yaml.safe_load``
+    读出来，再与 ``load_settings`` 的返回值逐字段比。现场改配置只改 YAML，这条用例跟着走。
+    """
+    site_data = _load_yaml(SITE_PATH)
+
+    try:
+        settings = load_settings(
+            template=TEMPLATE_PATH,
+            site=SITE_PATH,
+            env={},
+            check_devices=False,
+        )
+    except ConfigError as exc:
+        pytest.fail(f"两份配置一起加载抛了 ConfigError: {exc}")
+
+    mismatches = [
+        f"{field}: configs/site.yaml 读到 {site_data[field]!r}，"
+        f"load_settings 返回 {getattr(settings, field)!r}"
+        for field in INT_FIELDS
+        if getattr(settings, field) != site_data[field]
+    ]
+
+    assert not mismatches, "三个数值字段必须与 configs/site.yaml 原文一致：" + "；".join(mismatches)
 
 
 def test_loaded_window_satisfies_hard_validation() -> None:

@@ -4575,6 +4575,32 @@ class _ClientWithPartialTiming(_FakeClient):
         return state
 
 
+class _ClientWithNoneValuedTiming(_FakeClient):
+    """``_FakeClient`` with one timing key holding ``None`` after every frame.
+
+    The sibling of ``_ClientWithPartialTiming`` one step earlier: that class *pops*
+    the key (absent), this one leaves it in the face with the value ``None``.  Two
+    ways to have no value at all, and one refusal for both:
+    ``_request_timing_key_problems`` lists a ``None`` value as a *missing* key,
+    spelled bare, because the cell would be empty for the same reason.
+
+    The face stays non-empty (section T's probe is satisfied) and every other key
+    stays usable, so the only thing under test is the ``None`` shape.
+
+    Defaults are untouched -- the base fake still fills every key.
+    """
+
+    def __init__(self, *, none_key: str, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._none_key = none_key
+
+    def get_observation(self, include_cameras: bool = True) -> dict:
+        """Take the frame the base fake builds, then set the scripted key to ``None``."""
+        state = super().get_observation(include_cameras=include_cameras)
+        self.latest_request_timing[self._none_key] = None
+        return state
+
+
 @pytest.mark.parametrize("dropped_key", _MISSING_TIMING_KEYS)
 def test_main_should_refuse_rtt_when_the_timing_face_misses_a_key(
     latency, tmp_path, capsys, dropped_key: str
@@ -4686,6 +4712,87 @@ def test_main_should_refuse_rtt_when_the_timing_face_misses_a_key(
         f"clause={clause!r}, stderr={captured.err!r}; a key the face does not carry has "
         "no value to explain, and an annotation would send the operator hunting for a "
         "value defect in a field that is not there"
+    )
+
+
+@pytest.mark.parametrize("none_key", _MISSING_TIMING_KEYS)
+def test_main_should_treat_a_none_valued_timing_key_as_a_missing_key(
+    latency, tmp_path, capsys, none_key: str
+) -> None:
+    """R20: a key holding ``None`` is *missing*, not "there with an unusable value".
+
+    The fourth shape of the same face, and the only one that had a code path but no
+    test: ``_request_timing_key_problems`` puts ``key not in timing`` and
+    ``timing[key] is None`` in the same branch, so both are listed as a bare key
+    name in the missing-key clause -- the cell would be empty because the value is
+    not there, just one step earlier.
+
+    That reading has to stay apart from the annotated shape
+    (``age_s (negative value (-0.5))``, section Y): a bare key sends the operator
+    to "this cell is missing", an annotated one to "this value is broken".
+    Collapsing ``None`` into "unusable" would annotate a value that does not exist,
+    and ``_missing_key_names`` strips annotations by design, so the two assertions
+    below are made together: the parsed names are exactly ``{none_key}`` *and* the
+    clause carries no ``"<key> ("`` for it.
+
+    Locked per case (exit code and "no CSV" are R20's, the clause shape is new):
+
+    * exit ``EXIT_CLIENT_UNSUPPORTED`` (9), no CSV at all -- a refused run writes
+      nothing, not even a header (R8/R11/R20);
+    * the clause lists exactly ``{none_key}`` (``_missing_key_names``), not a set
+      that merely contains it, so a refusal listing all four keys or none fails;
+    * ``_key_carries_a_reason`` is ``False`` for that key: ``None`` carries no
+      value to explain, so the item has to read ``<key>``, never ``<key> (<reason>)``.
+      The parsed names cannot see this (they strip the annotation), hence the
+      separate check on the clause text.
+
+    ``--samples 3`` / 200 Hz / ``--timeout-s 0.3`` matches R20: the run is over on
+    the first growth, and the budget is loose enough that a refusal may look at
+    more than one frame.
+    """
+    client = _ClientWithNoneValuedTiming(none_key=none_key, ages=[0.030, 0.031, 0.032])
+    out = tmp_path / f"none-valued-{none_key}.csv"
+
+    code = latency.main(
+        [
+            "--host",
+            "127.0.0.1",
+            "--mode",
+            "rtt",
+            "--samples",
+            "3",
+            "--rate-hz",
+            "200",
+            "--timeout-s",
+            "0.3",
+            "--csv",
+            str(out),
+        ],
+        client_factory=_Factory(client),
+    )
+    captured = capsys.readouterr()
+    clause = _missing_key_clause(captured.err)
+
+    assert code == latency.EXIT_CLIENT_UNSUPPORTED, (
+        f"a timing face whose {none_key!r} is None was accepted as a measurement: exit "
+        f"{code} (expected 9), csv_exists={out.exists()}; stderr: {captured.err!r}"
+    )
+    assert not out.exists(), (
+        f"a run refused for a None-valued timing key still wrote {out}: the row built "
+        f"from {none_key}=None holds an empty cell that reads like a measurement"
+    )
+    names = _missing_key_names(captured.err)
+    assert names == {none_key}, (
+        f"the missing-key clause does not name exactly {none_key!r}: keys={sorted(names)!r}, "
+        f"clause={clause!r}, stderr={captured.err!r}; a None value is *missing* (the cell "
+        "would be empty), so it belongs in the same clause as an absent key -- not in a "
+        "refusal that lists all four keys or none"
+    )
+    assert not _key_carries_a_reason(captured.err, none_key), (
+        f"the None-valued key {none_key!r} is annotated in the missing-key clause: "
+        f"clause={clause!r}, stderr={captured.err!r}; an annotation (``<key> (<reason>)``) "
+        "means 'the value is there and unusable' (section Y), and a None value sends the "
+        "operator hunting for a value defect in a field that holds nothing"
     )
 
 
