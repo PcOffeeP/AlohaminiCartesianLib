@@ -309,11 +309,49 @@ Exit codes
    ``received_monotonic_s``, ``age_s``) holding usable values, or that unfilled
    face is still there when the sampling loop gives up.  The absent shape has its
    own sentence on stderr; the unfilled one -- the second and the third shape,
-   i.e. one defect met at two moments -- names the missing keys key by key.  A
-   key counts as missing when it is absent, ``None``, a non-finite number, or an
-   empty ``token``, so a face that carries all four keys with a ``None``
-   ``age_s`` is refused as well as a half-filled one.  The unfilled shape is
-   judged strictly on EVERY fresh frame -- every growth of
+   i.e. one defect met at two moments -- names the unusable keys key by key,
+   annotating a present-but-unusable value with its reason inside that same
+   clause.  A key counts as filled only when it can give a finite value that
+   physically means a measurement, so a face that carries all four keys with a
+   ``None`` ``age_s`` is refused as well as a half-filled one, and so is one
+   whose ``age_s`` is ``-0.5``, whose stamp or age is a ``bool``, or whose
+   ``token`` is a number or blank.  The four rules, and why each one is a refusal
+   rather than a conversion (``float()``/``str()`` accept every rejected shape,
+   which is how they used to reach the CSV):
+
+   * ``token`` has to be a ``str`` -- or the ``bytes`` the client stores, which
+     ``_request_token_text`` decodes -- whose stripped text is not empty: a
+     number becomes ``"123"`` and ``"   "`` is non-empty *text* but a blank cell,
+     and neither can be paired with a request.  A merely meaningless token
+     (``"abc"``) is a legal shape and is measured;
+   * ``sent_monotonic_s`` / ``received_monotonic_s`` have to be finite numbers,
+     and a ``bool`` is not a number: ``float(True) == 1.0`` wrote a stamp at the
+     very start of the monotonic epoch;
+   * ``age_s`` has to be a finite number ``>= 0``, and a ``bool`` is not a number:
+     a request cannot be answered before it was sent, and
+     ``net_rtt_estimate_s`` clamps the net estimate up to zero, so a negative age
+     was written as a cell that reads like a fast round trip.  ``0.0`` stays
+     legal -- a host that measures no age reports exactly that.
+
+   "Not a finite number" covers a value ``float()`` cannot represent at all: an
+   integer too large to be a double (``float(10**400)`` raises ``OverflowError``,
+   which ``_finite_or_none`` does not catch).  That shape used to escape the probe
+   and come back as exit 3, i.e. as a broken link instead of a broken client.
+   The same holds for a value whose ``repr`` raises: the refusal cannot print it,
+   but it can still say *why* it is unusable.
+
+   The annotation contract inside the missing-key clause: an item is either
+   ``<key>`` (the face does not carry that key at all) or ``<key> (<reason>)``
+   with the reason **mandatory**, and the quoted value appended to it only when
+   it can be quoted unchanged (``_short_value``: at most
+   ``_QUOTED_VALUE_MAX_CHARS``, printable, no ``", "``).  The reason cannot be
+   dropped to protect the clause and the clause cannot be broken to keep the
+   reason: a bare key for a cell the face *does* carry sends the operator to the
+   wrong defect, and a quote holding ``", "`` reads as one more key while a
+   multi-line quote ends the list mid-word (both read back as keys that do not
+   exist).  Dropping only the quote keeps both sides intact.
+
+   The unfilled shape is judged strictly on EVERY fresh frame -- every growth of
    ``observation_sequence``, judged before that frame's row is appended -- so a
    face that goes empty in the middle of a run is refused as well, not only one
    that was empty from the start.  The timing of that probe is dictated by the
@@ -366,8 +404,10 @@ EXIT_INSUFFICIENT_SAMPLES = 7
 EXIT_HOLD_FAILED = 8
 # The client cannot measure what this mode measures, in either of the two shapes
 # that refusal takes: it publishes no ``latest_request_timing`` at all, or it
-# publishes it without the keys rtt reads (absent, ``None``, non-finite, empty
-# token -- a half-filled face is refused as well as an all-empty one).  Both mean
+# publishes it without the keys rtt reads holding usable values (absent, ``None``,
+# non-finite, a ``bool`` stamp/age, a negative ``age_s``, a ``token`` that is not
+# text or is blank -- a half-filled face is refused as well as an all-empty one,
+# and a present-but-unusable value as well as an absent one).  Both mean
 # there is no request age to record, so the rtt run is refused instead of writing
 # a CSV of empty timing cells -- and one code covers all of them, because the
 # caller sees one outcome and one remedy.  Three moments share the code and are
@@ -587,6 +627,132 @@ def _request_token_text(token: Any) -> str:
     if token is None:
         return ""
     return str(token)
+
+
+# Gate of the quoted value in the missing-key clause: the clause is one line of
+# refusal, so a quote longer than a CSV cell (32 characters) is a dumped object, not
+# evidence the operator can read.  Past this length the quote is dropped and the
+# reason stays (`_short_value`).
+_QUOTED_VALUE_MAX_CHARS = 32
+
+
+def _short_value(value: Any) -> str | None:
+    """``value``'s ``repr`` when it can be quoted in the key list, else ``None``.
+
+    ``None`` means "drop the quote, keep the reason": only the quoted value is
+    optional in the annotation, never the reason itself.
+
+    The clause is split on ``", "`` to read the key names back out of it
+    (``_missing_key_names`` in tests/benchmarks) and cut at the first newline
+    (``_missing_key_clause``), so quoting a value is only legal when the quote is
+    **unchanged**: ``"1.0,  2.0"`` would arrive as one more key, a multi-line
+    ``repr`` would end the list mid-word and push the ``, so ...`` remediation off
+    it, and a ``repr`` longer than ``_QUOTED_VALUE_MAX_CHARS`` would dump an object
+    into a one-line refusal.  ``repr`` that raises (``__repr__`` is client code)
+    cannot be quoted either -- and that shape must not become a transport failure:
+    the refusal is about a value, not about the link.
+
+    Re-writing the quote instead (normalising its whitespace, deleting the
+    whitespace after a comma) does **not** fix the key list: the quote sits inside
+    the annotated entry (``token (empty text ('   '))``), so any quote at all
+    makes the clause read as a different key name.  Hence the gate: a value whose
+    ``repr`` is not already a short, printable, `", "``-free one-liner is not
+    quoted, and the reason is printed alone.
+    """
+    try:
+        text = repr(value)
+    except Exception:
+        # ``__repr__`` is client code: a proxy over a closed resource, a lazily
+        # formatted object.  Letting it escape turned the refusal into
+        # "observation failed" (exit 3), i.e. a broken *link* reported for a broken
+        # *value*, and the key name was lost with it.
+        return None
+    if len(text) > _QUOTED_VALUE_MAX_CHARS or ", " in text or not text.isprintable():
+        return None
+    return text
+
+
+def _timing_key_problem(key: str, value: Any) -> str | None:
+    """Why ``value`` cannot fill ``key`` of the timing face, or ``None`` when it can.
+
+    The criterion is "a finite value that physically means a measurement", not
+    "a value ``float()``/``str()`` accepts": every shape refused here converts
+    happily, which is how it used to reach the CSV as a cell that reads like a
+    measurement (see ``missing_request_timing_keys`` for the four rules).  Only
+    the timing face is judged this way; ``_finite_or_none`` keeps its wider
+    contract for the other consumers (``net_rtt_estimate_s``,
+    ``_checked_unit_scale``, the CLI paths).
+
+    The reason carries **no value**: quoting the offending value is a separate
+    decision (``_short_value``), because a quote that cannot be printed unchanged
+    has to be dropped instead.
+    """
+    if key == "token":
+        # ``bytes`` stays usable because ``_request_token_text`` decodes it -- that
+        # is the shape the vendor client stores.  Anything else only reaches the
+        # cell through ``str()``, i.e. a number or an object is not a token.
+        if not isinstance(value, (str, bytes)):
+            return "not a string"
+        if not _request_token_text(value).strip():
+            return "empty text"
+        return None
+    # ``bool`` is an ``int`` in Python, so it passes ``float()``; a timing cell of
+    # ``True``/``False`` became 1.0/0.0, a stamp at the start of the epoch.
+    if isinstance(value, bool):
+        return "bool is not a number"
+    try:
+        number = _finite_or_none(value)
+    except ArithmeticError:
+        # ``float(10**400)`` raises ``OverflowError``, which ``_finite_or_none``
+        # does not catch (it only turns ``TypeError``/``ValueError`` into ``None``).
+        # An integer too large to be a double is not a finite number either, and
+        # letting it escape made the probe's caller read it as a transport failure
+        # (exit 3) instead of a capability one (exit 9).
+        number = None
+    if number is None:
+        return "not a finite number"
+    # A negative age is physically impossible (a request cannot be answered
+    # before it was sent) and ``net_rtt_estimate_s`` clamps the net estimate up to
+    # zero, so the row would read like a fast round trip.  ``0.0`` is legal.
+    if key == "age_s" and number < 0.0:
+        return "negative value"
+    return None
+
+
+def _request_timing_key_problems(timing: Any) -> list[tuple[str, str | None]]:
+    """``(key, annotation)`` for every ``REQUIRED_REQUEST_TIMING_KEYS`` entry ``timing`` cannot fill.
+
+    The second element is what goes in parentheses after the key name, or
+    ``None`` for a key the clause spells bare.  ``None`` is reserved for the two
+    shapes that have nothing to explain, because they are spelled the same way and
+    a half-filled face must keep listing bare key names:
+
+    * the key is absent from the face;
+    * the key is present but ``None`` -- the cell would be empty because the value
+      is not there, just one step earlier.
+
+    A key that **is** there with an unusable value always carries a reason
+    (``"<reason>"``); the quoted value is appended only when ``_short_value``
+    says it can be printed unchanged (``"<reason> (<quoted value>)"``).  The two
+    failures that shaped this contract cannot be traded against each other: a bare
+    key sends the operator to "this cell is missing" for a cell the face does
+    carry, and a quote that holds ``", "`` or a line break splits the key list (a
+    key that does not exist) or ends it mid-word.  Dropping only the quote keeps
+    both sides intact.
+    """
+    if not isinstance(timing, Mapping):
+        return [(key, None) for key in REQUIRED_REQUEST_TIMING_KEYS]
+    problems: list[tuple[str, str | None]] = []
+    for key in REQUIRED_REQUEST_TIMING_KEYS:
+        if key not in timing or timing[key] is None:
+            problems.append((key, None))
+            continue
+        reason = _timing_key_problem(key, timing[key])
+        if reason is None:
+            continue
+        quoted = _short_value(timing[key])
+        problems.append((key, reason if quoted is None else f"{reason} ({quoted})"))
+    return problems
 
 
 def _observation_sequence(client: Any) -> int | None:
@@ -989,15 +1155,38 @@ class UnfilledClientCapability(RuntimeError):  # noqa: N818
     ``UnfilledClientCapability(["latest_request_timing"])`` still constructs and
     ``.names`` still lists the face.  ``missing_keys`` says *which* cells of those
     faces hold nothing, which is the part the operator can act on: "the client is
-    broken" is not actionable, "``age_s`` is missing" is.
+    broken" is not actionable, "``age_s`` is missing" is.  ``missing_reasons``
+    (optional) says *why* a key that **is** there cannot be used, keyed by key
+    name, as the text to print in parentheses (``"<reason>"``, or
+    ``"<reason> (<quoted value>)"`` when the value can be quoted safely); a key
+    without an entry is named bare.  The reason is mandatory for an unusable
+    value and only the *quote* is optional (``_short_value``), so the operator
+    is never told "missing" about a cell the face does carry.
+    ``missing_key_labels`` is what the caller prints -- ``"<key> (<reason>)"``
+    for an annotated value, the bare key otherwise.
     """
 
-    def __init__(self, names: Sequence[str], missing_keys: Sequence[str] = ()) -> None:
+    def __init__(
+        self,
+        names: Sequence[str],
+        missing_keys: Sequence[str] = (),
+        missing_reasons: Mapping[str, str] | None = None,
+    ) -> None:
         self.names = tuple(names)
         self.missing_keys = tuple(missing_keys)
+        self.missing_reasons = dict(missing_reasons or {})
+        # One label per key: a bare name stays a bare name (a half-filled face is
+        # refused as exactly the keys it dropped), while a present-but-unusable
+        # value explains itself in place.  An annotation never holds ``", "`` or a
+        # line break -- ``_request_timing_key_problems`` only passes one built
+        # from a quotable value -- so the printed list still splits per key.
+        self.missing_key_labels = tuple(
+            key if self.missing_reasons.get(key) is None else f"{key} ({self.missing_reasons[key]})"
+            for key in self.missing_keys
+        )
         message = f"{', '.join(self.names)} is published but never filled"
-        if self.missing_keys:
-            message += f" (missing key(s): {', '.join(self.missing_keys)})"
+        if self.missing_key_labels:
+            message += f" (missing key(s): {', '.join(self.missing_key_labels)})"
         super().__init__(message)
 
 
@@ -1006,33 +1195,51 @@ def missing_request_timing_keys(timing: Any) -> tuple[str, ...]:
 
     Empty means the face can build a real row; non-empty means it cannot, and the
     result names exactly which cells would come out empty (or ``NaN``).  A key
-    counts as missing when
+    counts as filled only when it can give a finite value that physically means a
+    measurement -- ``float()``/``str()`` accepting the value is not the bar, and
+    each rule below is a shape that converts happily and still writes a
+    measurement-looking cell:
 
     * it is absent from the face, or its value is ``None`` -- what
       ``_request_row`` writes as an empty cell;
-    * it is one of the three stamps/ages and is not a finite number -- what
-      ``net_rtt_estimate_s`` turns into ``NaN`` (``_finite_or_none``);
-    * it is ``token`` and converts to the empty string -- an empty token cell.
+    * ``token`` has to be a ``str`` (or the ``bytes`` the client stores, decoded by
+      ``_request_token_text``) whose stripped text is not empty: a number becomes
+      ``"123"`` and ``"   "`` is non-empty *text* but a blank cell, and neither
+      can be paired with a request.  A merely meaningless token (``"abc"``) is a
+      legal shape and passes;
+    * ``sent_monotonic_s`` / ``received_monotonic_s`` have to be finite numbers,
+      and a ``bool`` is not a number: ``float(True) == 1.0`` wrote a stamp at the
+      very start of the monotonic epoch;
+    * ``age_s`` has to be a finite number ``>= 0``, and a ``bool`` is not a number:
+      a request cannot be answered before it was sent, and
+      ``net_rtt_estimate_s`` clamps the net estimate up to zero, so a negative age
+      was written as a cell that reads like a fast round trip.  ``0.0`` stays
+      legal -- a host that measures no age reports exactly that.
 
-    All three shapes are the same defect from the operator's side: the face says
+    "Not a finite number" also covers a value ``float()`` cannot represent at all:
+    an integer too large to be a double (``float(10**400)`` raises
+    ``OverflowError``, which ``_finite_or_none`` does not catch).  That shape used
+    to leave the probe as an exception and reached the CLI's generic handler as a
+    transport failure (exit 3) instead of a capability one (exit 9).
+
+    All those shapes are one defect from the operator's side: the face says
     "there was a timed request" while the fields it holds cannot support that
     claim, so a measurement of zero gets written where no measurement exists.
+    The reason for a present-but-unusable value is ``_timing_key_problem``, and
+    the *quoted* value next to it is ``_short_value``: the reason is mandatory
+    (a bare key would read as "this cell is absent" for a cell the face carries),
+    while the quote is optional -- it is dropped when its ``repr`` is longer than
+    ``_QUOTED_VALUE_MAX_CHARS``, holds ``", "``, spans lines or raises, because
+    such a quote would split the key list or end it mid-word.  Neither failure
+    direction is allowed to buy the other: dropping the reason is the same defect
+    as dropping the key name, and a broken clause is the same defect as no clause
+    (see ``_request_timing_key_problems``).
 
     Pure and offline: the face is read, never sampled or mutated.  A face that is
     not a mapping reports every necessary key as missing, because nothing can be
     read from it.
     """
-    if not isinstance(timing, Mapping):
-        return REQUIRED_REQUEST_TIMING_KEYS
-    missing: list[str] = []
-    for key in REQUIRED_REQUEST_TIMING_KEYS:
-        value = timing.get(key)
-        unusable = (
-            not _request_token_text(value) if key == "token" else _finite_or_none(value) is None
-        )
-        if unusable:
-            missing.append(key)
-    return tuple(missing)
+    return tuple(key for key, _ in _request_timing_key_problems(timing))
 
 
 def _capability_face_filled(name: str, value: Any) -> bool:
@@ -1040,9 +1247,9 @@ def _capability_face_filled(name: str, value: Any) -> bool:
 
     ``latest_request_timing`` is judged key by key
     (``missing_request_timing_keys``): a *non-empty* face that misses one of the
-    four necessary keys still writes an empty or ``NaN`` cell, so "not empty" is
-    not a high enough bar.  Every other face name keeps the truthiness test the
-    probe always used.
+    four necessary keys, or carries one with a value no row can hold, still
+    writes an empty or ``NaN`` cell, so "not empty" is not a high enough bar.
+    Every other face name keeps the truthiness test the probe always used.
     """
     if name == "latest_request_timing":
         return not missing_request_timing_keys(value)
@@ -1103,13 +1310,18 @@ def _unfilled_capability(client: Any) -> UnfilledClientCapability | None:
 
     Both probe moments (per growth, and at the give-up deadline of
     ``collect_rtt_samples``) go through this one builder so they cannot drift
-    apart in wording or in which keys they report.
+    apart in wording or in which keys they report.  The reasons come from the
+    same ``_request_timing_key_problems`` pass that names the keys, so the
+    annotation can never describe a key the list does not carry.
     """
     unfilled = unfilled_client_capabilities(client)
     if not unfilled:
         return None
+    problems = _request_timing_key_problems(getattr(client, "latest_request_timing", None))
     return UnfilledClientCapability(
-        unfilled, missing_request_timing_keys(getattr(client, "latest_request_timing", None))
+        unfilled,
+        [key for key, _ in problems],
+        {key: reason for key, reason in problems if reason is not None},
     )
 
 
@@ -1419,19 +1631,43 @@ def collect_rtt_samples(
     The loop paces against an absolute deadline: sample ``n`` is due at
     ``start + n / rate_hz``, so a blocking read is charged to the period instead
     of being added on top of it (sleeping one whole period after every read
-    would cap the achieved rate at ``1 / (read + period)``).  A poll that
-    produced no fresh frame waits one *full* period before the next one: the row
-    target cannot advance without a row, so the old arithmetic
-    (``start + len(rows) * period``) collapsed onto ``start`` at ``len(rows) ==
-    0`` (and onto its last value once the sequence froze mid-run), i.e.
-    ``pause_s <= 0`` and the loop polled at whatever speed the client answered
-    -- measured at ~4.3e6 ``get_observation`` calls/s on a frozen sequence before
-    this arm existed.  With a fresh row the target is exactly the row's own
-    sampling instant, unchanged.  An idle poll waits ``max(period_s,
-    IDLE_POLL_FLOOR_S)``: the floor bounds *every* rate's wait (a huge finite
-    rate such as ``--rate-hz 1e9`` gave a 1 ns wait before) and is the whole
-    wait when ``rate_hz`` gives no usable period (non-finite or non-positive,
-    refused for the CLI by ``parse_args`` but reachable by a direct caller).
+    would cap the achieved rate at ``1 / (read + period)``).  Four arms decide
+    the wait of one poll, and the reason they are four is that "paced" has two
+    opposite failure modes:
+
+    * **a fresh frame** targets its own sampling instant,
+      ``start + len(rows) * period`` -- unchanged since the first version;
+    * **a duplicate frame still near its beat** (the row deadline is at most one
+      period behind) chases that deadline,
+      ``max(next_row, now + IDLE_POLL_FLOOR_S)``.  A duplicate does not owe a
+      whole period of its own: charging it one throttled an honest host that
+      answers slower than the client polls to ``rate_hz / (1 + duplicates)``
+      (two duplicate frames per growth measured 0.51 x the requested rate).  The
+      floor keeps the chase non-zero once the deadline is already in the past,
+      so a catch-up costs a floor-sized wait instead of a spin;
+    * **a duplicate frame more than one period behind** is a frozen tail: the
+      sequence stopped growing, so the row deadline stays in the past for the
+      rest of the run and the floor-size chase would poll at 1 kHz -- 973 calls
+      for a 1 s budget at 100 Hz and 29,903 for the 30 s / 30 Hz default, i.e. a
+      "waiting" loop that wakes 1,000 times per second.  There is nothing left to
+      catch up to, so the wait goes back to ``idle_pause_s``, one sampling
+      period: one wait per period is the cost of a dead link, and the budget
+      (not the poll rate) ends the run.  Same bound as R24's arm, for the same
+      reason;
+    * **a duplicate frame before the first row** has no beat to chase at all
+      (``next_row`` is ``start``), and waiting nothing there was the 4.3e6
+      ``get_observation`` calls/s spin measured before this arm existed; it waits
+      ``idle_pause_s`` too.
+
+    ``idle_pause_s`` is ``max(period_s, IDLE_POLL_FLOOR_S)``: the floor bounds
+    *every* rate's wait (a huge finite rate such as ``--rate-hz 1e9`` gave a 1 ns
+    wait before) and is the whole wait when ``rate_hz`` gives no usable period
+    (non-finite or non-positive, refused for the CLI by ``parse_args`` but
+    reachable by a direct caller).  With no usable period there is no beat to
+    compare against, so the catch-up and frozen-tail arms cannot be told apart --
+    ``period_s`` is ``0``, which makes every duplicate poll take the frozen-tail
+    arm, and that arm's ``idle_pause_s`` *is* the floor there: the wait stays
+    non-zero without a second special case.
 
     ``request_window`` and ``rate_hz`` reach the row unconverted: the queue and
     prefetch terms of ``net_rtt_estimate_s`` own their own gates, so a row can
@@ -1448,7 +1684,11 @@ def collect_rtt_samples(
     would slip past a one-shot latch and be written out from the frame it
     emptied on.  "Holds nothing usable" is key-based, not "is the dict empty":
     a face missing one of ``REQUIRED_REQUEST_TIMING_KEYS`` is refused here too
-    (a half-filled face would write the same empty/``NaN`` cells).
+    (a half-filled face would write the same empty/``NaN`` cells), and so is one
+    that carries all four keys while a value cannot be used as a measurement --
+    a negative ``age_s``, a ``bool`` stamp or age (``float(True) == 1.0``), a
+    ``token`` that is not text or is blank; the four rules and their reasons are
+    spelled out at ``missing_request_timing_keys``.
 
     The same probe runs a second time at the moment the loop gives up: that is
     the only point where a capability gap can be told from a genuinely short
@@ -1548,11 +1788,43 @@ def collect_rtt_samples(
             if len(rows) >= samples:
                 break
         # Only top up to the next absolute deadline, never past the run budget.
-        # A frame that grew targets its own sampling instant; a frame that did
-        # not has no instant to target, so it waits ``idle_pause_s`` -- one whole
-        # period, floored at ``IDLE_POLL_FLOOR_S`` -- instead of collapsing onto
-        # ``start_s`` (which would mean ``pause_s <= 0`` and a spin).
-        target_s = start_s + len(rows) * period_s if grew else now_s + idle_pause_s
+        # Four arms, decided by "did this poll grow the sequence" and "is the loop
+        # still near its beat":
+        #
+        # * a fresh frame targets its own sampling instant, unchanged
+        #   (``start_s + len(rows) * period_s``);
+        # * a duplicate frame whose row deadline is at most one period behind
+        #   chases that deadline, floored at ``IDLE_POLL_FLOOR_S`` so a deadline
+        #   already in the past costs a floor-sized wait instead of a spin.  This
+        #   is the arm that keeps the achieved rate at ``--rate-hz`` when an honest
+        #   host answers slower than the client polls -- charging a duplicate a
+        #   whole period throttled it to ``rate_hz / (1 + duplicates)`` (two
+        #   duplicates per growth measured 0.51 x the requested rate);
+        # * a duplicate frame more than one period behind is a *frozen tail*: the
+        #   sequence stopped growing, so the deadline stays in the past forever and
+        #   chasing it with the floor would poll at 1 kHz (29,903 calls over the
+        #   30 s / 30 Hz default budget).  There is nothing left to catch up to, so
+        #   the wait goes back to ``idle_pause_s``, one period: one wait per
+        #   sampling period is the cost of a dead link, and the budget (not the
+        #   loop) ends the run;
+        # * a duplicate frame before the first row has no beat to chase
+        #   (``next_row_s`` is ``start_s``) and waits ``idle_pause_s`` too -- the arm
+        #   that bounds the polls of a run whose sequence never grows (R24).
+        #
+        # With an unusable ``period_s`` (non-finite or non-positive: no beat to
+        # compare against) every duplicate poll takes the frozen-tail arm by
+        # construction -- ``next_row_s`` is ``start_s`` and ``period_s`` is 0 -- and
+        # ``idle_pause_s`` is already the floor, so the wait stays non-zero.
+        next_row_s = start_s + len(rows) * period_s
+        if grew:
+            target_s = next_row_s
+        elif rows:
+            if next_row_s < now_s - period_s:
+                target_s = now_s + idle_pause_s
+            else:
+                target_s = max(next_row_s, now_s + IDLE_POLL_FLOOR_S)
+        else:
+            target_s = now_s + idle_pause_s
         pause_s = min(target_s - now_s, deadline_s - now_s)
         if pause_s > 0.0:
             sleep_fn(pause_s)
@@ -1693,8 +1965,17 @@ def _run_rtt_mode(client: Any, args: argparse.Namespace) -> int:
         # would have been blank.  It also never says "insufficient samples": a
         # frozen sequence reaches this branch from the give-up moment, and the
         # operator has to be sent to the client, not to ``--timeout-s``.
+        # The clause between ``missing key(s):`` and ``, so`` is the key list: a
+        # bare name for a key the face does not carry (or carries as ``None``), and
+        # ``<key> (<reason>)`` for one it carries with an unusable value -- the
+        # reason is always there, the quoted value only when ``_short_value`` says
+        # it prints unchanged.  Nothing printed here holds ``", "`` or a line break,
+        # so the list still splits into one item per key and the ``, so ...``
+        # remediation after it survives.
         missing_keys = (
-            "" if not exc.missing_keys else "; missing key(s): " + ", ".join(exc.missing_keys)
+            ""
+            if not exc.missing_key_labels
+            else "; missing key(s): " + ", ".join(exc.missing_key_labels)
         )
         print(
             "unsupported client: it publishes "

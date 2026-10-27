@@ -297,6 +297,7 @@ import ast
 import csv
 import importlib.util
 import math
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -4466,6 +4467,11 @@ _MISSING_TIMING_KEYS = ("token", "sent_monotonic_s", "received_monotonic_s", "ag
 _MISSING_KEYS_MARKER = "missing key(s):"
 _MISSING_KEYS_TERMINATOR = ", so "
 
+# Item shape inside that clause: ``<key>`` or ``<key> (<reason>)``.  The suffix is
+# stripped from the right (greedy), so a reason quoting a parenthesised value --
+# ``token (empty text ('   '))`` -- still leaves the bare key name behind.
+_ANNOTATION_SUFFIX = re.compile(r"\s*\(.*\)$")
+
 
 def _missing_key_clause(stderr: str) -> str:
     """The part of ``stderr`` that lists the keys the half-filled face misses.
@@ -4491,27 +4497,58 @@ def _missing_key_clause(stderr: str) -> str:
 def _missing_key_names(stderr: str) -> set[str]:
     """The key names the missing-key clause lists, as a set.
 
+    Item shape (the annotation contract, see ``_ANNOTATION_SUFFIX`` below and
+    ``_key_carries_a_reason``): one item is either ``<key>`` -- a key the face does
+    not carry at all -- or ``<key> (<reason>)``, a key it carries with a value no
+    row can hold.  The reason itself never contains ``", "`` (the implementation
+    guarantees it, and ``_short_value`` decides whether a quoted value may be
+    appended to it), so the separator below still splits *items* and never a reason.
+
     Parsing rules, each chosen to fail *closed* rather than open:
 
     * the input is ``_missing_key_clause(stderr)`` -- marker to terminator (or
       end of line), stripped.  An absent marker gives ``""`` and therefore
       ``set()``, which equals no expected key set at all;
     * the clause is split on ``", "``, the separator ``", ".join(...)`` puts
-      between two keys in ``_run_rtt_mode``.  A comma without a space does not
+      between two items in ``_run_rtt_mode``.  A comma without a space does not
       split, so the unsplit remainder stays one item and is not a key name;
     * every item is stripped and empty items are dropped, so a stray separator
       at either end does not invent a key;
+    * the trailing `` (<reason>)`` is stripped off every item -- greedy, i.e. from
+      the first ``" ("`` through the *last* ``")"`` of that item, so a reason that
+      quotes a value in parentheses (``token (empty text ('   '))``) still yields
+      the bare key.  This is a *strengthening*, not a relaxation: the equality
+      assertions of R20 (absent keys, listed bare) and of R28/R33 (unusable
+      values, listed with a reason) are the same assertion on the key names, and
+      "does this key carry a reason?" is a separate check made on the clause text
+      (``_key_carries_a_reason``);
     * nothing else is dropped.  Prose residue is deliberately *kept*: if the
       terminator disappears, the clause runs to the end of the line and the
       sentence that spells ``token`` / ``stamp`` / ``age`` out in prose lands in
       the set -- the equality is red instead of ``token`` quietly going green on
       that prose.
 
-    So the result is ``{"<key>"}`` only when the clause is a bare list holding
-    exactly that one key name.
+    So the result is ``{"<key>"}`` only when the clause is a list holding exactly
+    that one key name, with or without a reason next to it.
     """
     clause = _missing_key_clause(stderr)
-    return {item.strip() for item in clause.split(", ") if item.strip()}
+    names: set[str] = set()
+    for item in clause.split(", "):
+        item = item.strip()
+        if item:
+            names.add(_ANNOTATION_SUFFIX.sub("", item).strip())
+    return names
+
+
+def _key_carries_a_reason(stderr: str, key: str) -> bool:
+    """Whether ``key`` is annotated, i.e. the clause holds ``"<key> ("``.
+
+    The other half of the annotation contract: a key whose *value* is unusable has
+    to say why (``age_s (negative value (-0.5))``), while a key the face simply
+    does not carry stays bare (R20).  Checked on the clause text, not on the parsed
+    names, because the names are deliberately reason-free.
+    """
+    return f"{key} (" in _missing_key_clause(stderr)
 
 
 class _ClientWithPartialTiming(_FakeClient):
@@ -4568,6 +4605,14 @@ def test_main_should_refuse_rtt_when_the_timing_face_misses_a_key(
       and go green for ``token`` again) both fail this one.  Containment stays as
       the first, more legible message; the equality is the assertion that locks
       the shape.
+    * the key is listed **bare**, with no `` (<reason>)`` annotation: an absent key
+      has nothing to explain -- the cell would be empty because the value is not
+      there -- and annotating it would send the operator looking for a value defect
+      in a field that does not exist.  ``_missing_key_names`` cannot see this (it
+      strips the annotation by design), so the clause text is checked directly:
+      without this assertion an implementation that annotates *every* item (e.g.
+      ``(key, "absent")``) satisfies the equality above and only R33's mixed test
+      would notice.
 
     Nothing here names an implementation constant: the four keys are the ones
     ``_request_row`` / ``net_rtt_estimate_s`` consume, and the test only states
@@ -4632,6 +4677,15 @@ def test_main_should_refuse_rtt_when_the_timing_face_misses_a_key(
         f"keys={sorted(names)!r}, clause={clause!r}, stderr={captured.err!r}; a clause "
         "that lists all four keys, lists none, or runs past its terminator into the "
         "prose sentence must not read as 'exactly the one key that is missing'"
+    )
+    # The other half of the annotation contract (R33 covers the annotated half): an
+    # *absent* key is listed bare.  ``_missing_key_names`` strips `` (<reason>)``, so
+    # it cannot tell the two shapes apart -- this check is on the clause text.
+    assert f"{dropped_key} (" not in clause, (
+        f"the absent key {dropped_key!r} is annotated in the missing-key clause: "
+        f"clause={clause!r}, stderr={captured.err!r}; a key the face does not carry has "
+        "no value to explain, and an annotation would send the operator hunting for a "
+        "value defect in a field that is not there"
     )
 
 
@@ -5161,4 +5215,1294 @@ def test_collect_rtt_samples_should_not_spin_when_the_rate_is_not_finite(latency
         f"a non-finite rate_hz cost {calls} get_observation calls in a {timeout_s} s "
         f"budget (at most {upper_bound} paced polls): period_s became 0.0, so the "
         "loop never sleeps and polls at the client's maximum speed"
+    )
+
+
+# ===========================================================================
+# Y. Capability, fourth probe: a key that is there, holding an unusable value
+# ===========================================================================
+#
+# Section T asks "is the face there?", section V asks "does the face carry all
+# four keys?".  Both are satisfied by a key that is *present* and holds a value
+# no rtt cell can carry, and that is the defect this section freezes.
+#
+# ``missing_request_timing_keys`` (约 benchmarks/alohamini_io/measure_latency.py:1162)
+# judges each of ``REQUIRED_REQUEST_TIMING_KEYS`` (约 :568) key by key through
+# ``_timing_key_problem`` (约 :649): a finite number that means a measurement (not a
+# ``bool``, not negative for ``age_s``), or a ``str``/``bytes`` token whose stripped
+# text is not empty.  *Before* the fix (HEAD 9a9f9d5) the same function used two
+# converters and nothing else: ``_finite_or_none`` (约 :599, ``float(value)`` inside
+# a ``try``) for the three numbers, ``_request_token_text`` (约 :608, ``str`` of
+# whatever arrives) for the token -- so the probe answered "can the value be
+# converted?", never "is the converted value a measurement".  Measured at 9a9f9d5
+# through ``main()`` (the cases below), each of the following exited **0 with a CSV
+# on disk**, which is what this section was written against:
+#
+#   * ``age_s = -0.5``   -> ``float(-0.5)`` is finite -> accepted; the row carried a
+#     *negative* age, and ``net_rtt_estimate_s`` clamps the net estimate up to zero,
+#     so the CSV read like a fast round trip.
+#   * ``age_s = True``   -> ``float(True) == 1.0`` -> accepted; a bool was written as
+#     "one second".
+#   * ``sent_monotonic_s = True`` -> same conversion -> accepted; the stamp cell
+#     read ``1.0``, i.e. a time at the very start of the monotonic epoch.
+#   * ``received_monotonic_s = True`` -> same conversion -> accepted, and neither of
+#     the two cases above covers it: a fix that judges ``sent_monotonic_s`` by type
+#     could still write a ``1.0`` receive stamp.
+#   * ``token = 123``    -> ``str(123) == "123"`` -> accepted; the token cell was not
+#     a request token at all.
+#   * ``token = "   "``  -> non-empty *text* -> accepted; the cell was blank.
+#   * ``age_s = "abc"``  -> ``float("abc")`` raises ``ValueError`` ->
+#     ``_finite_or_none`` returned ``None`` -> refused (exit 9, no CSV, ``age_s`` in
+#     the missing-key clause) *before* the fix as well.  Kept as the one case of
+#     this family that never needed the fix, so the family cannot be "implemented"
+#     by refusing everything.
+#   * ``age_s = 10**400`` / ``sent_monotonic_s = 10**400`` -> ``float()`` raises
+#     ``OverflowError``, which ``_finite_or_none`` did not catch -> the probe blew up,
+#     ``_run_rtt_mode``'s generic ``except Exception`` caught it, and the run exited
+#     **3** with ``observation failed: int too large to convert to float``: a big
+#     integer is a value that cannot be used, not a dead transport.  The two
+#     ``huge_int_*`` cases pin it to the capability refusal (9, key named).
+#
+# The criterion this section locks (given by the task, not invented here): a key
+# counts as *filled* iff it can give a finite, physically sensible value --
+#
+#   * ``token``: a ``str`` whose stripped text is not empty (``"abc"`` therefore
+#     qualifies: a meaningless-but-real token is a *legal* shape, and the
+#     pass-side test below pins it so it is not refused by an over-eager fix);
+#   * ``sent_monotonic_s`` / ``received_monotonic_s``: a finite number, and a
+#     ``bool`` is not a number;
+#   * ``age_s``: a finite number ``>= 0``, and a ``bool`` is not a number.
+#
+# Three calibres that look wrong and are accepted on purpose (no test, so a future
+# "tidy-up" knows they were decided, not missed):
+#
+#   * ``token`` may be **bytes**: ``_request_token_text`` decodes what the vendor
+#     client stores, and every fixture in this file scripts bytes tokens;
+#   * a **numeric string** (``sent_monotonic_s = "1000.0"``) is a usable number:
+#     ``float()`` accepts it and ``_request_row`` writes the *number* into the CSV
+#     cell, so no garbage-looking measurement is produced;
+#   * ``age_s = -0.0`` is legal: ``-0.0 == 0.0``, i.e. the ``>= 0`` boundary.
+#
+# Any key failing that test -> exit ``EXIT_CLIENT_UNSUPPORTED`` (9), no CSV, and
+# stderr names the reason *next to the key, inside the missing-key clause*
+# (``_MISSING_KEYS_MARKER`` .. ``_MISSING_KEYS_TERMINATOR``, the two constants
+# section V froze).  The clause boundary matters here for the same reason it
+# matters in R20: the sentence after the terminator spells ``token`` / ``stamp``
+# / ``age`` and the word "empty" out in prose, so a bare ``word in stderr`` would
+# go green on boilerplate.
+#
+# **Item shape of the clause: ``<key>`` or ``<key> (<reason>)``, and the reason is
+# mandatory for a value that is there.**  Only the optional *quoted value* inside
+# the reason can be dropped, and ``_short_value`` (约
+# benchmarks/alohamini_io/measure_latency.py:624) gates it in this order: ``repr()``
+# longer than 32 characters -> not quoted; quote containing ``", "`` -> not quoted;
+# quote not printable -> not quoted; otherwise ``<reason> (<quote>)``.  A quote that
+# raises must be caught before any of those gates (R34), or the refusal degrades
+# into a transport failure.
+#
+# How this coexists with R20 (``test_main_should_refuse_rtt_when_the_timing_face_misses_a_key``):
+# R20 parses the clause with ``_missing_key_names`` and requires it to be exactly
+# ``{dropped_key}``, but it *drops* keys (the value is absent) and the reader strips
+# the `` (<reason>)`` suffix, so a bare list and an annotated one satisfy the same
+# equality.  What tells them apart is ``_key_carries_a_reason`` (R33): an absent key
+# stays bare, a present-but-unusable one explains itself.
+#
+# Not duplicated here: the all-four-keys and four-plus-extra-keys pass sides are
+# already held by ``test_main_should_measure_rtt_when_the_timing_face_carries_all_four_keys``
+# (R21) and ``..._carries_extra_keys`` (R22).
+
+# A face every row can be built from; each case below overrides exactly one value,
+# so "refused" cannot be explained by any other key of the face.
+_USABLE_TIMING_FACE: dict[str, Any] = {
+    "token": b"tok-usable",
+    "sent_monotonic_s": 1000.0,
+    "received_monotonic_s": 1000.030,
+    "age_s": 0.030,
+}
+
+
+class _ClientWithScriptedTiming(_FakeClient):
+    """``_FakeClient`` whose timing face is ``_USABLE_TIMING_FACE`` + ``overrides``.
+
+    The base fake rewrites ``latest_request_timing`` on every ``get_observation``;
+    this subclass then replaces it with a fixed, fully usable face and applies the
+    scripted override, so the one value under test keeps its scripted shape on
+    *every* frame while the other three stay usable.  That is the difference from
+    ``_ClientWithPartialTiming`` (section V): there a key is *absent*, here it is
+    present and its value is the defect.
+
+    ``dropped_keys`` removes keys from that face, which is how the mixed shape
+    (one key absent, another present-but-unusable) is scripted: the two are
+    different defects with different annotations, and a refusal has to list both.
+    """
+
+    def __init__(
+        self,
+        *,
+        overrides: dict[str, Any],
+        dropped_keys: tuple[str, ...] = (),
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._overrides = dict(overrides)
+        self._dropped_keys = tuple(dropped_keys)
+
+    def get_observation(self, include_cameras: bool = True) -> dict:
+        """Take the frame the base fake builds, then install the scripted face."""
+        state = super().get_observation(include_cameras=include_cameras)
+        face = dict(_USABLE_TIMING_FACE)
+        face.update(self._overrides)
+        for key in self._dropped_keys:
+            face.pop(key, None)
+        self.latest_request_timing = face
+        return state
+
+
+# id -> (the one value scripted into the usable face, the word the refusal has to
+# use for it inside the missing-key clause, or ``None`` when the wording is not
+# pinned).  ``None`` is used for ``non_numeric_age`` and the two ``huge_int_*``
+# cases on purpose: those shapes were refused before the fix too (``float("abc")``
+# raises ``ValueError``) or are about *which* refusal they get, so this section has
+# no reason to prescribe how the refusal words them -- only that the key is named.
+_UNUSABLE_TIMING_CASES: dict[str, tuple[dict[str, Any], str | None]] = {
+    "negative_age": ({"age_s": -0.5}, "negative"),
+    "bool_age": ({"age_s": True}, "bool"),
+    # Both stamps, not just the one the row prints first: ``age_s`` and
+    # ``sent_monotonic_s`` being covered did not make a fix cover
+    # ``received_monotonic_s``, and a missed stamp would be written as ``1.0`` (the
+    # ``float(True)`` conversion) with no test going red.
+    "bool_sent_stamp": ({"sent_monotonic_s": True}, "bool"),
+    "bool_received_stamp": ({"received_monotonic_s": True}, "bool"),
+    "non_numeric_age": ({"age_s": "abc"}, None),
+    "non_string_token": ({"token": 123}, "not a string"),
+    "blank_token": ({"token": "   "}, "empty"),
+    # ``float(10**400)`` raises ``OverflowError`` (an ``ArithmeticError``, not the
+    # ``TypeError``/``ValueError`` ``_finite_or_none`` caught), so these two used to
+    # leave the probe as an exception and come back as exit 3.  No reason word is
+    # prescribed: the requirement is "the same refusal as any other unusable
+    # value", not a particular sentence for big integers.
+    "huge_int_age": ({"age_s": 10**400}, None),
+    "huge_int_sent_stamp": ({"sent_monotonic_s": 10**400}, None),
+}
+
+
+@pytest.mark.parametrize("case_id", list(_UNUSABLE_TIMING_CASES), ids=list(_UNUSABLE_TIMING_CASES))
+def test_main_should_refuse_rtt_when_a_timing_value_is_not_usable(
+    latency, tmp_path, capsys, case_id: str
+) -> None:
+    """R28: a present-but-unusable timing value is refused, with the reason named.
+
+    Locked per case, and why each assertion is here:
+
+    * exit ``EXIT_CLIENT_UNSUPPORTED`` (9): at HEAD 9a9f9d5 ``negative_age``,
+      ``bool_age``, ``bool_sent_stamp``, ``bool_received_stamp``,
+      ``non_string_token`` and ``blank_token`` exited 0 and wrote a CSV whose cells
+      held a negative age / a ``bool`` turned into ``1.0`` / a non-token / a blank
+      cell -- a file that reads like a measurement -- while the two ``huge_int_*``
+      cases exited 3 (``OverflowError`` escaping the probe into the generic
+      transport handler).  ``non_numeric_age`` is the one case that was refused at
+      9a9f9d5 as well: it is here so the family cannot be "fixed" by refusing
+      nothing at all.
+    * the CSV does not exist: a refused run writes nothing, not even a header
+      (R8/R11/R20 all freeze this).
+    * stderr names the face (``latest_request_timing``) *and* the offending key
+      *inside the missing-key clause*, and -- when this section prescribes a word
+      for the shape -- that word is in the same clause.  "The client is broken"
+      is not actionable; "``age_s`` is negative" is.  The clause boundary keeps the
+      check off the boilerplate sentence ("... would write empty token, stamp and
+      age cells ..."), which contains "empty" and the three key-adjacent nouns.
+    * the key named is the one that was scripted unusable: the face carries all
+      four keys with three of them usable, so a refusal that names a different key
+      is reporting the wrong cell.
+
+    Driven through ``main()`` on purpose (section T/V style): the criterion is
+    about what the *CLI* refuses, and the exit code plus "no CSV" only exist
+    there.  ``--samples 3`` / 200 Hz / ``--timeout-s 0.3`` matches R20, so a
+    refusal may look at one or two frames without the test waiting on the budget.
+    """
+    overrides, reason_word = _UNUSABLE_TIMING_CASES[case_id]
+    client = _ClientWithScriptedTiming(overrides=overrides, ages=[0.030, 0.031, 0.032])
+    out = tmp_path / f"unusable-{case_id}.csv"
+
+    code = latency.main(
+        [
+            "--host",
+            "127.0.0.1",
+            "--mode",
+            "rtt",
+            "--samples",
+            "3",
+            "--rate-hz",
+            "200",
+            "--timeout-s",
+            "0.3",
+            "--csv",
+            str(out),
+        ],
+        client_factory=_Factory(client),
+    )
+    captured = capsys.readouterr()
+
+    assert code == latency.EXIT_CLIENT_UNSUPPORTED, (
+        f"a timing face whose {', '.join(overrides)} cannot be used as a measurement "
+        f"was accepted: exit {code} (expected 9), csv_exists={out.exists()}; "
+        f"stderr: {captured.err!r}"
+    )
+    assert not out.exists(), (
+        f"a run refused for an unusable timing value still wrote {out}: the row built "
+        f"from {overrides} holds a cell that reads like a measurement"
+    )
+    assert "latest_request_timing" in captured.err, (
+        f"stderr does not name the timing face: {captured.err!r}"
+    )
+    assert _MISSING_KEYS_MARKER in captured.err, (
+        "the refusal never says which key is unusable, so the operator cannot tell "
+        f"which cell is wrong: {captured.err!r}"
+    )
+    clause = _missing_key_clause(captured.err)
+    for key in overrides:
+        assert key in clause, (
+            f"the missing-key clause does not name {key!r}, the key whose value was "
+            f"scripted unusable: clause={clause!r}, stderr={captured.err!r}"
+        )
+    if reason_word is not None:
+        assert reason_word in clause.lower(), (
+            f"the refusal does not say *why* {', '.join(overrides)} is unusable (looked "
+            f"for {reason_word!r} inside the missing-key clause, not merely somewhere in "
+            f"stderr): clause={clause!r}, stderr={captured.err!r}"
+        )
+
+
+def test_main_should_measure_rtt_when_age_is_zero(latency, tmp_path) -> None:
+    """R29: ``age_s = 0.0`` is the boundary of "finite and ``>= 0``" -- measured.
+
+    The pass side of the ``age_s`` rule, and the reason it cannot be written as
+    ``age_s > 0``: a host that timestamps a request with zero measurable age
+    reports ``0.0``, which is a legitimate value.  A refusal here would reject a
+    legal client; the row's ``age_s`` cell stays non-empty so the value is carried
+    into the CSV instead of being dropped.
+    """
+    client = _ClientWithScriptedTiming(overrides={"age_s": 0.0}, ages=[0.0])
+    out = tmp_path / "zero-age.csv"
+
+    code = latency.main(
+        [
+            "--host",
+            "127.0.0.1",
+            "--mode",
+            "rtt",
+            "--samples",
+            "3",
+            "--rate-hz",
+            "200",
+            "--timeout-s",
+            "0.3",
+            "--csv",
+            str(out),
+        ],
+        client_factory=_Factory(client),
+    )
+
+    assert code == latency.EXIT_OK, (
+        f"age_s == 0.0 is a legal age (the boundary of the >= 0 rule), got exit {code}"
+    )
+    assert out.is_file(), f"the rtt run wrote no CSV at {out}"
+    with out.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 3, f"expected one row per requested sample, got {len(rows)}"
+    for row in rows:
+        assert row["age_s"] != "", f"row {row['sample_index']} has an empty age_s: {row}"
+
+
+def test_main_should_measure_rtt_when_age_is_an_integer(latency, tmp_path) -> None:
+    """R29: an ``int`` age is a number -- measured, not refused as "not a float".
+
+    Python hands back an ``int`` from plenty of paths (``0``, ``2``, a JSON
+    round trip), and ``float(2)`` is a finite number, so "finite number ``>= 0``"
+    has to accept it.  A rule written as ``isinstance(value, float)`` would refuse
+    this client; the pass side is what keeps the fix from becoming a type test.
+    """
+    client = _ClientWithScriptedTiming(overrides={"age_s": 2}, ages=[2])
+    out = tmp_path / "integer-age.csv"
+
+    code = latency.main(
+        [
+            "--host",
+            "127.0.0.1",
+            "--mode",
+            "rtt",
+            "--samples",
+            "2",
+            "--rate-hz",
+            "200",
+            "--timeout-s",
+            "0.3",
+            "--csv",
+            str(out),
+        ],
+        client_factory=_Factory(client),
+    )
+
+    assert code == latency.EXIT_OK, (
+        f"an integer age_s is a finite number (age_s >= 0 holds), got exit {code}"
+    )
+    assert out.is_file(), f"the rtt run wrote no CSV at {out}"
+    with out.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 2, f"expected one row per requested sample, got {len(rows)}"
+    for row in rows:
+        assert row["age_s"] != "", f"row {row['sample_index']} has an empty age_s: {row}"
+
+
+def test_main_should_measure_rtt_when_the_token_is_a_meaningless_string(latency, tmp_path) -> None:
+    """R29: any non-blank ``str`` token is *filled* -- the criterion is text, not sense.
+
+    ``"abc"`` is not a request id the host would ever issue, and that is
+    deliberate: the probe judges whether the cell holds text, never whether the
+    text is meaningful (it has no way to know what the host would issue).  Pinning
+    this shape keeps the fix from turning into a validator of token contents --
+    the shapes that must be refused are "not a string" and "blank", both scripted
+    in R28 above.  The token also has to survive into the CSV cell verbatim: a
+    refusal-free run that drops the token would pass an exit-code-only assertion.
+    """
+    client = _ClientWithScriptedTiming(overrides={"token": "abc"}, ages=[0.030, 0.031])
+    out = tmp_path / "meaningless-token.csv"
+
+    code = latency.main(
+        [
+            "--host",
+            "127.0.0.1",
+            "--mode",
+            "rtt",
+            "--samples",
+            "2",
+            "--rate-hz",
+            "200",
+            "--timeout-s",
+            "0.3",
+            "--csv",
+            str(out),
+        ],
+        client_factory=_Factory(client),
+    )
+
+    assert code == latency.EXIT_OK, (
+        f"a non-blank str token is a filled token cell (only 'not a str' and 'blank' "
+        f"are refused), got exit {code}"
+    )
+    assert out.is_file(), f"the rtt run wrote no CSV at {out}"
+    with out.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 2, f"expected one row per requested sample, got {len(rows)}"
+    for row in rows:
+        assert row["token"] == "abc", (
+            f"row {row['sample_index']} does not carry the scripted token: {row}"
+        )
+
+
+# The reason for an unusable value is printed *inside* the missing-key clause
+# (``_UNUSABLE_TIMING_CASES`` above), and R20 reads that clause back by splitting
+# it on ``", "``: an annotated entry that itself holds the separator reads as two
+# keys, so a refusal would name a key that does not exist.  The same clause is cut
+# at the first newline (``_missing_key_clause``), so a reason that brought one
+# would be truncated.
+#
+# The contract that resolves this (see ``_short_value``, 约
+# benchmarks/alohamini_io/measure_latency.py:624) is not "rewrite the quote until
+# it is printable" but "**drop the quote, keep the reason**":
+#
+#   * the *reason* is mandatory and is a fixed phrase (``not a finite number``,
+#     ``negative value``, ...), so it can never carry a separator or a line break;
+#   * the *quoted value* appended to it is optional, and the gates decide, in this
+#     order: ``repr()`` longer than 32 characters -> not quoted; the quote contains
+#     ``", "`` -> not quoted; the quote is not printable (any real newline) -> not
+#     quoted; otherwise it is appended as ``<reason> (<quote>)``;
+#   * gates that short-circuit matter: a value is checked for length before it is
+#     checked for printability, so a 401-digit integer is rejected for length
+#     without its quote ever being split, and a value whose ``repr()`` *raises*
+#     (``_ExplodingRepr``, R34) must be caught before any of this, or the refusal
+#     turns into a transport failure.
+#
+# So what the shapes below have to produce is not a wording but a *parseable* list
+# with an annotation: ``_missing_key_names(stderr) == {"<the one key>"}`` and
+# ``_key_carries_a_reason(stderr, "<the one key>")`` -- R20's reader plus the
+# contract marker, applied to a value-shape refusal.
+
+
+class _MultiLineReprStamp:
+    r"""A stamp whose ``repr`` spans lines -- the shape that truncates the clause.
+
+    ``repr`` escapes line breaks inside a ``str``/``bytes`` (``repr("a\nb")`` is
+    ``"'a\nb'"``), so no *string* value can put a real newline into the clause and a
+    ``token = "a\nb"`` case would prove nothing.  What does put one there is an
+    object whose ``repr`` is genuinely multi-line -- a numpy scalar array, a wrapped
+    exception, a dataclass holding a message: exactly the shapes a client can leave
+    on a timing field.
+    """
+
+    def __repr__(self) -> str:
+        return "stamp(\n  1.0\n)"
+
+
+def _refusal_for_hostile_value(
+    latency, tmp_path, capsys, *, overrides: dict[str, Any], name: str
+) -> tuple[int, Path, str]:
+    """Run ``main()`` with one hostile timing value; return ``(code, csv_path, stderr)``.
+
+    Shared by the two clause-parseability tests below so the *shapes* stay in them
+    and the driving of the CLI stays in one place: ``--samples 3`` / 200 Hz /
+    ``--timeout-s 0.3`` as in R20/R28, so a refusal costs one or two frames.
+    """
+    client = _ClientWithScriptedTiming(overrides=overrides, ages=[0.030, 0.031, 0.032])
+    out = tmp_path / f"hostile-{name}.csv"
+
+    code = latency.main(
+        [
+            "--host",
+            "127.0.0.1",
+            "--mode",
+            "rtt",
+            "--samples",
+            "3",
+            "--rate-hz",
+            "200",
+            "--timeout-s",
+            "0.3",
+            "--csv",
+            str(out),
+        ],
+        client_factory=_Factory(client),
+    )
+    return code, out, capsys.readouterr().err
+
+
+def test_main_should_keep_the_missing_key_clause_parseable_when_the_rejected_value_contains_a_comma(
+    latency, tmp_path, capsys
+) -> None:
+    """R32: a value holding ``", "`` is not quoted, and the reason survives without it.
+
+    ``sent_monotonic_s = "1.0,  2.0"`` is two numbers in one string, i.e. not a
+    stamp, so the run is refused.  Quoting the value would make the clause read
+    ``sent_monotonic_s (not a finite number ('1.0, 2.0'))``, and R20 reads that
+    clause back by splitting on ``", "``, so the quote would arrive as a second key
+    (``"2.0'))"``) -- a key the face does not have.
+
+    The contract asserted here is ``_short_value``'s: the quote is dropped, the
+    reason kept, so the clause reads ``sent_monotonic_s (not a finite number)``.
+    Exit 9 (a *value* defect, not a transport one), no CSV, and
+    ``_missing_key_names(stderr) == {"sent_monotonic_s"}`` -- R20's own clause
+    reader on a value-shape refusal, so exactly one key and no prose residue.
+    ``_key_carries_a_reason`` is checked by R33; here the point is that the
+    *unparseable* shape is gone.
+    """
+    code, out, stderr = _refusal_for_hostile_value(
+        latency,
+        tmp_path,
+        capsys,
+        overrides={"sent_monotonic_s": "1.0,  2.0"},
+        name="comma",
+    )
+
+    assert code == latency.EXIT_CLIENT_UNSUPPORTED, (
+        f"a timing face whose sent_monotonic_s is not a number must be refused with "
+        f"exit 9, got {code}; stderr: {stderr!r}"
+    )
+    assert not out.exists(), f"a refused run wrote {out}"
+    names = _missing_key_names(stderr)
+    assert names == {"sent_monotonic_s"}, (
+        "the missing-key clause does not read back as exactly the one unusable key: "
+        f"parsed {sorted(names)!r} from clause {_missing_key_clause(stderr)!r} "
+        f'(stderr: {stderr!r}); a reason that carries ", " splits the clause, so the '
+        "refusal names keys that do not exist"
+    )
+
+
+def test_main_should_keep_the_missing_key_clause_parseable_when_the_rejected_value_contains_a_newline(
+    latency, tmp_path, capsys
+) -> None:
+    r"""R32: an unprintable value is not quoted, so the clause and the refusal survive.
+
+    ``repr`` escapes line breaks inside a ``str``/``bytes`` (``repr("a\nb")`` is
+    ``"'a\nb'"``), so a string value cannot reach this shape; what does is an
+    object whose ``repr`` is genuinely multi-line (``_MultiLineReprStamp``: a numpy
+    scalar array, a wrapped exception, a dataclass holding a message -- all shapes a
+    client can leave on a timing field).  Quoting it would put a real newline inside
+    the clause, which ``_missing_key_clause`` cuts at, so the clause would read
+    ``sent_monotonic_s (not a finite number (stamp(`` -- the key name survives but
+    the list ends mid-word, and the ``", so ..."`` remediation sentence is pushed off
+    the first line with it.
+
+    The contract asserted here is ``_short_value``'s: a quote that is not printable
+    is dropped and the reason kept, so the clause reads ``sent_monotonic_s (not a
+    finite number)``.  Locked: exit 9, no CSV, ``_missing_key_names(stderr) ==
+    {"sent_monotonic_s"}``, and the ``", so "`` terminator still present -- both
+    true at once only if the newline never reaches the refusal, which is what "do
+    not quote it" buys.
+    """
+    code, out, stderr = _refusal_for_hostile_value(
+        latency,
+        tmp_path,
+        capsys,
+        overrides={"sent_monotonic_s": _MultiLineReprStamp()},
+        name="newline",
+    )
+
+    assert code == latency.EXIT_CLIENT_UNSUPPORTED, (
+        f"a timing face whose sent_monotonic_s is not a number must be refused with "
+        f"exit 9, got {code}; stderr: {stderr!r}"
+    )
+    assert not out.exists(), f"a refused run wrote {out}"
+    names = _missing_key_names(stderr)
+    assert names == {"sent_monotonic_s"}, (
+        "the missing-key clause does not read back as exactly the one unusable key: "
+        f"parsed {sorted(names)!r} from clause {_missing_key_clause(stderr)!r} "
+        f"(stderr: {stderr!r}); a reason that spans lines is cut at the first newline"
+    )
+    assert _MISSING_KEYS_TERMINATOR in stderr, (
+        'the newline in the reason ate the rest of the refusal (the ", so ..." clause '
+        f"terminator and the remediation sentence after it): {stderr!r}"
+    )
+
+
+# The annotation contract, in one place: every item of the missing-key clause is
+# ``<key>`` or ``<key> (<reason>)``, and a key that is *there* with an unusable
+# value always carries the reason -- a bare ``age_s`` in the clause says "the face
+# does not carry this cell", which is the wrong fix for a cell that is carried and
+# holds ``-0.5``.  Only the optional *quoted value* inside the reason can be
+# dropped (``_short_value``: unprintable, longer than 32 characters, or holding
+# ``", "``), never the reason itself.
+#
+# The readers are the upgraded ``_missing_key_names`` (key names, reason stripped)
+# and ``_key_carries_a_reason`` (the ``"<key> ("`` marker), i.e. the two halves are
+# asserted separately: a refusal that annotates the wrong key, or none at all,
+# fails one of them.
+
+
+@pytest.mark.parametrize("case_id", list(_UNUSABLE_TIMING_CASES), ids=list(_UNUSABLE_TIMING_CASES))
+def test_main_should_name_a_reason_for_every_unusable_timing_value(
+    latency, tmp_path, capsys, case_id: str
+) -> None:
+    """R33: every unusable value is refused *and* explained, next to its own key.
+
+    Same nine shapes as R28 (``_UNUSABLE_TIMING_CASES``), read with the contract
+    readers instead of the per-case word: exit 9, no CSV, the clause's key names
+    are exactly ``{key}``, and that key carries a `` (<reason>)`` annotation.
+
+    Why the reason is not optional here: the two ``huge_int_*`` values are refused
+    with a bare key by an implementation that drops the whole annotation when the
+    value cannot be quoted (the value is a 401-digit integer, past
+    ``_short_value``'s 32-character gate), so the operator is told "``age_s`` is
+    missing" for a face that carries ``age_s = 10**400`` -- actionable in the wrong
+    direction.  ``non_numeric_age`` is the mirror: it was refused before this
+    section existed, and it still has to say *why*.
+
+    Not asserted: which word the reason uses (R28 pins ``negative`` / ``bool`` /
+    ``not a string`` / ``empty`` where the wording matters and leaves it open for
+    the huge-integer and non-numeric shapes) and whether a value is quoted, which
+    is ``_short_value``'s call.
+    """
+    overrides, _reason_word = _UNUSABLE_TIMING_CASES[case_id]
+    (key,) = overrides
+    client = _ClientWithScriptedTiming(overrides=overrides, ages=[0.030, 0.031, 0.032])
+    out = tmp_path / f"annotated-{case_id}.csv"
+
+    code = latency.main(
+        [
+            "--host",
+            "127.0.0.1",
+            "--mode",
+            "rtt",
+            "--samples",
+            "3",
+            "--rate-hz",
+            "200",
+            "--timeout-s",
+            "0.3",
+            "--csv",
+            str(out),
+        ],
+        client_factory=_Factory(client),
+    )
+    captured = capsys.readouterr()
+
+    assert code == latency.EXIT_CLIENT_UNSUPPORTED, (
+        f"{key}={overrides[key]!r:.48} on the timing face must be refused with exit 9, "
+        f"got {code}; stderr: {captured.err!r}"
+    )
+    assert not out.exists(), f"a refused run wrote {out}"
+    names = _missing_key_names(captured.err)
+    assert names == {key}, (
+        f"the missing-key clause does not read back as exactly {key!r}: "
+        f"parsed {sorted(names)!r} from clause {_missing_key_clause(captured.err)!r} "
+        f"(stderr: {captured.err!r})"
+    )
+    assert _key_carries_a_reason(captured.err, key), (
+        f"the refusal names {key!r} without saying why it is unusable: clause "
+        f"{_missing_key_clause(captured.err)!r} (stderr: {captured.err!r}); an "
+        "operator sent to a cell that the face *does* carry cannot act on it"
+    )
+
+
+def test_main_should_name_both_keys_when_one_is_missing_and_one_is_unusable(
+    latency, tmp_path, capsys
+) -> None:
+    """R33: an absent key and an unusable one are both listed, annotated only once.
+
+    ``token`` is dropped from the face and ``age_s`` carries ``-0.5``: two
+    different defects in one refusal.  The clause has to read ``token, age_s
+    (negative value (-0.5))`` -- the absent key bare (there is nothing to explain:
+    the cell would be empty because the value is not there) and the unusable one
+    explained.
+
+    Locked: exit 9, no CSV, ``_missing_key_names`` is exactly the *set*
+    ``{"token", "age_s"}`` (the order is ``REQUIRED_REQUEST_TIMING_KEYS``'s
+    business, not the operator's), the reason marker sits on ``age_s``, and
+    ``token`` carries *no* marker -- both halves of the item shape in one clause, so
+    a refusal that annotates every item (or none) fails here.  This is the case
+    R20's equality cannot see: the reader strips `` (<reason>)``, so a clause that
+    explains an absent key still parses to the right key names.
+    """
+    client = _ClientWithScriptedTiming(
+        overrides={"age_s": -0.5},
+        dropped_keys=("token",),
+        ages=[0.030, 0.031, 0.032],
+    )
+    out = tmp_path / "missing-and-unusable.csv"
+
+    code = latency.main(
+        [
+            "--host",
+            "127.0.0.1",
+            "--mode",
+            "rtt",
+            "--samples",
+            "3",
+            "--rate-hz",
+            "200",
+            "--timeout-s",
+            "0.3",
+            "--csv",
+            str(out),
+        ],
+        client_factory=_Factory(client),
+    )
+    captured = capsys.readouterr()
+
+    assert code == latency.EXIT_CLIENT_UNSUPPORTED, (
+        "a face with one absent and one unusable key must be refused with exit 9, "
+        f"got {code}; stderr: {captured.err!r}"
+    )
+    assert not out.exists(), f"a refused run wrote {out}"
+    names = _missing_key_names(captured.err)
+    assert names == {"token", "age_s"}, (
+        f"the refusal does not list both defects: parsed {sorted(names)!r} from clause "
+        f"{_missing_key_clause(captured.err)!r} (stderr: {captured.err!r})"
+    )
+    assert _key_carries_a_reason(captured.err, "age_s"), (
+        "the unusable value (age_s = -0.5) is listed without a reason, so it reads "
+        "like a cell the face does not carry: clause "
+        f"{_missing_key_clause(captured.err)!r}"
+    )
+    # The other half, on the same clause: the *absent* key stays bare.  Asserting
+    # only "age_s is annotated" would be satisfied by a refusal that annotates every
+    # item, which is the shape R20's new bare-key assertion rejects for the
+    # one-defect case; here both shapes are in one clause, so both are checked.
+    assert "token (" not in _missing_key_clause(captured.err), (
+        "the absent key 'token' is annotated in the missing-key clause: clause "
+        f"{_missing_key_clause(captured.err)!r}; a key the face does not carry has no "
+        "value to explain"
+    )
+
+
+class _ExplodingRepr:
+    """A timing value that cannot even be printed: ``repr()`` raises.
+
+    Not exotic: ``__repr__`` is client code, and the shapes that reach a timing
+    field (a lazily formatted object, a proxy holding a closed resource, a numpy
+    scalar whose workspace is gone) can raise.  The refusal must survive that: a
+    refusal that turns into a transport failure because it tried to quote the value
+    it was refusing reports the wrong cause (exit 3, "observation failed") and
+    loses the key name with it.
+    """
+
+    def __repr__(self) -> str:
+        raise RuntimeError("repr is not available")
+
+
+def test_main_should_refuse_rtt_when_a_rejected_value_cannot_be_printed(
+    latency, tmp_path, capsys
+) -> None:
+    """R34: a value whose ``repr`` raises is refused as a *value*, not a transport.
+
+    ``sent_monotonic_s = _ExplodingRepr()`` is unusable (it is not a number), so
+    the run owes the same refusal as any other value defect: exit 9, no CSV, the
+    key named with its reason.  An implementation that quotes the value
+    unconditionally raises out of the probe instead, ``_run_rtt_mode``'s generic
+    ``except Exception`` catches it as ``observation failed: repr is not
+    available`` and returns ``EXIT_CONNECT_FAILED`` (3) -- the operator is sent to
+    the link, and the key that caused it is never named.
+
+    Locked: exit 9, no CSV, ``_missing_key_names == {"sent_monotonic_s"}`` and the
+    reason marker on that key.  Whether the reason quotes the value is not asserted
+    (it cannot be printed, so the only correct answer is "do not quote it").
+    """
+    client = _ClientWithScriptedTiming(
+        overrides={"sent_monotonic_s": _ExplodingRepr()}, ages=[0.030, 0.031, 0.032]
+    )
+    out = tmp_path / "unprintable-value.csv"
+
+    code = latency.main(
+        [
+            "--host",
+            "127.0.0.1",
+            "--mode",
+            "rtt",
+            "--samples",
+            "3",
+            "--rate-hz",
+            "200",
+            "--timeout-s",
+            "0.3",
+            "--csv",
+            str(out),
+        ],
+        client_factory=_Factory(client),
+    )
+    captured = capsys.readouterr()
+
+    assert code == latency.EXIT_CLIENT_UNSUPPORTED, (
+        "a timing value that cannot be printed is still a *value* defect: expected "
+        f"exit 9, got {code}; stderr: {captured.err!r}"
+    )
+    assert not out.exists(), f"a refused run wrote {out}"
+    names = _missing_key_names(captured.err)
+    assert names == {"sent_monotonic_s"}, (
+        f"the refusal does not name the unprintable key: parsed {sorted(names)!r} from "
+        f"clause {_missing_key_clause(captured.err)!r} (stderr: {captured.err!r})"
+    )
+    assert _key_carries_a_reason(captured.err, "sent_monotonic_s"), (
+        f"the refusal names the key without a reason: clause {_missing_key_clause(captured.err)!r}"
+    )
+
+
+# ===========================================================================
+# Z. Mid-run freeze and duplicate frames: what the pacing costs
+# ===========================================================================
+#
+# Two run shapes whose cost is decided by the pacing arithmetic alone.  Row
+# deadlines are absolute and a poll that grew no row only has to wait until the
+# next one is due (约 benchmarks/alohamini_io/measure_latency.py:1751-1758):
+#
+#   ``next_row_s = start_s + len(rows) * period_s``
+#   ``target_s   = next_row_s                            # a fresh frame``
+#   ``target_s   = max(next_row_s, now + IDLE_POLL_FLOOR_S)  # duplicate, rows > 0``
+#   ``target_s   = now + idle_pause_s         # duplicate, no row yet (R24's case)``
+#   ``idle_pause_s = max(period_s, IDLE_POLL_FLOOR_S)``   (约 :1689, floor ``1e-3``,
+#                                                         ``IDLE_POLL_FLOOR_S`` :470)
+#
+# Before the fix (HEAD 9a9f9d5) the middle arm did not exist: a duplicate frame
+# waited ``now_s + idle_pause_s``, one whole period, so the achieved rate was
+# ``rate_hz / (1 + duplicates per growth)``.  Both sets of numbers are recorded
+# because the difference is the whole point of the two tests below (sleep-driven
+# clock, 20 rows, ``--rate-hz 200``):
+#
+#   duplicates per growth |    9a9f9d5      |   current
+#   ----------------------+------------------+------------------
+#   1                     | 0.1000 s, 1.00 x | 0.0960 s, 1.04 x (39 polls)
+#   2                     | 0.1950 s, 0.51 x | 0.0970 s, 1.03 x (58 polls)
+#
+#   (current: 206-208 Hz, i.e. slightly *above* ``--rate-hz``, because a duplicate
+#   waits only until the next row is due and the absolute deadline lets the loop
+#   catch up; 9a9f9d5: 200.0 Hz and 102.6 Hz respectively.)
+#
+# 1. **A sequence that grows N times and then stands still** has no test of its
+#    own elsewhere: R24 freezes at *zero* rows and
+#    ``test_main_should_report_insufficient_samples_in_rtt_mode`` freezes at one.
+#    The shape worth locking is the one an operator actually meets (three good
+#    frames, then a dead link), because it is the only one where rows *and* the
+#    give-up moment are both observable: ``exc.collected`` has to be the number of
+#    rows that made it into ``rows_out``, and the polls have to stay paced.  A
+#    frozen tail keeps chasing the same ``next_row_s`` deadline, so the arm above
+#    spends its wait one ``IDLE_POLL_FLOOR_S`` at a time: measured 73 polls for a
+#    100 ms budget at 100 Hz (9a9f9d5: 11 polls), while a run frozen with *zero*
+#    rows still costs 11 (the ``idle_pause_s`` arm, unchanged -- that is R24's
+#    bound, and both sit far under it).
+# 2. **A sequence that repeats** is the shape the honest host produces when it
+#    answers slower than the client polls.  It is worth its own test because the
+#    cost depends on the *number* of duplicates per growth, not on "slower than the
+#    client": one duplicate per growth was already absorbed by the fresh frame's
+#    absolute deadline at 9a9f9d5 (1.00 x), and two were not (0.51 x, i.e. exactly
+#    ``rate_hz / 3``).  R31 parametrises both, so the rule is locked in one place,
+#    and the defect it describes is "the duplicate poll waits a whole period" --
+#    the loop's own pacing decides the achieved rate, which is why such a fix
+#    belongs in ``collect_rtt_samples`` and not in the fake.
+#
+# Both use ``_SleepDrivenClock`` (section W): the clock moves only when the loop
+# sleeps, so "how long this run took" is exactly "how much the loop waited" and
+# the assertions are about pacing, never about wall time.  ``_SpinGuardClient``
+# turns a loop that stops sleeping into a ``RuntimeError`` with a call count in it
+# instead of a hung test.
+#
+# The quarter of ``_FakeClient``'s scriptable knobs these two need: ``sequences``
+# saturates on its last entry (``_value_at``), so ``sequences=[1, 2, 3]`` is
+# "grow three times, then frozen" without a new fake.
+
+# Poll bound for a run whose sequence stops growing after a few rows ("frozen
+# tail"): the loop owes at most one wait per sampling period, and a legitimate
+# implementation may poll once before and once after each wait, so
+# ``2 * timeout_s * rate_hz`` polls; the ``+ 20`` covers the growth phase, the
+# final poll and the frame a refusal looks at.
+#
+# The shape it separates from is a loop that waits ``IDLE_POLL_FLOOR_S`` (1 ms)
+# instead of the period: at 100 Hz that is 10 polls per period, i.e.
+# ``timeout_s / 1e-3`` polls over the budget -- 1000 for a 1 s budget, 4.5x this
+# bound, and 29,903 measured for the default 30 Hz / 30 s run (bound 1820).  So
+# "one wait per period" and "one wait per millisecond" cannot be confused, which
+# is what the two bounds below are for.
+_FROZEN_TAIL_POLL_SLACK = 20
+
+
+def _frozen_tail_poll_bound(*, rate_hz: float, timeout_s: float) -> int:
+    """Polls a loop paced at ``rate_hz`` may spend on a budget of ``timeout_s``.
+
+    Two per period (see ``_FROZEN_TAIL_POLL_SLACK``) plus a fixed slack: 40 for the
+    100 ms @ 100 Hz case, 220 for 1 s @ 100 Hz.
+    """
+    return int(2 * timeout_s * rate_hz) + _FROZEN_TAIL_POLL_SLACK
+
+
+# The capability refusal's wording, which a budget refusal must not borrow (the
+# mirror of section W's ``_BUDGET_WORDS``): "never fills it" and the missing-key
+# clause are what sections T/V print when the *client* is at fault.
+_CAPABILITY_WORDS = ("never fills it", "missing key(s):")
+
+
+def test_collect_rtt_samples_should_lock_the_mid_run_freeze_behaviour(latency) -> None:
+    """R30: three growths, then a frozen sequence -> three rows, paced, then 7.
+
+    Locks the shape an operator meets in the field (a link that dies mid-run)
+    rather than R24's idealised zero-row freeze:
+
+    * the run still ends in ``InsufficientSamples`` -- a dead link is a budget
+      problem, not a capability one, and the timing face is filled here;
+    * ``exc.collected == 3`` and ``len(rows_out) == 3``: the three samples taken
+      before the freeze are kept (they are the only evidence the run produced) and
+      the count the refusal reports agrees with the list the caller holds;
+    * ``get_observation`` stays paced to **one wait per sampling period**: at most
+      ``2 * timeout_s * rate_hz + 20`` = **40** calls for a 100 ms budget at 100 Hz
+      (``_frozen_tail_poll_bound``).  Measured 73 before that bound existed: the
+      frozen tail keeps chasing the same ``next_row_s`` deadline, so the
+      ``IDLE_POLL_FLOOR_S`` arm fires once per millisecond -- 10 polls per period at
+      100 Hz, i.e. a 1 kHz poll loop ("waiting" only in the sense that it sleeps 1 ms
+      at a time).  The bound is two polls per period, so a fix that waits the period
+      fits and a floor-driven loop does not; the spin guard sits far above it (2000),
+      so a guard firing is reported as a failure instead of being read as "bounded".
+      The 1 s variant of the same shape is
+      ``test_collect_rtt_samples_should_not_poll_a_frozen_tail_more_often_than_one_period``.
+    """
+    samples = 10
+    rate_hz = 100.0
+    timeout_s = 0.1
+    upper_bound = _frozen_tail_poll_bound(rate_hz=rate_hz, timeout_s=timeout_s)  # 40
+    clock = _SleepDrivenClock()
+    rows: list[dict[str, Any]] = []
+    client = _SpinGuardClient(limit=2000, sequences=[1, 2, 3])
+
+    raised: BaseException | None = None
+    try:
+        latency.collect_rtt_samples(
+            client,
+            samples=samples,
+            rate_hz=rate_hz,
+            timeout_s=timeout_s,
+            sleep=clock.sleep,
+            clock=clock,
+            rows_out=rows,
+        )
+    except Exception as exc:  # the guard's RuntimeError is the interesting failure
+        raised = exc
+
+    calls = client.get_observation_calls
+
+    assert isinstance(raised, latency.InsufficientSamples), (
+        "a sequence that grows three times and then stands still must end in "
+        f"InsufficientSamples (the timing face is filled, so this is a budget "
+        f"refusal, not a capability one); got {type(raised).__name__}({raised}) after "
+        f"{calls} get_observation calls and {len(rows)} row(s)"
+    )
+    assert raised.required == samples, (
+        f"the refusal reports required={raised.required}, the run asked for {samples}"
+    )
+    assert raised.collected == 3, (
+        f"the refusal reports collected={raised.collected}, but three frames grew "
+        f"before the freeze (rows_out holds {len(rows)})"
+    )
+    assert len(rows) == 3, (
+        f"rows_out holds {len(rows)} row(s) instead of the three samples taken before "
+        f"the freeze: the evidence of a dead link is exactly what this run keeps"
+    )
+    assert calls <= upper_bound, (
+        f"a mid-run freeze cost {calls} get_observation calls in a {timeout_s} s budget "
+        f"at {rate_hz} Hz (at most {upper_bound}, i.e. two polls per sampling period): "
+        "the frozen tail is waited on one IDLE_POLL_FLOOR_S at a time, so the loop "
+        "polls at 1 kHz instead of at --rate-hz"
+    )
+
+
+def test_collect_rtt_samples_should_not_poll_a_frozen_tail_more_often_than_one_period(
+    latency,
+) -> None:
+    """R35: a frozen tail waits the sampling period, not ``IDLE_POLL_FLOOR_S``.
+
+    Same shape as R30 (three growths, then the sequence stands still) with the
+    budget the CLI actually defaults to: ``rate_hz=100`` and ``timeout_s=1.0``.  A
+    frozen tail keeps ``next_row_s`` at ``start + 3 * period``, so every poll finds
+    the deadline in the past; the duplicate arm clamps that to
+    ``now + IDLE_POLL_FLOOR_S`` (1 ms), and the loop then polls ten times per
+    sampling period -- 973 calls for one second of budget.  The default run
+    (30 Hz, 30 s) measured 29,903 calls: a "waiting" loop that spends the whole
+    budget waking up 1,000 times per second.
+
+    Bound: ``2 * timeout_s * rate_hz + 20`` = **220** (``_frozen_tail_poll_bound``).
+    Derivation: a loop that owes one wait per period costs ``timeout_s * rate_hz``
+    = 100 polls for this budget; the factor 2 covers a poll before and after each
+    wait; the ``+ 20`` covers the three growing frames, the give-up poll and the
+    frame a refusal looks at.  A pace of one poll per ``IDLE_POLL_FLOOR_S`` costs
+    ``timeout_s / 1e-3`` = 1000 polls here (4.5x the bound) and 29,903 in the
+    default shape (16x its bound of 1820), so the two shapes cannot be confused --
+    and a fix that waits the period lands near 100, comfortably inside.
+
+    The fix this pins is the one the R31 duplicate arm cannot make on its own: while
+    the loop is still catching up its beat, waiting ``next_row_s`` is right; once it
+    is a whole period behind (the frozen tail), the wait has to go back to a full
+    period, or the floor turns "paced" into "1 kHz".  R31's two cases are asserted
+    unchanged, since the catch-up arm is untouched by that fallback.
+
+    Asserted: exit ``InsufficientSamples`` with the three rows kept (a dead link is
+    a budget problem, and the evidence survives), and the poll bound.
+    """
+    rate_hz = 100.0
+    timeout_s = 1.0
+    samples = 10
+    upper_bound = _frozen_tail_poll_bound(rate_hz=rate_hz, timeout_s=timeout_s)  # 220
+    clock = _SleepDrivenClock()
+    rows: list[dict[str, Any]] = []
+    client = _SpinGuardClient(limit=20000, sequences=[1, 2, 3])
+
+    raised: BaseException | None = None
+    try:
+        latency.collect_rtt_samples(
+            client,
+            samples=samples,
+            rate_hz=rate_hz,
+            timeout_s=timeout_s,
+            sleep=clock.sleep,
+            clock=clock,
+            rows_out=rows,
+        )
+    except Exception as exc:  # the guard's RuntimeError is the interesting failure
+        raised = exc
+
+    calls = client.get_observation_calls
+
+    assert isinstance(raised, latency.InsufficientSamples), (
+        "a frozen tail with a filled timing face ends in InsufficientSamples (a "
+        f"budget refusal, not a capability one); got {type(raised).__name__}"
+        f"({raised}) after {calls} get_observation calls and {len(rows)} row(s)"
+    )
+    assert len(rows) == 3, (
+        f"the three rows collected before the freeze must be kept, got {len(rows)}"
+    )
+    assert calls <= upper_bound, (
+        f"a frozen tail cost {calls} get_observation calls in a {timeout_s} s budget at "
+        f"{rate_hz} Hz (at most {upper_bound}, i.e. two polls per sampling period): the "
+        "loop waits one IDLE_POLL_FLOOR_S per poll once the row deadline is in the "
+        "past, so a 100 Hz run polls at 1 kHz"
+    )
+
+
+# ``rate_hz`` shapes that make ``period_s`` unusable: ``1.0 / rate_hz if rate_hz > 0
+# else 0.0`` is ``0.0`` for nan (no comparison holds), inf (``1 / inf``) and for the
+# non-positive values.  The frozen-tail arm has to keep waiting something even then,
+# because there is no period to fall back on.
+_NO_USABLE_PERIOD_CASES: dict[str, float] = {
+    "nan": float("nan"),
+    "inf": float("inf"),
+    "zero": 0.0,
+    "negative": -5.0,
+}
+
+
+@pytest.mark.parametrize(
+    "case_id", list(_NO_USABLE_PERIOD_CASES), ids=list(_NO_USABLE_PERIOD_CASES)
+)
+def test_collect_rtt_samples_should_still_wait_when_a_frozen_tail_has_no_usable_period(
+    latency, case_id: str
+) -> None:
+    """R36: a frozen tail waits the floor when ``rate_hz`` gives no period at all.
+
+    R35 bounds a frozen tail at one wait per *period*; this case is the degenerate
+    side of the same arm.  ``period_s = 1.0 / rate_hz if rate_hz > 0 else 0.0``
+    (约 benchmarks/alohamini_io/measure_latency.py:1683) is ``0.0`` for all four
+    parameters here -- ``nan`` compares false, ``1 / inf`` is 0, and ``0`` / ``-5``
+    take the ``else`` -- so a frozen-tail arm that waits ``period_s`` waits
+    *nothing*: every poll finds the row deadline in the past, the pause is zero,
+    ``sleep`` is never called and the loop polls at the client's maximum speed
+    until the budget expires.  The clock is sleep-driven, so such a loop never
+    advances the fake clock either: it would only end on the spin guard.
+
+    Asserted, because each one fails for a different reason:
+
+    * ``InsufficientSamples`` -- the run still has to end, and a filled timing face
+      with a frozen sequence is a budget refusal, not a capability one;
+    * ``len(rows_out) == 3`` -- the three samples taken before the freeze survive;
+    * ``get_observation`` calls ``<= 200`` -- measured 53 per parameter (50 floor
+      waits + 3 growth polls), so the bound is ~4x the paced count; a busy loop
+      runs to the guard (5000) and is reported, not hung.  The bound is on the
+      *count*, i.e. it separates "waits the floor" from "waits nothing";
+    * every ``sleep`` argument is ``> 0`` and ``min(sleeps) >= IDLE_POLL_FLOOR_S -
+      1e-12`` -- the direct statement of the defect, and the one assertion a
+      zero-length wait cannot satisfy.  ``timeout_s = 0.05`` is 50 whole floors
+      deliberately, so the last wait is a full floor too rather than the remainder
+      of the budget (measured minimum: ``1e-3 - 3.4e-17``, i.e. float noise well
+      inside the 1e-12 tolerance).
+    """
+    rate_hz = _NO_USABLE_PERIOD_CASES[case_id]
+    timeout_s = 0.05
+    samples = 5
+    floor_s = latency.IDLE_POLL_FLOOR_S
+    upper_bound = 200
+    clock = _SleepDrivenClock()
+    rows: list[dict[str, Any]] = []
+    client = _SpinGuardClient(limit=5000, sequences=[1, 2, 3])
+
+    raised: BaseException | None = None
+    try:
+        latency.collect_rtt_samples(
+            client,
+            samples=samples,
+            rate_hz=rate_hz,
+            timeout_s=timeout_s,
+            sleep=clock.sleep,
+            clock=clock,
+            rows_out=rows,
+        )
+    except Exception as exc:  # the guard's RuntimeError is the interesting failure
+        raised = exc
+
+    calls = client.get_observation_calls
+    sleeps = clock.sleeps
+
+    assert isinstance(raised, latency.InsufficientSamples), (
+        f"rate_hz={rate_hz!r} with a frozen tail must end in InsufficientSamples; got "
+        f"{type(raised).__name__}({raised}) after {calls} get_observation calls, "
+        f"{len(rows)} row(s) and {len(sleeps)} sleep(s)"
+    )
+    assert len(rows) == 3, (
+        f"the three rows collected before the freeze must be kept, got {len(rows)}"
+    )
+    assert calls <= upper_bound, (
+        f"rate_hz={rate_hz!r} cost {calls} get_observation calls in a {timeout_s} s "
+        f"budget (at most {upper_bound}; the paced shape is ~53): period_s is 0.0, so "
+        "an arm that waits the period waits nothing and the loop spins"
+    )
+    assert sleeps, (
+        f"rate_hz={rate_hz!r} issued no sleep at all in {len(sleeps)} polls: the loop "
+        "is not waiting between polls"
+    )
+    assert all(pause_s > 0.0 for pause_s in sleeps), (
+        f"rate_hz={rate_hz!r} issued a zero-length wait: sleeps={sleeps[:5]!r}..."
+    )
+    assert min(sleeps) >= floor_s - 1e-12, (
+        f"rate_hz={rate_hz!r} waited {min(sleeps)!r} s, below the IDLE_POLL_FLOOR_S "
+        f"floor ({floor_s!r}): with no usable period the frozen tail has to fall back "
+        "to the floor, not to a zero pause"
+    )
+
+
+def test_main_should_report_insufficient_samples_when_the_sequence_freezes_mid_run(
+    latency, tmp_path, capsys
+) -> None:
+    """R30: the same mid-run freeze through ``main()`` -> exit 7, no CSV on disk.
+
+    The CLI half of R30: the operator sees exit ``EXIT_INSUFFICIENT_SAMPLES`` (7)
+    and stderr's "insufficient samples", i.e. the documented wording for a budget
+    that ran out (the capability refusal's wording is section W's business, and it
+    must *not* appear here -- the face is filled).
+
+    The CSV question is answered by what the run actually does, and the answer is
+    "no file at all": ``_run_rtt_mode`` prints the refusal and returns before
+    ``write_csv`` (约 benchmarks/alohamini_io/measure_latency.py:1885-1887), so the
+    three rows collected before the freeze never reach disk -- they are discarded
+    with the run.  That is the same shape as the one-row freeze
+    (``test_main_should_report_insufficient_samples_in_rtt_mode``) and it is
+    asserted, not wished away: "the CSV does not exist" is the observable
+    consequence of the row list being local to the mode function.
+
+    ``--timeout-s 0.05`` at 100 Hz: the run waits ~10 ms per poll, so the budget
+    is over after a handful of polls and the test costs real time only because
+    ``main`` has no injectable clock (the same trade R8/R20 make).
+    """
+    client = _FakeClient(sequences=[1, 2, 3])
+    out = tmp_path / "mid-run-freeze.csv"
+
+    code = latency.main(
+        [
+            "--host",
+            "127.0.0.1",
+            "--mode",
+            "rtt",
+            "--samples",
+            "10",
+            "--rate-hz",
+            "100",
+            "--timeout-s",
+            "0.05",
+            "--csv",
+            str(out),
+        ],
+        client_factory=_Factory(client),
+    )
+    captured = capsys.readouterr()
+
+    assert code == latency.EXIT_INSUFFICIENT_SAMPLES, (
+        f"a sequence that freezes after three growths must exit 7, got {code}; "
+        f"stderr: {captured.err!r}"
+    )
+    assert "insufficient samples" in captured.err.lower(), (
+        f"stderr does not report the sampling budget as the cause: {captured.err!r}"
+    )
+    assert not any(word in captured.err.lower() for word in _CAPABILITY_WORDS), (
+        "a filled timing face plus a frozen sequence is a budget problem, so the "
+        f"capability wording must not appear: {captured.err!r}"
+    )
+    assert not out.exists(), (
+        f"the run wrote {out}: the rows collected before the freeze are counted by the "
+        "refusal (R30) but the mode function returns before write_csv, so no CSV -- not "
+        "even a header-only one -- is the current shape"
+    )
+
+
+class _DuplicateFrameClient(_SpinGuardClient):
+    """``_FakeClient`` whose ``observation_sequence`` grows once every ``1 + m`` frames.
+
+    The honest-host shape: the client polls faster than the host answers, so one
+    growth is followed by ``m`` frames that repeat the sequence number
+    (``m = 0`` is "every frame grows").  ``_FakeClient`` overwrites the sequence on
+    every call, so the patterned value is installed *after* the base call, from the
+    call counter the base keeps (``get_observation_calls`` is already incremented
+    when it returns): call ``n`` reports ``1 + (n - 1) // (1 + m)``, i.e.
+    ``1, 1, 1, 2, 2, 2, ...`` for ``m = 2``, and the very first frame grows
+    (otherwise the run would look like section T's never-filled case).
+
+    Extends ``_SpinGuardClient`` so a loop that stops sleeping under this pattern
+    turns into a ``RuntimeError`` with a call count instead of a hang.
+    """
+
+    def __init__(self, *, duplicates: int, limit: int = 5000) -> None:
+        super().__init__(limit=limit, sequences=[0])
+        self._duplicates = duplicates
+
+    def get_observation(self, include_cameras: bool = True) -> dict:
+        """Answer the frame, then report the duplicate-frame sequence pattern."""
+        state = super().get_observation(include_cameras=include_cameras)
+        self._sequence = 1 + (self.get_observation_calls - 1) // (1 + self._duplicates)
+        return state
+
+
+# id -> duplicates per growth.  ``one_duplicate`` is the shape the fresh frame's
+# absolute deadline already absorbed before the fix (it is kept as a regression
+# guard); ``two_duplicates`` is the shape where the wait was actually paid
+# (``rate_hz / 3`` at 9a9f9d5), which is what the fix had to remove.
+_DUPLICATE_THROTTLE_CASES: dict[str, int] = {
+    "one_duplicate": 1,
+    "two_duplicates": 2,
+}
+
+
+@pytest.mark.parametrize(
+    "case_id", list(_DUPLICATE_THROTTLE_CASES), ids=list(_DUPLICATE_THROTTLE_CASES)
+)
+def test_collect_rtt_samples_should_not_let_duplicate_frames_throttle_the_row_rate(
+    latency, case_id: str
+) -> None:
+    """R31: a host that answers slower than the client polls still runs at the rate.
+
+    A duplicate frame has no sampling instant of its own, and the question is what
+    it waits: charging it a whole period (``now_s + idle_pause_s``, the arithmetic
+    at 9a9f9d5) makes an honest host that answers one growth every ``1 + m`` frames
+    cost ``m`` periods per row, i.e. ``rate_hz / (1 + m)``.  Waiting only until the
+    next row is due (``start_s + len(rows) * period_s``, floored at
+    ``IDLE_POLL_FLOOR_S``) costs one period per *row* and nothing for the
+    duplicates.
+
+    Measured (sleep-driven clock, 20 rows, ``--rate-hz 200``), 9a9f9d5 -> current:
+
+    * ``one_duplicate`` (m = 1): 0.1000 s / 200.0 Hz / **1.00 x** (39 polls, 21
+      pauses) -> 0.0960 s / 208.3 Hz / **1.04 x** (39 polls).  The fresh frame's
+      absolute deadline already absorbed the single duplicate, so this case is the
+      regression guard: a rewrite that polls once per frame, or one that charges a
+      duplicate a full period again, drops it below the bound.
+    * ``two_duplicates`` (m = 2): 0.1950 s / 102.6 Hz / **0.51 x** (58 polls, 39
+      pauses) -> 0.0970 s / 206.2 Hz / **1.03 x** (58 polls).  This is the case
+      that made the defect visible: the loop throttled itself to ``rate_hz / 3``.
+
+    The ratio sits slightly above 1.00 for a *denominator* reason, not a pacing
+    one: this clock is sleep-driven, so a ``get_observation`` costs the run zero
+    simulated time and ``N`` rows span only ``N - 1`` periods -- 20 rows over
+    19 periods is theoretically ``1 / 0.95 = 1.0526``.  The measured 1.03-1.04 is
+    that ceiling minus the overshoot a floored wait leaves per row; a genuinely
+    faster loop is not what the number says.
+
+    Asserted: the run completes (20 rows) and ``len(rows) / clock.now`` is at least
+    ``0.9 * rate_hz``.  The clock is sleep-driven, so ``clock.now`` is exactly the
+    time the loop spent waiting and the ratio is a pacing measurement, not a
+    wall-clock one.  The 10% slack is for a legal implementation that lands a hair
+    under the nominal rate (a floor, an extra poll); one third of the rate is
+    nowhere near it, so the two shapes cannot be confused.  The failure message
+    carries the measured ratio, the duration and the poll count.
+    """
+    duplicates = _DUPLICATE_THROTTLE_CASES[case_id]
+    samples = 20
+    rate_hz = 200.0
+    timeout_s = 60.0
+    clock = _SleepDrivenClock()
+    rows: list[dict[str, Any]] = []
+    client = _DuplicateFrameClient(duplicates=duplicates)
+
+    raised: BaseException | None = None
+    try:
+        latency.collect_rtt_samples(
+            client,
+            samples=samples,
+            rate_hz=rate_hz,
+            timeout_s=timeout_s,
+            sleep=clock.sleep,
+            clock=clock,
+            rows_out=rows,
+        )
+    except Exception as exc:  # the guard's RuntimeError is the interesting failure
+        raised = exc
+
+    calls = client.get_observation_calls
+    elapsed_s = clock.now
+
+    assert raised is None, (
+        f"{duplicates} duplicate frame(s) per growth must not end the run: got "
+        f"{type(raised).__name__}({raised}) after {calls} get_observation calls, "
+        f"{len(rows)} of {samples} row(s), {elapsed_s:.4f} s of simulated wait"
+    )
+    assert len(rows) == samples, f"expected {samples} rows, got {len(rows)}"
+    assert elapsed_s > 0.0, (
+        "the run never slept, so the paced duration is 0 and the achieved rate is "
+        f"undefined ({calls} get_observation calls)"
+    )
+    achieved_hz = len(rows) / elapsed_s
+
+    assert achieved_hz >= 0.9 * rate_hz, (
+        f"with {duplicates} duplicate frame(s) per growth the run achieved "
+        f"{achieved_hz:.1f} Hz, only {achieved_hz / rate_hz:.0%} of --rate-hz "
+        f"{rate_hz:.0f} Hz: {len(rows)} rows took {elapsed_s:.4f} s of simulated wait "
+        f"in {calls} get_observation calls, because every duplicate frame waits a "
+        "whole period (idle_pause_s) instead of pacing the next sampling deadline"
     )
