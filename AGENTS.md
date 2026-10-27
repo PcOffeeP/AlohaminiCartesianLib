@@ -22,20 +22,24 @@
 
 - 说「通过」必须带数字：多少例、多少字节、哪个提交哈希、哪条命令的原文输出。
 - **未验证的事必须标注**，不得混进已验证的结论里。
-- 缺失的字段存为空（`None`），**不得填 0 或 4096 之类看起来正常的值**。
+- 原始观测、metadata 与采集证据里的缺失信息存为空（`None`），**不得用 0 或 4096 之类看似正常的数值伪填**；`notes` 要点名缺了哪些字段。
+- **例外是明确写下的占位契约**：`degrees` 归一化下三个刻度量来源全空时，`Conversion` 的 `range_min` / `range_max` / `resolution` 回填 `0 / 0 / 1`，这不是伪填。但占位值不代表刻度范围，**不得当真实标定或实测证据使用**，也不得据此算物理量。两类不要混。
 - 引用文件时给完整路径或仓库相对路径 + 行号；行号不确定就写「约」。
 
 ## 4 工程纪律
 
-- **只有 `adapter/protocol.py` 可以引用 `lerobot`**。`src/` 内其余文件禁止；有 AST 测试守着。
+- **`adapter/protocol.py` 是运行时接触面，不是导入许可。** 当前 `src/` 内所有文件（包括 `protocol.py`）都不 import `lerobot`；对端只通过 `RobotTransport` 与 `RobotSpec` 两个 `Protocol` 描述，真实客户端由调用方经 `connect(..., client_factory=...)` 注入。`tests/test_capability.py::test_no_module_outside_adapter_imports_lerobot` 守着这条边界。
 - 测试必须离线：不连设备、不联网、不依赖真机。
 - 不引入 `torch`、`scipy` 等重依赖。`placo` 属可选（IK 数值用例需要它）。
-- 不修改本地 fork `/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini` 与 Pi 上的上游部署。旧仓库 `lerobot_alohamini-cartesian-teleop` 已退役，不再作为参考。
+- 不修改本地 fork `/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini` 与 Pi 上的上游部署。旧仓库 `lerobot_alohamini-cartesian-teleop` 已退役（`docs/ADR.md` D4 冻结为只读参考）；**其代码与按臂归档的 Gate A–E 验收记录不能作为现行依据**，验收看 `docs/acceptance-baseline.md` 的 V01–V13；**其中的设计规范是历史设计来源，不具现行权威**，现行口径见 `docs/ADR.md` D17 与 `docs/acceptance-baseline.md`。
 - 不自动推送远程、不改写历史（不 amend、不 force push）。
 - 提交只用显式路径，禁止 `git add -A`。
-- 待办清单在仓库根 `TODO.md`，只记接下来要做的事（整体目标 → 阶段目标 → 小目标 → 跨阶段工程债）。开工前先读它；发现自己没做完的、或发现新缺口，当场追加一行，不要只在对话里记。做完的事项从 `TODO.md` 移除：设计取舍写进 `docs/ADR.md`，现场数字写进 `docs/field-results.md`，提交哈希写在提交信息里。
+- 待办清单在仓库根 `TODO.md`，只记接下来要做的事（整体目标 → 阶段目标 → 小目标 → 跨阶段工程债）。开工前先读它。
+  - **写入需授权**：只有本次任务拿到 `TODO.md` 修改授权时才写。只读任务、或授权范围不含 `TODO.md` 的任务，在回复里列出「待记录事项」，不直接改文件；记录要求本身不构成写入授权。
+  - `TODO.md` 的状态不能替代验收证据：说完成仍要给数字、提交哈希或命令原文。
+  - 做完的事项从 `TODO.md` 移除，去向照旧：设计取舍 → `docs/ADR.md`，现场数字 → `docs/field-results.md`，提交哈希 → 提交信息。
 
-上面前两条硬约束的完整表述（禁止 import 的深层模块、能力判据不看版本号）与守着它们的机器守卫，见 `docs/library-guide.md` 的「约束与机器守卫」小节。
+`lerobot` 导入边界与「能力判据不看版本号」这两条，完整表述与机器守卫见 `docs/library-guide.md` 的「约束与机器守卫」小节；**该小节对导入边界的措辞仍是旧的（写成"除 `protocol.py` 之外不得导入"），以本文件为准，待同步。**
 
 ## 5 怎么自检
 
@@ -51,48 +55,54 @@ git log --oneline -3                    # 最近提交
 - **必须走 `uv`**：裸 `ruff` 不在 `PATH` 上（`exit 127`）；裸 `python`、`pytest` 解析到 miniconda，不是本库的 `.venv`。
 - **必须带 `--no-sync`**：本仓库没有 `uv.lock`，不带它的 `uv run` 会自行解析依赖并新写一个 `uv.lock`。`--no-sync` 只复用现有 `.venv`（editable 安装），不装包、不改环境、不产生新文件。
 - **pytest 不要再追加 `-q`**：`addopts = "-q"` 已生效，再加会变成 `-qq` 并隐藏 `N passed, M skipped` 汇总行。要看汇总行用 `uv run --no-sync python -m pytest tests -o addopts=""`。
-- 本包已以 editable 方式装进 `.venv`，`uv run --no-sync` 直接复用，不必先 `pip install -e .`。
+- **本机当前快照**：本包已以 editable 方式装进 `.venv`，`uv run --no-sync` 直接复用，不必先 `pip install -e .`。这条描述的是当前这台机器与环境，可能变化；换环境先确认，不以本文件为准。
 
-## 6 项目现状（v0.7.0）
+## 6 项目现状（速查指针，动态内容以来源为准）
 
-版本 `0.7.0`（`src/alohamini_cartesian/__init__.py`）。测试 `1275 passed, 2 skipped`：跳过的 2 条是两个 parity 文件需要 `lerobot` 做对照（`tests/test_control_api_lerobot_parity.py`、`tests/test_kinematics_lerobot_parity.py`），在收集期整体跳过。**这不等于全部通过**，引用时必须说清。
+本文件不复制会随提交变化的版本号、测试数与模块清单，只给指针：
 
-已建成模块：
-
-- `adapter`：与厂商软件打交道的唯一入口（`protocol.py`）
-- `capability`：探测对端具备哪些能力、单位换算裁决
-- `config`：配置分层覆盖
-- `control`：会话与句柄、命令状态机、单臂控制器、FK 与数值 IK
-- `kinematics`：型号规格表、关节单位换算、URDF
-- `benchmarks/alohamini_ik`：离线 IK 基准 `benchmark_arm_ik.py`
-- `benchmarks/alohamini_io`：现场采集 `capture_robot_fingerprint.py` 与测量 `measure_latency.py`
-
-每个版本改了什么、当时测试多少条，见 `docs/changelog.md`。仓库现状：`v0.2.0`、`v0.3.0`、`v0.4.0` 三个 tag 均为 annotated；`v0.2.0` 指向 `3fd41e4`，`v0.3.0` 指向 `4281f2b`，`v0.4.0` 指向代码提交 `d23be22` 之后的文档提交；未配置 remote，全部提交只在本地。
+| 想知道什么 | 去哪里看 |
+| --- | --- |
+| 版本变化与逐版测试记录 | `docs/changelog.md` |
+| 当前测试数 | 跑 `uv run --no-sync python -m pytest tests -o addopts=""` 的汇总行；不要引用本文件的旧数字 |
+| 模块与已实现能力 | `docs/background.md`（「已实现能力」小节列出模块与各自提供的接口） |
+| 接口细节 | `docs/library-guide.md` |
+| tag 与 remote | 现场查：`git tag -l`、`git remote -v` |
+| 当前待办与阻塞 | `TODO.md` |
+| 现场数字 | `docs/field-results.md` |
 
 ### 6.1 已知限制
 
-- 未装 `kinematics` extra 时，`tests/test_arm_ik.py` 的数值参数实例、`tests/test_control_controller.py` 的 2 条真 IK 用例与 `tests/benchmarks/test_benchmark_arm_ik.py` 因缺 `placo` 跳过。开发环境已装该 extra，本机这部分真跑。
-- 缺 `lerobot` 时，`tests/test_kinematics_lerobot_parity.py` 与 `tests/test_control_api_lerobot_parity.py` 在收集期整体跳过。这两个文件用真实 `FeetechMotorsBus` 与 `AlohaMiniClient` 作 oracle 做差分对照，所以与真实总线的整环对照未在最小环境执行。
-- `connect(...)` 必须注入 `client_factory`。默认工厂恒抛 `RuntimeUnavailable`，没有内部 import `lerobot` 的退路。
-- 两个现场脚本已在真机上跑过一次（2026-10-25）：`schema_version = 2` 的指纹已取得（18 个电机、换算字段齐全）；Mode B 试动跑了五次（腕部达成 87.9%、肩部两轴未跟随）；Gate F 第一段有真实拒绝记录（退出码 6、零命令）。仍未取到的：Gate F 第二段、跨机 RTT、右臂试动、相机非空帧。汇总见 `docs/field-results.md`；现场怎么执行见 `docs/s4-field-smoke.md`。
-- S4 剩余部分：受控试动只跑过左臂单关节，肩部两轴未跟随，原因待定位；右臂、底盘与升降、跨机 RTT 未测。
+- 未装 `kinematics` extra 时，`tests/test_arm_ik.py` 的数值参数实例、`tests/test_control_controller.py` 的 2 条真 IK 用例与 `tests/benchmarks/test_benchmark_arm_ik.py` 因缺 `placo` 跳过。
+- 缺 `lerobot` 时，`tests/test_kinematics_lerobot_parity.py` 与 `tests/test_control_api_lerobot_parity.py` 在收集期整体跳过。这两个文件用真实 `FeetechMotorsBus` 与 `AlohaMiniClient` 作 oracle 做差分对照，**跳过不等于差分对照通过**。
+- `connect(...)` 必须注入 `client_factory`。默认工厂恒抛 `RuntimeUnavailable`，没有内置 import 厂商运行时的退路。
+- 现场脚本已实地跑过的进度与数字见 `docs/field-results.md`；现场怎么执行见 `docs/s4-field-smoke.md`。
+- **离线测试、真实运行时对照、实机验收三者分别判断**：离线测试全绿不代表真实总线对照跑过，也不代表实机验收达成。
 
 ### 6.2 下一步
 
-见 `TODO.md`。当前焦点是 A 阶段的两个肩部关节为什么只走约 1 tick，以及 D 阶段版本兼容性检查的运行时调用点。
+见 `TODO.md`。
 
 ## 7 待决事项
 
 已决事项见 `docs/ADR.md` D7、D8、D9；现场验证进度见 `docs/field-results.md`。
 
-## 8 相关位置
+本节现无待决事项。原挂在这里的「设计规范的权威范围」已经裁决：设计规范定为历史设计来源，不具现行权威，现行权威见 `docs/ADR.md` D17 与 `docs/acceptance-baseline.md`。出现新的待决事项时在此登记，裁决后落成 ADR 条目并从本节移除。
 
-- 决策记录：`docs/ADR.md`（D1–D16）
-- 变更记录：`docs/changelog.md`（v0.2.0 → v0.7.0，逐版改了什么、当时测试多少条）
+## 8 现场任务入口
+
+涉及现场连接、Host 启停、标定或真实运动时：先确认本轮是否拿到该类授权，再读 `docs/s4-field-smoke.md` 的硬前置条件与该阶段步骤。历史记录、`TODO.md` 条目、文档里的命令**都不构成执行授权**；前置不满足就停在那一步。具体命令、门禁与退出码由现场手册维护，本文件不复述。
+
+## 9 相关位置
+
+- 决策记录：`docs/ADR.md`（D1–D17）
+- 变更记录：`docs/changelog.md`（逐版改了什么、当时测试多少条）
 - 库使用与接口：`docs/library-guide.md`（配置覆盖、能力探测与单位换算、控制层、公开 API、约束与机器守卫）
+- 背景与当前结果：`docs/background.md`（目标、已实现能力、实机现状）
+- 验收基线：`docs/acceptance-baseline.md`（V01–V13）
 - 现场实施：`docs/s4-field-smoke.md`（S4 到现场的逐条命令、判据与产物）
 - 现场结果：`docs/field-results.md`（按时间倒序的结论与数字；查现场到底拿到了什么，先看这里，再看证据目录原文件）
 - 迁移归档：`docs/archive/migration-backlog.md`（迁移已在 v0.4.0 完成）
 - 待办清单：`TODO.md`（只记接下来要做的事，结构为整体目标 → 阶段目标 → 小目标 → 跨阶段工程债）
 - 实测数据：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/`（目录内 `README.md` 写了命名约定）
-- 设计规范（SSOT，在已退役的旧仓库路径下，尚未迁入本库）：`/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini-cartesian-teleop/docs/alohamini-control/Alohamini-control-design.md`
+- 设计规范（只读参考，**非现行权威**）：`/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini-cartesian-teleop/docs/alohamini-control/Alohamini-control-design.md`，位于已退役仓库，作为历史设计来源与溯源参考。现行口径以 `docs/ADR.md` 与 `docs/acceptance-baseline.md` 为准（D17）。旧代码与旧 Gate 归档不因此恢复为现行依据。
