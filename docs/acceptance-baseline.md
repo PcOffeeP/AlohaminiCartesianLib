@@ -57,7 +57,7 @@
 
 V11 仍是「部分」，缺口已由 `docs/ADR.md` D15 收口——帧平滑回退不做，软件侧判据为「v1 能解析 + 换算可回落 + 缺字段填 `None` 并点名」，三款均有用例锁定；仍算「部分」的原因是**实机侧未取**：本库没有对 v1 宿主跑过整环，Pi 升级后只广播 schema 2，这条只能靠离线用例覆盖。
 
-软件侧整体快照：`uv run --no-sync python -m pytest tests` 报 `1201 passed, 2 skipped`。跳过的 2 条是两个 `lerobot` parity 文件（`tests/test_control_api_lerobot_parity.py`、`tests/test_kinematics_lerobot_parity.py`），原因是本机没装 `lerobot`。这 2 条跳过不等于全部通过。
+软件侧整体快照：`uv run --no-sync python -m pytest tests` 报 `1275 passed, 2 skipped`。跳过的 2 条是两个 `lerobot` parity 文件（`tests/test_control_api_lerobot_parity.py`、`tests/test_kinematics_lerobot_parity.py`），原因是本机没装 `lerobot`。这 2 条跳过不等于全部通过。
 
 实机侧已取的三条中 V12 已全实，V01、V10 仍只是部分：
 
