@@ -383,13 +383,13 @@ run 1.3-rtt-deploy uv run --no-sync python benchmarks/alohamini_io/measure_laten
 
 跨机 RTT 指从 PC 到 Pi 走真实网段的往返时延（白话：一个请求发出去到响应回来，在路上花掉的时间）。现有两份 rtt CSV 都是 Pi 本机回环（`host=127.0.0.1`），量不到这一段，缺口见第 13 节。要跑跨机那一次，解释器里必须有 vendor 客户端 `lerobot.robots.alohamini.alohamini_client.AlohaMiniClient`；而本库主环境不含 `lerobot` —— `adapter/protocol.py` 是全库唯一允许 import `lerobot` 的地方（AGENTS.md §4），主环境还要按 ADR D8 保持 numpy 2.3.x。`benchmarks/alohamini_io/measure_latency.py` 的 `default_client_factory()`（`:1123`，惰性 `import` 在 `:1129`–`:1130`）在运行期才 import 该客户端，所以 `--help` 与单元测试都不需要它，真正跑 `--mode rtt` 才需要。
 
-做法：在仓库外另建一个隔离环境，装厂商客户端的冻结快照，主环境不动。2026-10-25 实测结论：环境建好、4 条 import / 版本检查与 1 条 `--help` 均通过、主环境未污染；**仍未做任何 `connect()`**，真实跨机 RTT 仍未测。
+做法：在仓库内 `.venvs/` 下另建一个隔离环境（`.venvs/` 已加进 `.gitignore`），装厂商客户端的冻结快照，主环境不动。2026-10-25 实测结论：环境建好、4 条 import / 版本检查与 1 条 `--help` 均通过、主环境未污染；**仍未做任何 `connect()`**，真实跨机 RTT 仍未测。
 
 **环境事实**
 
 | 项 | 值 |
 | --- | --- |
-| 环境路径 | `/Users/pcoffeep/.venvs/alohamini-lerobot`（仓库外，不进 `git status`） |
+| 环境路径 | `/Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot`（仓库内 `.venvs/` 下，已被 `.gitignore` 的 `.venvs/` 规则忽略，不进 `git status`） |
 | 解释器 | `Python 3.13.13`（`pyvenv.cfg` 的 `home = /opt/miniconda3/bin`） |
 | 与系统 site-packages 隔离 | `include-system-site-packages = false` |
 | `lerobot` 版本 | `0.6.1`（厂商本地副本 `pyproject.toml` 的 `version`；同一文件写 `requires-python = ">=3.12"`） |
@@ -397,7 +397,7 @@ run 1.3-rtt-deploy uv run --no-sync python benchmarks/alohamini_io/measure_laten
 | 整目录体积 | `du -sh` = 881M |
 | numpy | `2.2.6`。`lerobot` 核心依赖钉 `numpy>=2.0.0,<2.3.0`，隔离环境解析到 2.2.6；主环境是 2.3.5，两者 site-packages 完全隔离 |
 | 额外补装 | `pyzmq 27.2.0`（`site-packages/zmq` 6.1M），原因见下面安装第 3 步 |
-| 安装形态 | 非 editable：从 `/tmp/lerobot-src-probe` 的源码快照构建 wheel 后安装 |
+| 安装形态 | 非 editable：从 `/tmp/lerobot-src-probe` 源码快照构建出的 `/tmp/lerobot-wheel/lerobot-0.6.1-py3-none-any.whl` 安装；也可按下文第 2 步从源码快照现构建 |
 
 **下载体积实测**（`pip download` 落盘后按字节统计，不是估值）
 
@@ -412,16 +412,18 @@ run 1.3-rtt-deploy uv run --no-sync python benchmarks/alohamini_io/measure_laten
 **安装命令原文**（分步）
 
 ```bash
-# 1) 建环境（仓库外，Python >= 3.12）
-python3 -m venv /Users/pcoffeep/.venvs/alohamini-lerobot
+# 1) 建环境（仓库内 `.venvs/`，已被 `.gitignore` 忽略，Python >= 3.12）
+python3 -m venv /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot
 # 2) 从厂商本地副本的 /tmp 快照装，绝不 pip install -e 厂商仓库本体
 #    （否则 .egg-info 会落到 /Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini 里）
 rsync -a --exclude='.git' --exclude='.venv' --exclude='*.egg-info' \
   /Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini/ /tmp/lerobot-src-probe/
-/Users/pcoffeep/.venvs/alohamini-lerobot/bin/pip install --find-links /tmp/lerobot-wheels /tmp/lerobot-src-probe
+/Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/pip install --find-links /tmp/lerobot-wheels /tmp/lerobot-src-probe
 # 3) 唯一需要补的包：lerobot 只把 pyzmq 列为可选 extra，而 alohamini 客户端 __init__ 里 import zmq
-/Users/pcoffeep/.venvs/alohamini-lerobot/bin/pip install "pyzmq>=26.2.1,<28.0.0"
+/Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/pip install "pyzmq>=26.2.1,<28.0.0"
 ```
+
+本次（2026 环境迁移重建）实际执行的是纯离线预构建 wheel 安装：`.../bin/pip install --no-index --find-links /tmp/lerobot-wheel --find-links /tmp/lerobot-wheels lerobot==0.6.1`，退出码 `0`，43 个包全部来自缓存。`pyzmq` 那一步由 pip 本地 HTTP 缓存命中（`Using cached pyzmq-27.2.0-cp312-abi3-macosx_10_15_universal2.whl`），无下载行。
 
 第 2 步的依赖走本地 `--find-links` 与 pip 缓存：主安装输出里 `grep -c '^Downloading'` = 0。第 3 步是这套环境**唯一**联网的一步：`lerobot` 把 `pyzmq` 只列在可选 extra 里（`pyzmq-dep = ["pyzmq>=26.2.1,<28.0.0"]`），核心依赖不含，而 `alohamini_client.py` 在 `__init__` 里惰性 `import zmq`。
 
@@ -429,11 +431,11 @@ rsync -a --exclude='.git' --exclude='.venv' --exclude='*.egg-info' \
 
 | 检查 | 命令 | 实测输出 |
 | --- | --- | --- |
-| 版本 | `/Users/pcoffeep/.venvs/alohamini-lerobot/bin/python -c "import lerobot; print(lerobot.__version__)"` | `0.6.1` |
-| 版本区间 | `/Users/pcoffeep/.venvs/alohamini-lerobot/bin/python -c "from importlib.metadata import version; from packaging.specifiers import SpecifierSet; v = version('lerobot'); print('version', v); print('in range', SpecifierSet('>=0.6.1,<0.7').contains(v))"` | `version 0.6.1`、`in range True` |
-| 目标接口 | `/Users/pcoffeep/.venvs/alohamini-lerobot/bin/python -c "from lerobot.robots.alohamini.alohamini_client import AlohaMiniClient; from lerobot.robots.alohamini.config_alohamini import AlohaMiniClientConfig; print('client import ok', AlohaMiniClient, AlohaMiniClientConfig)"` | `client import ok <class 'lerobot.robots.alohamini.alohamini_client.AlohaMiniClient'> <class 'lerobot.robots.alohamini.config_alohamini.AlohaMiniClientConfig'>` |
-| 第三方面 | `/Users/pcoffeep/.venvs/alohamini-lerobot/bin/python -c "import zmq, cv2, numpy; print('zmq', zmq.__version__, 'cv2', cv2.__version__, 'numpy', numpy.__version__)"` | `zmq 27.2.0 cv2 4.13.0 numpy 2.2.6` |
-| CLI | 仓库根下 `/Users/pcoffeep/.venvs/alohamini-lerobot/bin/python benchmarks/alohamini_io/measure_latency.py --help` | exit `0`，459 行 usage |
+| 版本 | `/Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python -c "import lerobot; print(lerobot.__version__)"` | `0.6.1` |
+| 版本区间 | `/Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python -c "from importlib.metadata import version; from packaging.specifiers import SpecifierSet; v = version('lerobot'); print('version', v); print('in range', SpecifierSet('>=0.6.1,<0.7').contains(v))"` | `version 0.6.1`、`in range True` |
+| 目标接口 | `/Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python -c "from lerobot.robots.alohamini.alohamini_client import AlohaMiniClient; from lerobot.robots.alohamini.config_alohamini import AlohaMiniClientConfig; print('client import ok', AlohaMiniClient, AlohaMiniClientConfig)"` | `client import ok <class 'lerobot.robots.alohamini.alohamini_client.AlohaMiniClient'> <class 'lerobot.robots.alohamini.config_alohamini.AlohaMiniClientConfig'>` |
+| 第三方面 | `/Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python -c "import zmq, cv2, numpy; print('zmq', zmq.__version__, 'cv2', cv2.__version__, 'numpy', numpy.__version__)"` | `zmq 27.2.0 cv2 4.13.0 numpy 2.2.6` |
+| CLI | 仓库根下 `/Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python benchmarks/alohamini_io/measure_latency.py --help` | exit `0`，459 行 usage |
 
 **主环境未污染，厂商仓库未被写入**（装前与装后各取一次，同一台 Mac）
 
@@ -451,19 +453,19 @@ rsync -a --exclude='.git' --exclude='.venv' --exclude='*.egg-info' \
 
 ```bash
 # 零运动 RTT 形态：请求 1000 Hz、窗口 1（与 Pi 本机那两次同口径，才可比）
-/Users/pcoffeep/.venvs/alohamini-lerobot/bin/python benchmarks/alohamini_io/measure_latency.py \
+/Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python benchmarks/alohamini_io/measure_latency.py \
   --host "$PI_HOST" --mode rtt --rate-hz 1000 --request-window 1 --samples 500 \
   --csv "$S4DIR/rtt/rtt-net-$STAMP.csv"
 ```
 
-这条命令与本节 1.2 的 `1.2-rtt-net` 的唯一差别是解释器：把 `uv run --no-sync python` 换成 `/Users/pcoffeep/.venvs/alohamini-lerobot/bin/python`，因为主环境没有 `lerobot`。参数口径（`--mode rtt`、`--rate-hz 1000`、`--request-window 1`、`--samples 500`）必须与本机回环那两次一致，否则两组数字不可比。要按第 3 节留痕，把整条命令套进 `run` 即可（本文未给这一步编号）。`--csv` 名字与 1.2 相同：同一次会话里两条都跑会互相覆盖，跨机这一条要单独留存就先在独立的 `$STAMP` 会话里跑。
+这条命令与本节 1.2 的 `1.2-rtt-net` 的唯一差别是解释器：把 `uv run --no-sync python` 换成 `/Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python`，因为主环境没有 `lerobot`。参数口径（`--mode rtt`、`--rate-hz 1000`、`--request-window 1`、`--samples 500`）必须与本机回环那两次一致，否则两组数字不可比。要按第 3 节留痕，把整条命令套进 `run` 即可（本文未给这一步编号）。`--csv` 名字与 1.2 相同：同一次会话里两条都跑会互相覆盖，跨机这一条要单独留存就先在独立的 `$STAMP` 会话里跑。
 
 判据：`exit 0` 且 CSV 有数据行。返回 `9` 或 `3` 的处置与 1.2 相同，见本节 1.2 的判据段与第 12 节。
 
 **已知限制**（逐条，不要合并读）
 
 1. 这套环境是**冻结快照**：装的是构建出的 wheel，厂商仓库后续改动不会反映进来，要更新得重装。
-2. 装进去的是 `/tmp/lerobot-src-probe`（厂商工作树的 rsync 快照），而厂商工作树当时有 6 个未提交改动 —— 所以这个环境里的 `AlohaMiniClientConfig` 反映的是工作树状态，不是某个提交。
+2. 装进去的是 `/tmp/lerobot-src-probe`（厂商工作树的 rsync 快照；本次重建用的是由该快照构建的 `/tmp/lerobot-wheel/lerobot-0.6.1-py3-none-any.whl`，同源，结论不变），而厂商工作树当时有 6 个未提交改动 —— 所以这个环境里的 `AlohaMiniClientConfig` 反映的是工作树状态，不是某个提交。
 3. 只能在 PC 侧（macOS arm64）跑。Pi 是 Linux aarch64，需要另一套 wheel，这个环境整体不可搬移。
 4. 只验到 import 与 `--help`，**未做任何 `connect()`**。真实跨机 RTT 仍未测，第 13 节那条缺口不因本节而关闭。
 5. 第 3 步的 `pyzmq` 来自 PyPI（唯一联网步骤）。要完全离线复现，需先把 pyzmq wheel 补进 `/tmp/lerobot-wheels`。
