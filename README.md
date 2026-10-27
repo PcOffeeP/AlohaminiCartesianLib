@@ -264,7 +264,7 @@ alohamini-cartesian-lib/
 ├── benchmarks/alohamini_ik/benchmark_arm_ik.py           # FK 与数值 IK 基准脚本
 ├── benchmarks/alohamini_io/capture_robot_fingerprint.py  # 现场采集对端 metadata 指纹，lerobot 惰性 import
 ├── benchmarks/alohamini_io/measure_latency.py            # 现场测时延，Mode B tracking 会真动机器人
-├── docs/ADR.md                       # D1–D14 决策记录
+├── docs/ADR.md                       # D1–D15 决策记录
 ├── docs/acceptance-baseline.md       # V01–V13 准入基线：软件证据、实机证据与判据
 ├── docs/field-results.md             # 现场验证结果台账：按时间倒序的结论与数字
 ├── docs/s4-field-smoke.md            # S4 现场实施：命令、判据、产物、退出码
