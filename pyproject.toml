@@ -15,7 +15,13 @@ dependencies = ["numpy>=1.26"]
 # lerobot 目前不在 PyPI 上发布（上游只提供 git 仓库安装方式）。
 # 使用 runtime extra 之前，请先按 lerobot 上游 README 把 lerobot 装进同一个环境，
 # 例如从上游仓库以 editable 方式安装；本文件不声明可解析的 lerobot 分发地址。
-runtime = ["lerobot"]
+#
+# 版本区间的依据（取舍见 docs/ADR.md D16）：下限 0.6.1 取自厂商 fork pyproject.toml 的
+# `version = "0.6.1"`（上游提交 8a74e0ac「chore(dependencies): Bump lerobot to 0.6.1
+# (#3957)」引入；Pi 现场 HEAD ec65318f 同属这条版本线）；上限 <0.7 的依据是上游未承诺
+# 语义化版本（classifier 仍为 Development Status :: 3 - Alpha），跨 minor 有破坏性变更
+# 先例，故跨 minor 一律未验证、不声明支持。
+runtime = ["lerobot>=0.6.1,<0.7"]
 yaml = ["PyYAML>=6.0"]
 # 需要跑依赖 placo 的数值 IK 用例（tests/test_arm_ik.py、tests/benchmarks/）
 # 与离线基准（benchmarks/alohamini_ik）时安装本 extra。

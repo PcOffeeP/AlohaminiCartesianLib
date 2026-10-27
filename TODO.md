@@ -19,7 +19,7 @@
 | A 单臂受控试动跑通 | 左臂六关节在 PC 侧命令下稳定跟随 | 每关节达成率不低于 50%，且该步 `settled=True` | 进行中：`wrist_roll` 87.9% 达标；`shoulder_pan`、`shoulder_lift` 未达标；其余三轴未测 |
 | B 双臂受控试动 | 右臂复制 A 的结论，并验证对侧无串值 | V02 实机证据填实 | 未开始：前置是 A 收口 |
 | C 整机协同验收 | 臂 / 底盘 / 升降分阶段互锁与协同 | V03、V07 实机证据填实 | 未开始 |
-| D 库可交付 | 别人拿到库能跑通示例、配置、依赖声明明确 | 示例可跑、两份 YAML 读通、`lerobot` 依赖声明落地 | 进行中：示例与两份 YAML 已跑通，依赖声明形式待定 |
+| D 库可交付 | 别人拿到库能跑通示例、配置、依赖声明明确 | 示例可跑、两份 YAML 读通、`lerobot` 依赖声明落地 | 进行中：示例与两份 YAML 已跑通；依赖声明已落地为 `lerobot>=0.6.1,<0.7`（取舍见 `docs/ADR.md` D16，检查模块 `adapter/lerobot_version.py`） |
 
 ## 3 小目标
 
@@ -47,7 +47,8 @@
 
 | 目标 | 判据 | 影响 | 阻塞 |
 | --- | --- | --- | --- |
-| 为 `lerobot` 的接口依赖留下可判据的声明 | 声明形式定下并写入 `pyproject.toml` 或 ADR，使接口不匹配能在安装期或测试期暴露 | D 阶段完成判据；两个 parity 文件的跳过状态；`benchmarks/alohamini_io` 两脚本对 vendor 的兼容判据 | 形式待定：`pyproject.toml` 现在只写名字、不写版本（ADR D1 有意如此），测试夹具同时 mock 两个属性，接口不兼容在测试期发现不了 |
+| 决定版本兼容性检查的运行时调用点 | 决定是否在 `connect` / 适配层入口前调用 `assert_lerobot_version_supported()`，结论写进 `docs/ADR.md` 或直接落地并补测试 | D 阶段完成判据（「接口不匹配能暴露」目前只在测试期成立）；ADR D16 已知代价第三条 | 无调用点：`src/` 内没有人 import `adapter/lerobot_version.py`，只有 `tests/test_lerobot_version.py` 直接调用 |
+| 在下次现场采集中记录 lerobot 软件版本 | 下次现场采集把 `importlib.metadata.version("lerobot")` 或源码树 `pyproject.toml` 的 `version` 写进指纹 JSON | D 阶段完成判据（版本结论的可复核性）；ADR D16 依据段与已知代价第一条 | 现有指纹 JSON（`evidence/s4-20261025/capture/fingerprint-final-20261025.json`）无该字段，0.6.1 是从源码树推断的，不是采到的 |
 
 ## 4 跨阶段的工程债
 

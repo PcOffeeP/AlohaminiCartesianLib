@@ -1,6 +1,6 @@
 # 架构决策记录（ADR）
 
-本文记录 `alohamini-cartesian` 自 v0.1.0 起沿用的决策，编号 D1–D15。每条按背景、决定、后果三段记录，后果同时写正面收益与已知代价。状态写作「已接受（自 vX.Y.Z 起）」，不记具体日期。新的重大取舍按顺序追加编号，已接受的条目不回改。
+本文记录 `alohamini-cartesian` 自 v0.1.0 起沿用的决策，编号 D1–D16。每条按背景、决定、后果三段记录，后果同时写正面收益与已知代价。状态写作「已接受（自 vX.Y.Z 起）」，不记具体日期。新的重大取舍按顺序追加编号，已接受的条目不回改。
 
 ## 索引
 
@@ -21,6 +21,7 @@
 | D13 | 离线基准的预算判据抽成纯函数 `within_budget()`，测试不再对真实墙钟断言 | 已接受（自 v0.7.0 起） |
 | D14 | 左夹爪标定暂不重做：按现有标定值继续，先定性再修 | 已接受（自 v0.7.0 起） |
 | D15 | V11 的「帧平滑回退」不做：v1 兼容范围界定为「能解析 + 能换算可落」 | 已接受（自 v0.7.0 起） |
+| D16 | lerobot 依赖声明加版本区间：只支持 `lerobot>=0.6.1,<0.7` | 已接受（自 v0.7.0 起） |
 
 ## D1 依赖形态：独立包，lerobot 作为可选 extra
 
@@ -444,3 +445,46 @@ v1 帧真正拿到的兼容是两件事。一是 schema 1 的 metadata 能被收
 触发重新评估的条件（达成任一条即重新评估）：① 出现需要平滑的真实需求，例如观测抖动导致控制不稳，且有现场记录能证明抖动幅度与频率；② 对端给出明确以版本号区分的平滑契约。届时先定平滑对象（观测帧 / 命令序列 / 换算结果），再落实现与测试，不凭旧术语开工。
 
 相关提交：本轮文档提交（无代码提交）。
+
+## D16 lerobot 依赖声明加版本区间：只支持 `lerobot>=0.6.1,<0.7`
+
+状态：已接受（自 v0.7.0 起）
+
+### 背景
+
+D1 把 `lerobot` 放在 optional extra `runtime` 里，并且有意只写名字、不写版本：上游不在 PyPI 发布，`pip install .[runtime]` 本来也解析不到分发地址。这条决定留下一个缺口——「只声明名字」等于「装哪一版都算合法」。接口不匹配要到运行时才暴露；两个 parity 文件（`tests/test_control_api_lerobot_parity.py`、`tests/test_kinematics_lerobot_parity.py`）需要 `lerobot` 才能跑，在当前环境里始终跳过，也起不到约束作用。
+
+依据：下限 `0.6.1` 取自厂商 fork 的 `pyproject.toml` 里 `version = "0.6.1"`（由上游提交 `8a74e0ac`「chore(dependencies): Bump lerobot to 0.6.1 (#3957)」引入），并且这正是 Pi 现场运行的版本线（`/home/pi5/lerobot_alohamini` HEAD `ec65318f`）。上限 `<0.7` 取自上游没有「不破坏兼容」的承诺：项目 classifier 仍为 `Development Status :: 3 - Alpha`，历史上 0.3→0.6 出现过接口重构，跨 minor 一律未验证。
+
+### 决定
+
+`pyproject.toml` 的 `runtime` extra 从 `["lerobot"]` 改成 `["lerobot>=0.6.1,<0.7"]`，约束落在 extra 上；核心 `dependencies` 仍不含 `lerobot`，D1 的「核心零第三方包可导入」不变。原句「`lerobot` 不在 PyPI 发布、需按上游 README 自行安装」保留，版本区间只额外限定范围、不改变安装方式。
+
+新增模块 `src/alohamini_cartesian/adapter/lerobot_version.py`，提供三个公开函数与四个常量，只用标准库（其中 `check_lerobot_version` 是纯函数，`installed_lerobot_version` 读包元数据、有 I/O，`assert_lerobot_version_supported` 是入口）：
+
+- `check_lerobot_version` 校验一个版本串，区间内返回去掉首尾空白的写法。
+- `installed_lerobot_version` 读环境里的版本，只调 `importlib.metadata.version("lerobot")`，不 import `lerobot`（导入本模块不会把 `lerobot` 拉进 `sys.modules`）。metadata 用属性访问方式调用，测试才能打桩。
+- `assert_lerobot_version_supported` 是入口：不传参读 metadata，传了显式版本就不再碰 metadata。
+
+区间判定按**整数段**比较，不按字符串比：`0.6.10 > 0.6.9` 是整数段比较的结果；判别力最强的是 `0.60.0`——字符串比较下 `"60" > "6"`（不被下限拦）且 `"60" < "7"`（不被上限拦），会被错误接受，整数段比较下 `60 > 7`，正确判拒。`0.10.0` 作为越界回归项保留，但它不具判别力：字符串比较下会先撞下限（`"10" < "6"`），同样判拒。预发布日期**排序**按 PEP 440 纯序（`a` < `b` < `rc` < 同号正式版）；**成员判定**则比 PEP 440 的 `<` 更严：上界连同它的预发布一律判拒，`0.7.0rc1` / `0.7.0a1` / `0.7.0b2` / `0.7rc1` / `0.7a1` 都不通过，不因为排序上 `0.7.0rc1 < 0.7` 就放行——声明窗口 `<0.7` 在 PEP 440 下排除它们（`packaging.SpecifierSet(">=0.6.1,<0.7").contains("0.7.0rc1")` 为 `False`；上述实测取自 packaging 26.3，`<V` 不接纳 V 自身预发布的结论由 PEP 440 规则给出、与 packaging 版本无关），检查不得比声明宽松。下界一侧不受这条收紧影响：只接纳同号正式版及其以上的预发布（`0.6.1rc1` 判拒、`0.6.9rc1` / `0.6.9a1` 通过）。
+
+接受的写法只有 `X.Y` / `X.Y.Z` + 可选 `aN` / `bN` / `rcN`（小写）；数字段必须是 ASCII 十进制、无前导零（`0` 本身合法）、每段至多 9 位，`0.6.01`、`0.06.1`、`00.006.0001`、`٠.٦.١`（阿拉伯-印度数字）、`０.６.１`（全角数字）与几千位的数字段一律 `InvalidVersionString`。长度检查写在正则里、先于整数转换，所以 5000 位的数字段不会漏成 `int()` 的裸 `ValueError`（`Exceeds the limit (4300 digits)`）。其余（`v0.6.1`、`0.6.x`、`0.6.1.post1`、`0.6.1.dev2`、`0.6.1+local`、`0.6.1.2`、`0.6.1rc`、空串、`latest`）同样判非法。
+
+本条取代 D1 与 D6 正文中 `runtime = ["lerobot"]` 的字样（D1、D6 原文按「已接受的条目不回改」保留不动）。
+
+三种失败各有专门异常，都不静默降级、不返回默认值：无法解析抛 `InvalidVersionString`（`ValueError` 子类），越界抛 `LerobotVersionUnsupported`（`RuntimeError` 子类），缺包抛它的子类 `LerobotNotInstalled`，因此缺包也能被 `LerobotVersionUnsupported` 一并捕获。越界消息带出实测版本与要求区间（`>=0.6.1` 与 `<0.7`）；缺包消息只有要求区间（缺包时没有版本可取）与安装指引；非法版本串的消息带出输入原文。非 `str` 入参（`None`、`6.1`、`bytes`、`list`）也走 `InvalidVersionString` 并带 `repr`，不漏成 `AttributeError` / `TypeError`；`assert_lerobot_version_supported(None)` 的 `None` 是「读 metadata」语义，不受此条影响。
+
+### 后果
+
+正面：接口依赖从「只有名字」变成「有区间、有判据」。`tests/test_lerobot_version.py` 同时钉住常量取值、`pyproject.toml` 的 `runtime` extra 与 ADR 里那条 requirement：前两处是结构化断言，改写与删除都会红；ADR 那条只是子串存在性检查（`lerobot>=0.6.1,<0.7` 是否出现），能挡改写与删除，挡不住「D16 之外另加一条相反表述」，防漂移的最后一环仍靠人读。检查全程离线、不需要装 `lerobot`，也不会因为检查而把机器人运行时载入进程。三条失败路径都是显式异常，调用方不会拿到一个假版本号继续往下跑。
+
+已知代价：
+
+1. 现场指纹 JSON（`evidence/s4-20261025/capture/fingerprint-final-20261025.json`）里没有软件版本字段。所以「Pi 上跑的是 0.6.1」是从源码树 `pyproject.toml` 推出来的结论，**不是采集到的字段**，也没有现场校验记录。
+2. 区间内的未来 patch（如 0.6.9）仍可能改接口，区间约束挡不住 patch 级的不兼容。
+3. 检查函数目前没有被任何运行时入口调用：`connect` 之前没有自动校验，只有测试直接调用它，所以「装了不兼容版本」现在不会在装配期被拦下。
+4. 本库声明的 `numpy>=1.26` 与 `lerobot` 要求的 `numpy>=2.0,<2.3` 不同，开发环境因此不装 `lerobot`，端到端只有 mock 层证据：`importlib.metadata.version` 被打桩，真实 vendor 环境的版本串形态未验证。
+
+触发重新评估的条件（达成任一条即重新评估）：① Pi 现场换到 0.7 及以上，或厂商 fork 的 `version` 越过 0.6.x；② 出现需要跨 minor 的接口变化并有现场需求；③ 现场采集到真实的 `lerobot` 软件版本字段，与本文推断不符。
+
+相关提交：本轮提交（新增 `src/alohamini_cartesian/adapter/lerobot_version.py`，改 `pyproject.toml` 的 `runtime` extra 与本条目）。
