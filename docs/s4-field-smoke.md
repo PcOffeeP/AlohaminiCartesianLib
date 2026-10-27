@@ -890,6 +890,37 @@ payload 的 10 个顶层键与 `schema_version = 1` 不变；缺能力不改变 
 
 另一条相关事实：`pyproject.toml` 对 `lerobot` 只声明名字、不声明版本或提交（ADR D1 有意如此），因此没有机制能在安装期拦住这类接口不匹配；两个脚本的测试夹具同时设了 `latest_request_timing` 与 `latest_host_timing`，单元测试也发现不了——这个缺口是靠真机跑出来的。
 
+### 左夹爪标定行程只有 51 tick（离线推算发现，待现场只读确认）
+
+离线核对（见 `docs/field-results.md`「离线核对（无新采集）· 左右夹爪行程差异」）发现：`arm_left_gripper` 的 `range` 是 2021-2072，只有 51 tick（`range_0_100` 下 4.48°），而 `arm_right_gripper` 是 2010-3479，1469 tick（129.14°）。两侧同为 `sts3250`、`drive_mode` 同为 0。根因未确认。
+
+下次现场用**只读**方式确认三件事，不动机器人、不发位置指令：
+
+1. 左夹爪 ID7 的固件限位是否已被写成 2021 / 2072。参照 `stdout/reg_read_1792923639.py` 的写法，在 `MOTORS` 里给左臂总线加上夹爪，其余不动：
+
+   ```python
+   PORT = "/dev/am_arm_follower_left"
+   MOTORS = {
+       "shoulder_pan": Motor(1, "sts3250", MotorNormMode.RANGE_M100_100),
+       "shoulder_lift": Motor(2, "sts3095", MotorNormMode.RANGE_M100_100),
+       "elbow_flex": Motor(3, "sts3095", MotorNormMode.RANGE_M100_100),
+       "wrist_roll": Motor(6, "sts3250", MotorNormMode.RANGE_M100_100),
+       "gripper": Motor(7, "sts3250", MotorNormMode.RANGE_0_100),  # 新增
+   }
+   ```
+
+   要看的寄存器：`Min_Position_Limit`、`Max_Position_Limit`、`Present_Position`、`Goal_Position`、`Homing_Offset`、`Torque_Enable`、`Operating_Mode`、`Model_Number`、`Status`。
+
+   判读：`Min/Max_Position_Limit` 等于 2021/2072 → 固件限位已生效，左夹爪被锁在 51 tick 内，问题在标定值而非传递；读出别的值 → 问题在写盘或写盘之后的覆盖。
+
+2. 右夹爪 ID7 用同一脚本、换 `PORT = "/dev/am_arm_follower_right"` 与右臂电机表读一遍，作为同型对照（也顺便补上本轮 `reg_read` 没覆盖的 ID4/5/7）。
+
+3. 断电前后各读一次 `Min_Position_Limit` / `Max_Position_Limit`，确认这两个值跨断电保持（本轮已知 18 电机 × 8 字段跨换电池 0 差异，但那是 metadata 侧，不是寄存器侧）。
+
+**以下一条不是只读，需另行授权后再做**：把扭矩关掉（`disable_torque`）、用手慢慢开合左夹爪，同时流式读 `Present_Position`，看读数变化范围。这一步会改 `Torque_Enable`/`Lock`（厂商 `feetech.py:293`、`:304` 写 `{0,0}` 与 `{1,1}`），而本轮已知当前状态是 `{1, 0}`（写入者未识别），贸然改会破坏「扭矩处于开启态」这条现场事实的可追溯性。要做的话先记录改前读数、改后立刻复原并记录。
+
+采样要求：三件事都要落 `stdout/` 日志与 `.cmd` 文件，按第 3 节 `run` 包装函数的约定命名，退出码与命令原文一起存。
+
 ## 14 待裁决事项
 
 无。原「证据目录是否长期固定」一条已定：维持外部目录，见 `AGENTS.md` 第 8 节。
