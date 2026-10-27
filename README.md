@@ -60,7 +60,7 @@ pip install -e ".[kinematics]"
 pip install -e ".[runtime]"
 ```
 
-注意 `lerobot` 当前不在 PyPI 上发布。使用 `runtime` extra 之前，先按 `lerobot` 上游 README 把 `lerobot` 装进同一环境，例如从上游仓库以 editable 方式安装。本库的 `pyproject.toml` 只声明 `runtime = ["lerobot"]`，不指向任何可解析的分发地址。
+注意 `lerobot` 当前不在 PyPI 上发布。使用 `runtime` extra 之前，先按 `lerobot` 上游 README 把 `lerobot` 装进同一环境，例如从上游仓库以 editable 方式安装。本库的 `pyproject.toml` 在可选依赖 `runtime` 里声明 `runtime = ["lerobot>=0.6.1,<0.7"]`：区间只限定支持的版本范围，不指向任何可解析的分发地址，安装方式仍是按上游 README 自行安装；区间依据与取舍见 [docs/ADR.md](docs/ADR.md) D16。
 
 开发依赖用 PEP 735 的 `[dependency-groups] dev`，包含 `pytest>=8.0`、`ruff>=0.6`、`PyYAML>=6.0`。这些工具放在 dependency group 里，不进入包的 `extras` 元数据，安装本库的用户不会被带上 ruff 和 pytest。两种等价装法：
 
