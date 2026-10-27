@@ -57,7 +57,7 @@
 
 V11 仍是「部分」，但缺口性质已从「无测试」更正为「无实现」：软件侧不能靠补测试关闭这一款，要先决定做不做（`TODO.md` 第 4 节）。
 
-软件侧整体快照：`uv run --no-sync python -m pytest tests` 报 `1196 passed, 2 skipped`。跳过的 2 条是两个 `lerobot` parity 文件（`tests/test_control_api_lerobot_parity.py`、`tests/test_kinematics_lerobot_parity.py`），原因是本机没装 `lerobot`。这 2 条跳过不等于全部通过。
+软件侧整体快照：`uv run --no-sync python -m pytest tests` 报 `1201 passed, 2 skipped`。跳过的 2 条是两个 `lerobot` parity 文件（`tests/test_control_api_lerobot_parity.py`、`tests/test_kinematics_lerobot_parity.py`），原因是本机没装 `lerobot`。这 2 条跳过不等于全部通过。
 
 实机侧已取的三条中 V12 已全实，V01、V10 仍只是部分：
 

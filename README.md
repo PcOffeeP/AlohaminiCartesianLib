@@ -225,7 +225,7 @@ v0.7.0 给两个现场基准脚本加了客户端能力探测：`measure_latency
 
 本轮 `pytest tests` 报 `1056 passed, 2 skipped`。跳过仍是那两个 parity 文件缺 `lerobot`；`2` 不等于全部通过。在 Pi 当前 vendor（`main`，`ec65318f`）上跑 rtt 返回 `9` 是设计行为，不是故障。
 
-补一份最小离线示例 `examples/minimal_dry_run.py`，与两份配置样例 `configs/template.yaml`、`configs/site.yaml` 一起入库，配套测试 `tests/test_examples_and_configs.py` 用子进程读数与 AST 守卫钉住「dry-run 零发送」。本轮 `pytest tests` 报 `1074 passed, 2 skipped`，提交 `08c1318`、`c9baf3e`、`a175f49`。现场配置的三个数值字段（`observation_request_window`、`watchdog_timeout_ms`、`max_loop_freq_hz`）按机器人侧运行时的实际配置填写，取值 3 / 1000 / 50，出处见 [docs/s4-field-smoke.md](docs/s4-field-smoke.md) 第 8 节。
+补一份最小离线示例 `examples/minimal_dry_run.py`，与两份配置样例 `configs/template.yaml`、`configs/site.yaml` 一起入库，配套测试 `tests/test_examples_and_configs.py` 用子进程读数与 AST 守卫钉住「dry-run 零发送」。本轮 `pytest tests` 报 `1074 passed, 2 skipped`，提交 `08c1318`、`c9baf3e`、`a175f49`。现场配置的三个数值字段（`observation_request_window`、`watchdog_timeout_ms`、`max_loop_freq_hz`）按机器人侧运行时的实际配置填写，取值以 [configs/site.yaml](configs/site.yaml) 为准（该文件内每个字段的注释写明取自 `config_alohamini.py` 的哪一行），取数命令见 [docs/s4-field-smoke.md](docs/s4-field-smoke.md) 第 8 节。
 
 后续两轮都落在 `benchmarks/alohamini_io/measure_latency.py` 的客户端能力探测与退出码 `9` 上。`4e6b5c5` 加了第二道探测（属性存在但内容不可用也拒），并给 Gate F 第二段的拒绝补了端到端测试；`dc5356ae` 让半填充的计时面同样被拒，把「`observation_sequence` 冻结 + 计时面为空」从退出码 `7` 改判为 `9`，并消除 0 行进展时的空转。本轮 `pytest tests` 报 `1108 passed, 2 skipped`（前一轮 1074）。跳过仍是那两个 parity 文件缺 `lerobot`；`2` 不等于全部通过。退出码 `9` 的三种形态见 [docs/ADR.md](docs/ADR.md) D12。
 
@@ -251,7 +251,7 @@ uv run --no-sync ruff check .             # 代码风格
 
 本仓库没有 `uv.lock`，所以一律带 `--no-sync`：不带它的 `uv run` 会自行解析依赖并新写一个 `uv.lock`。`addopts = "-q"` 已经生效，自己再加 `-q` 会变成 `-qq` 并隐藏 `N passed` 汇总行；看不到汇总行时用 `-o addopts=""`。
 
-当前 `pytest tests` 报 `1196 passed, 2 skipped`。跳过项只剩两个 parity 文件缺 `lerobot`，构成见「已知限制」。测试不依赖真实设备，不联网。
+当前 `pytest tests` 报 `1201 passed, 2 skipped`。跳过项只剩两个 parity 文件缺 `lerobot`，构成见「已知限制」。测试不依赖真实设备，不联网。
 
 ## 目录结构
 
