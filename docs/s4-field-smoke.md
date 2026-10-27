@@ -665,7 +665,7 @@ run 4.4b-load-check-deploy uv run --no-sync python -c "from pathlib import Path;
 
 | 脚本 | 码 | 含义 |
 | --- | --- | --- |
-| 两者 | 2 | 参数解析失败（`--samples < 1`、`--rate-hz <= 0`、`--control-hz` 非有限或小于 1、`--delta-deg <= 0`、`--settle-tolerance-deg` 不小于有效 delta 等），不经过任何 `EXIT_*` 常量；其中 `--rate-hz`、`--timeout-s`、`--control-hz` 三项在 `measure` 里除符号检查外，非有限值（`nan` / `inf`）同样落退出码 `2` |
+| 两者 | 2 | 参数解析失败（`--samples < 1`、`--rate-hz <= 0`、`--control-hz` 非有限或小于 1、`--delta-deg <= 0`、`--settle-tolerance-deg` 不小于有效 delta 等），不经过任何 `EXIT_*` 常量；其中 `--rate-hz`、`--control-hz`、`--host-loop-hz`、`--timeout-s`、`--settle-timeout-s`、`--settle-tolerance-deg`、`--delta-deg` 七项一律把有限性与符号一起查，非有限值（`nan` / `inf`，以及 `float()` 后变成 `inf` 的 `1e400`）与非正值都落 `2`；`capture` 的 `--timeout-s` 是同一形状的校验。合法预算在运行中到期不走 `2`：`capture` 落 `4`，`measure` 的 rtt 落 `7`、tracking 落 `1` |
 | capture | 0 | payload 已写盘 |
 | capture | 3 | 建客户端、`connect()` 或观测传输失败 |
 | capture | 4 | `--timeout-s` 到期仍不够 `--samples` |
@@ -934,8 +934,8 @@ payload 的 10 个顶层键与 `schema_version = 1` 不变；缺能力不改变 
 | `--host` | 是 | 无 | 无 | 连哪台 Pi |
 | `--port` | 否 | `5556` | 无 | 宿主观测端口 |
 | `--robot-model` | 否 | `alohamini2pro` | 无 | 传给客户端的模型名；代码 Gate C 拿它与宿主 metadata 的 `robot_model` 比对，取值按阶段 1.1 JSON 里的值填 |
-| `--samples` | 否 | `5` | 小于 1 报参数错误 exit 2 | 要采到的观测请求数 |
-| `--timeout-s` | 否 | `30.0` | 无 | 采样本的总时间预算；无校验，`nan` 形态会导致不终止与空转，见 `TODO.md` 工程债 |
+| `--samples` | 否 | `5` | 不小于 1（否则参数解析失败 exit 2） | 要采到的观测请求数 |
+| `--timeout-s` | 否 | `30.0` | 必须有限且大于 0（否则参数解析失败 exit 2）；预算合法但到期仍不够样本落 exit 4 | 采样本的总时间预算，也是 `capture` 唯一的停机条件 |
 | `--out` | 否 | `artifacts/alohamini-io/fingerprint-<UTC>.json`，解析参数时算时间戳 | 父目录自动创建 | JSON 落盘位置 |
 
 ### measure（17 个参数加 `-h`）
@@ -946,18 +946,18 @@ payload 的 10 个顶层键与 `schema_version = 1` 不变；缺能力不改变 
 | `--port` | 否 | `5556` | 无 | 宿主观测端口 |
 | `--robot-model` | 否 | `alohamini2pro` | 无 | 代码 Gate C 的比对对象 |
 | `--mode` | 否 | `rtt` | `rtt` 或 `tracking` | 跑哪套测量；`tracking` 会真动机器人 |
-| `--rate-hz` | 否 | `30.0` | 必须大于 0；小于 200 打警告 | 观测采样率，与 `--control-hz` 独立 |
-| `--control-hz` | 否 | `50.0` | 必须有限且不小于 1 | 命令最小间隔的倒数 |
-| `--samples` | 否 | `500` | 不小于 1，仅 rtt 用 | 要采到的观测帧数 |
-| `--timeout-s` | 否 | `30.0` | 非有限或非正 → 退出码 2 | 整次运行的时间预算 |
+| `--rate-hz` | 否 | `30.0` | 必须有限且大于 0（否则参数解析失败 exit 2）；小于 200 打警告 | 观测采样率，与 `--control-hz` 独立 |
+| `--control-hz` | 否 | `50.0` | 必须有限且不小于 1（否则 exit 2） | 命令最小间隔的倒数 |
+| `--samples` | 否 | `500` | 不小于 1（否则 exit 2），仅 rtt 用 | 要采到的观测帧数 |
+| `--timeout-s` | 否 | `30.0` | 必须有限且大于 0（否则参数解析失败 exit 2）；预算合法但在运行中到期不是 `2`：rtt 落 exit 7（样本不足）、tracking 落 exit 1（提前停止） | 整次运行的时间预算 |
 | `--csv` | 否 | `artifacts/alohamini-io/<mode>-<UTC>.csv` | 无 | CSV 落盘位置 |
-| `--request-window` | 否 | `1` | 不小于 1 | 在飞观测请求数；1 是 RTT 形态，3 是部署形态 |
-| `--host-loop-hz` | 否 | `50.0` | 大于 0 | 宿主主循环频率，决定相位项与排队项 |
+| `--request-window` | 否 | `1` | 不小于 1（否则 exit 2） | 在飞观测请求数；1 是 RTT 形态，3 是部署形态 |
+| `--host-loop-hz` | 否 | `50.0` | 必须有限且大于 0（否则 exit 2） | 宿主主循环频率，决定相位项与排队项 |
 | `--enable-motion` | 否 | 开关，默认关 | 无 | 代码 Gate A 的第一个条件 |
 | `--joint` | 否 | 无 | tracking 模式实质必填 | 要步进的关节；代码 Gate A 的第二个条件 |
-| `--delta-deg` | 否 | `1.0` | 大于 0；实际被 clamp 到 `1.0` | 每步目标增量（度） |
-| `--steps` | 否 | `20` | 不小于 1 | 步数；与 `--delta-deg` 相乘受 20.0° 上限约束 |
-| `--settle-timeout-s` | 否 | `1.0` | 大于 0 | 每步的稳定判定预算 |
-| `--settle-tolerance-deg` | 否 | `0.15` | 不小于 0，且必须小于有效 delta | 稳定判定的容差（度） |
+| `--delta-deg` | 否 | `1.0` | 必须有限且大于 0（否则 exit 2）；实际被 clamp 到 `1.0` | 每步目标增量（度） |
+| `--steps` | 否 | `20` | 不小于 1（否则 exit 2） | 步数；与 `--delta-deg` 相乘受 20.0° 上限约束 |
+| `--settle-timeout-s` | 否 | `1.0` | 必须有限且大于 0（否则 exit 2） | 每步的稳定判定预算 |
+| `--settle-tolerance-deg` | 否 | `0.15` | 必须有限且不小于 0（`0` 合法）；且必须小于 clamp 后的有效 delta；两者违规均 exit 2 | 稳定判定的容差（度） |
 
 `measure` 的 `--help` 用的是 `RawDescriptionHelpFormatter`，不打印默认值。上表默认值来自源码常量。
