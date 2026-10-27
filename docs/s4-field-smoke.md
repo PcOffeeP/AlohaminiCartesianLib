@@ -593,7 +593,7 @@ run 4.3c-config-classes ssh "$PI" 'sed -n "95,145p" ~/lerobot_alohamini/src/lero
 
 已实测取值来路（2026-10-25 UTC 07:00 前后，该时点 Pi HEAD 为 `ec65318f`，Host 未运行）。本表只记「这些数字怎么来的」：**数字本身以 `configs/site.yaml` 为准**，本节不再复制一份当权威。2026-10-25 实测到的三个数字记在 `configs/site.yaml` 的注释里（每个字段一行，写明取自哪个 `config_alohamini.py` 行号）；后续现场改配置改 `configs/site.yaml`，不要回来改本表。
 
-| 字段 | 现场值 | 依据（来路） |
+| 字段 | 取值出处 | 依据（来路） |
 | --- | --- | --- |
 | `observation_request_window` | 见 `configs/site.yaml` 的 `observation_request_window` | `config_alohamini.py:110`（`AlohaMiniHostConfig` 源码默认）；该项无命令行入口 |
 | `watchdog_timeout_ms` | 见 `configs/site.yaml` 的 `watchdog_timeout_ms` | `config_alohamini.py:122` |
@@ -601,7 +601,7 @@ run 4.3c-config-classes ssh "$PI" 'sed -n "95,145p" ~/lerobot_alohamini/src/lero
 
 Host 未运行，所以这三个值是**源码默认**，不是「运行中进程的实际生效值」。`config_alohamini.py` 在 Pi 工作区是未提交修改状态，取值以工作区文件为准，与当时 HEAD `ec65318f` 的差异未核对。启动 Host 后应重跑 `4.2`/`4.3` 复核。
 
-同日 Host 启动后复核：Host 实际启动命令为 `/home/pi5/miniconda3/envs/lerobot_alohamini/bin/python -m lerobot.robots.alohamini.alohamini_host --robot_model alohamini2pro`，未包含任何覆盖这三个字段的参数，与上表「源码默认即实际生效值」一致。
+同日 Host 启动后复核：Host 实际启动命令为 `/home/pi5/miniconda3/envs/lerobot_alohamini/bin/python -m lerobot.robots.alohamini.alohamini_host --robot_model alohamini2pro`，未包含任何覆盖这三个字段的参数，与本节「源码默认即实际生效值」的判断一致。
 
 两份 YAML 的分工：
 
