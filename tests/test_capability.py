@@ -10,6 +10,7 @@ from __future__ import annotations
 import ast
 import importlib
 import math
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -631,3 +632,186 @@ def test_no_module_outside_adapter_imports_lerobot() -> None:
 
     after = _lerobot_modules()
     assert after - before == set()
+
+
+# --------------------------------------------------------------------------- #
+# D. V11 兼容性现状锁定（v1 帧「帧平滑回退」）
+#
+# 背景：退役仓库的 `docs/alohamini-control/Alohamini-implementation-plan.md:80`
+# 把「v1 格式帧平滑回退」列为 V11 的要求之一。本库现状拆成三件事：
+#   1) v1 帧能被收下：schema 1 缺字段填 None，缺口写进 notes；
+#   2) 换算按**字段**回落（metadata → calibration-file → model-table），
+#      缺到无处可落时抛 ConversionUnavailable，不猜 4096；
+#   3) capability 层没有任何跨帧平滑：没 EMA、没低通、没 slew 限速，也没有「保持
+#      上一帧」的缓存；`detect_from_observation` 与 `resolve_deg_per_unit` 都是
+#      逐帧无状态纯函数（下面 V11-3 / V11-4 锁这一层）。
+#
+# 边界（不要把它读成本款已满足）：控制层自带每帧关节步长门禁与跨帧状态 ——
+# `control/controller.py:145` 的 `_last_accepted_q`、`:520-532` 的 step-limit 门禁
+# （`_max_joint_step_deg` 默认 2.0，超过即 `ControlError.STEP_LIMIT`、不发）、
+# `:534-546` 的 lead clamp（`max_joint_lead_deg=30.0`，`control/api.py:668` 传入）。
+# 那些是安全门禁与截断，不是对帧序列做平滑或插值，也不按 metadata 版本切换；
+# 它们不在 V11 第三款的判据内，本条只记「没有平滑」这个现状。
+# D 组把这三件事钉住，等于给 V11 第三款留下可核对的现状记录：谁要加平滑，
+# 先改这里与 `docs/acceptance-baseline.md` 的 V11 行。
+# --------------------------------------------------------------------------- #
+
+# 期望换算：`100` 是 `range_0_100` 的 span，这里故意写字面量、不从实现里 import
+# 反推；`4096` 来自下面用例注入的型号表（v1 帧本身没有 resolution 字段）。
+V1_FRAME_EXPECTED_DEG_PER_UNIT = ((3200 - 900) / 100) * 360 / (4096 - 1)
+
+# 平滑原语的符号级特征词。用词边界而不是裸子串：裸 `ema` 会被 `schema_version` 命中。
+# `_ema` 这种前导下划线写法单独列一条（下划线是词内字符，`\bema` 抓不到）。
+FRAME_SMOOTHING_PATTERN = re.compile(
+    r"平滑|滤波|低通|_ema[a-z0-9_]*|\b(?:ema|slew|smooth|low_?pass)[a-z0-9_]*",
+    re.IGNORECASE,
+)
+
+
+def _v1_frame_observation() -> dict[str, Any]:
+    """一帧 v1 观测：metadata 走 schema 1（缺 homing_offset / resolution）。"""
+    return {METADATA_KEY: _v1_metadata()}
+
+
+def _v2_frame_with_other_range_and_resolution() -> dict[str, Any]:
+    """一帧数值口径完全不同的 v2 观测，用来检测跨帧残留（保持上一帧 / 平滑）。"""
+    return {
+        METADATA_KEY: {
+            "schema_version": 2,
+            "robot_model": "alohamini2",
+            "motors": {
+                "shoulder_pan": {
+                    "id": 1,
+                    "model": "sts3215",
+                    "normalization": "range_m100_100",
+                    "drive_mode": 0,
+                    "range_min": -2000,
+                    "range_max": 2000,
+                    "homing_offset": 7,
+                    "resolution": 8192,
+                }
+            },
+        }
+    }
+
+
+def test_v11_v1_frame_parses_and_conversion_falls_back_by_field() -> None:
+    """V11-1：v1 帧可解析；换算回落在「缺哪个字段补哪个」，无源可补时 fail-closed。"""
+    # 前半段与 A2（`:157` 起）、C 段（`:496` 起）有意重复：V11 要一条自成一体的证据。
+    caps = detect_from_observation(_v1_frame_observation())
+
+    assert caps.metadata_schema == 1
+    motor = caps.motors["shoulder_pan"]
+    assert motor.homing_offset is None
+    assert motor.resolution is None
+    assert any("homing_offset" in note for note in caps.notes)
+    assert any("resolution" in note for note in caps.notes)
+    assert any("shoulder_pan" in note for note in caps.notes)
+
+    # v1 帧自身有 range、没有 resolution；没有任何可回落来源时不猜。
+    with pytest.raises(ConversionUnavailable, match="resolution") as excinfo:
+        resolve_deg_per_unit(caps, "shoulder_pan")
+    assert "不猜" in str(excinfo.value)
+
+    # 给出型号分辨率表后，resolution 从 model-table 回落，range 仍来自 v1 帧。
+    conv = resolve_deg_per_unit(caps, "shoulder_pan", model_resolution={"sts3215": 4096})
+
+    assert conv.source == "model-table"
+    assert conv.resolution == 4096
+    assert conv.range_min == 900
+    assert conv.range_max == 3200
+    assert conv.deg_per_unit == pytest.approx(V1_FRAME_EXPECTED_DEG_PER_UNIT)
+
+
+def test_v11_v1_frame_with_full_fields_converts_from_metadata_like_v2() -> None:
+    """V11-2：回落按字段是否存在判定，不按版本号——八字段齐的 v1 帧与 v2 同解。
+
+    这只说明 capability 层能算换算，不等于关节换算适配器被使能：
+    `tests/test_kinematics_adapter.py::test_t_b7_d_schema_version_missing_or_not_two_rejected`
+    要求 schema 1 必须被拒。
+    """
+    v1_caps = detect_from_observation({METADATA_KEY: _v1_metadata_with_full_motor_fields()})
+    v2_caps = detect_from_observation({METADATA_KEY: _v2_metadata()})
+
+    v1_conv = resolve_deg_per_unit(v1_caps, "shoulder_pan")
+    v2_conv = resolve_deg_per_unit(v2_caps, "shoulder_pan")
+
+    assert v1_caps.metadata_schema == 1
+    assert v1_conv.source == "metadata"
+    assert v1_conv == v2_conv
+
+
+def test_v11_consecutive_frames_are_parsed_independently_no_smoothing() -> None:
+    """V11-3：逐帧无状态——后一帧不依赖前一帧，没有跨帧平滑或「保持上一帧」。
+
+    两帧的 range 与 resolution 都不同（v1 帧 900..3200 / 无分辨率 → 型号表 4096；
+    v2 帧 -2000..2000 / 8192）。若实现里加了 EMA、低通或按电机名缓存上一帧的口径，
+    第二次解 v1 帧的结果会偏离第一次，本用例即红。
+
+    抓得到的边界：控制层的平滑 / 限速（`control/controller.py` 的 step-limit 门禁与
+    lead clamp）不在本用例判别面内 —— D 段只碰 capability 层。
+    """
+    table = {"sts3215": 4096}
+
+    first = resolve_deg_per_unit(
+        detect_from_observation(_v1_frame_observation()),
+        "shoulder_pan",
+        model_resolution=table,
+    )
+    middle = resolve_deg_per_unit(
+        detect_from_observation(_v2_frame_with_other_range_and_resolution()), "shoulder_pan"
+    )
+    again = resolve_deg_per_unit(
+        detect_from_observation(_v1_frame_observation()),
+        "shoulder_pan",
+        model_resolution=table,
+    )
+
+    assert middle.source == "metadata"
+    assert (middle.range_min, middle.range_max, middle.resolution) == (-2000, 2000, 8192)
+    assert first == again
+    assert (first.range_min, first.range_max, first.resolution) == (900, 3200, 4096)
+
+    # 解析不改动输入：传进去的观测字典不得被就地改写。
+    observation = _v1_frame_observation()
+    before = repr(observation)
+    detect_from_observation(observation)
+    assert repr(observation) == before, "解析不得就地改写输入观测"
+
+    # 同 schema / 同电机 / 同 normalization，只改 range：缓存若按 (版本, 电机) 或
+    # 按 span 做键、或先预热若干帧再返回，这里就会偏离自己的期望值。
+    other = _v1_metadata()
+    other["motors"]["shoulder_pan"].update({"range_min": 1000, "range_max": 3100})
+    other_conv = resolve_deg_per_unit(
+        detect_from_observation({METADATA_KEY: other}),
+        "shoulder_pan",
+        model_resolution=table,
+    )
+    assert (other_conv.range_min, other_conv.range_max) == (1000, 3100)
+    assert other_conv.deg_per_unit == pytest.approx(((3100 - 1000) / 100) * 360 / (4096 - 1))
+
+
+def test_v11_no_frame_smoothing_primitive_in_the_package() -> None:
+    """V11-4：capability 层没有任何帧平滑原语——这一款是「无实现」，不是「无测试」。
+
+    `detect_from_observation` 与 `resolve_deg_per_unit` 这层既没有 EMA / 低通 / slew 限速，
+    也没有保持上一帧的缓存；下面的扫描面覆盖整个 `src/alohamini_cartesian/`（现状零命中）。
+    要加实现时本用例会先红，连同 `docs/acceptance-baseline.md` 的 V11 行一起改。
+
+    边界：控制层的每帧关节步长门禁（`control/controller.py:520-532`）与 lead clamp
+    （`:534-546`）属安全门禁与截断，不是帧序列平滑，不在本款判据内。
+    """
+    package_root = Path(alohamini_cartesian.__file__).parent
+
+    offenders = {
+        str(path.relative_to(package_root)): sorted(
+            {
+                hit.lower()
+                for hit in FRAME_SMOOTHING_PATTERN.findall(path.read_text(encoding="utf-8"))
+            }
+        )
+        for path in sorted(package_root.rglob("*.py"))
+    }
+    offenders = {name: tokens for name, tokens in offenders.items() if tokens}
+
+    assert offenders == {}
