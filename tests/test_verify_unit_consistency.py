@@ -148,6 +148,44 @@ def test_one_field_difference_returns_one_and_names_motor_and_field(
     assert elbow_row.rstrip().endswith("flag=MISMATCH")
 
 
+def test_integral_float_homing_offset_is_compared_not_skipped(
+    tool: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """指纹侧 ``homing_offset`` 写成整值浮点（``-1359.0``）时照库口径取值并参与判等。"""
+    fingerprint, calibration = _consistent_pair()
+    fingerprint["robot_metadata"]["motors"]["arm_left_shoulder_pan"]["homing_offset"] = -1359.0
+    calibration["arm_left_shoulder_pan"]["homing_offset"] = -1400
+    fp = _write(tmp_path, "fp.json", fingerprint)
+    cal = _write(tmp_path, "cal.json", calibration)
+
+    code = tool.main([str(fp), str(cal)])
+
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "SUMMARY: motors=3 mismatched=1 exit=1" in out
+    assert (
+        "MISMATCH: motor=arm_left_shoulder_pan field=homing_offset "
+        "fingerprint=-1359 calibration=-1400" in out
+    )
+
+
+def test_a_homing_offset_that_is_not_an_integer_returns_two(
+    tool: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """字段在场但收不成整数时返回 2，stderr 同时点名电机与字段。"""
+    fingerprint, calibration = _consistent_pair()
+    fingerprint["robot_metadata"]["motors"]["arm_left_elbow_flex"]["homing_offset"] = "x"
+    fp = _write(tmp_path, "fp.json", fingerprint)
+    cal = _write(tmp_path, "cal.json", calibration)
+
+    code = tool.main([str(fp), str(cal)])
+
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "arm_left_elbow_flex" in err
+    assert "homing_offset" in err
+
+
 def test_presence_difference_returns_one_and_names_the_presence_field(
     tool: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -165,6 +203,55 @@ def test_presence_difference_returns_one_and_names_the_presence_field(
     assert (
         "MISMATCH: motor=arm_left_wrist_flex field=presence "
         "fingerprint=missing calibration=present" in out
+    )
+
+
+def test_calibration_resolution_difference_returns_one(
+    tool: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """标定侧多出的 ``resolution`` 参与判等：与指纹的 4096 不同即退出码 1。"""
+    fingerprint, calibration = _consistent_pair()
+    calibration["arm_left_elbow_flex"]["resolution"] = 2048
+    fp = _write(tmp_path, "fp.json", fingerprint)
+    cal = _write(tmp_path, "cal.json", calibration)
+
+    code = tool.main([str(fp), str(cal)])
+
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "SUMMARY: motors=3 mismatched=1 exit=1" in out
+    assert (
+        "MISMATCH: motor=arm_left_elbow_flex field=resolution "
+        "fingerprint=4096 calibration=2048" in out
+    )
+
+
+def test_calibration_only_unit_fields_print_a_note_without_affecting_the_exit(
+    tool: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """标定侧独有而指纹侧无该字段时打 ``NOTE``，不把它算成一条差异。"""
+    fingerprint, calibration = _consistent_pair()
+    calibration["arm_left_wrist_flex"] = {
+        **_cal_entry(_motor(id=4, range_min=934, range_max=3049)),
+        "resolution": 2048,
+        "normalization": "range_0_100",
+    }
+    fp = _write(tmp_path, "fp.json", fingerprint)
+    cal = _write(tmp_path, "cal.json", calibration)
+
+    code = tool.main([str(fp), str(cal)])
+
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "SUMMARY: motors=4 mismatched=1 exit=1" in out
+    assert "MISMATCH: motor=arm_left_wrist_flex field=presence" in out
+    assert (
+        "NOTE: motor=arm_left_wrist_flex calibration 侧带有 resolution=2048，指纹侧无该字段，未比较"
+        in out
+    )
+    assert (
+        "NOTE: motor=arm_left_wrist_flex calibration 侧带有 normalization=range_0_100，"
+        "指纹侧无该字段，未比较" in out
     )
 
 
@@ -220,6 +307,50 @@ def test_fingerprint_motor_with_a_missing_required_field_returns_two(
     assert missing_field in err
 
 
+_UNUSABLE_CASES = (
+    ("resolution_at_one", "arm_left_elbow_flex"),
+    ("unknown_normalization", "arm_left_elbow_flex"),
+    ("inverted_range", "arm_left_elbow_flex"),
+    ("calibration_missing_range_min", "arm_left_elbow_flex"),
+    ("top_level_not_an_object", "fingerprint"),
+)
+
+
+@pytest.mark.parametrize(("case", "expected_in_stderr"), _UNUSABLE_CASES)
+def test_unusable_input_returns_two(
+    tool: ModuleType,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    case: str,
+    expected_in_stderr: str,
+) -> None:
+    """五类不可用于核对的输入一律返回 2，stderr 点名该电机或该输入。"""
+    fingerprint, calibration = _consistent_pair()
+    fp_payload: Any = fingerprint
+    cal_payload: Any = calibration
+    if case == "resolution_at_one":
+        fingerprint["robot_metadata"]["motors"]["arm_left_elbow_flex"]["resolution"] = 1
+    elif case == "unknown_normalization":
+        fingerprint["robot_metadata"]["motors"]["arm_left_elbow_flex"]["normalization"] = "range_x"
+    elif case == "inverted_range":
+        fingerprint["robot_metadata"]["motors"]["arm_left_elbow_flex"].update(
+            {"range_min": 3109, "range_max": 947}
+        )
+        calibration["arm_left_elbow_flex"].update({"range_min": 3109, "range_max": 947})
+    elif case == "calibration_missing_range_min":
+        del calibration["arm_left_elbow_flex"]["range_min"]
+    else:
+        fp_payload = [1, 2, 3]
+    fp = _write(tmp_path, "fp.json", fp_payload)
+    cal = _write(tmp_path, "cal.json", cal_payload)
+
+    code = tool.main([str(fp), str(cal)])
+
+    err = capsys.readouterr().err
+    assert code == 2
+    assert expected_in_stderr in err
+
+
 def test_deg_per_unit_matches_the_library_resolution(tool: ModuleType, tmp_path: Path) -> None:
     """脚本算出的 ``deg_per_unit`` 与库 ``resolve_deg_per_unit`` 的返回值相等。"""
     fingerprint, calibration = _consistent_pair()
@@ -241,6 +372,49 @@ def test_deg_per_unit_matches_the_library_resolution(tool: ModuleType, tmp_path:
     for name in motors:
         expected = resolve_deg_per_unit(caps, name).deg_per_unit
         assert rows[name].deg_per_unit == pytest.approx(expected, rel=1e-12)
+
+
+def test_deg_span_values_follow_the_tick_formula(tool: ModuleType, tmp_path: Path) -> None:
+    """角度行程按 ``(max - min) * 360 / (resolution - 1)`` 算：臂 237.3626…、夹爪 4.4835…。"""
+    fingerprint, calibration = _consistent_pair()
+    fp = _write(tmp_path, "fp.json", fingerprint)
+    cal = _write(tmp_path, "cal.json", calibration)
+
+    result = tool.compare(tool.read_json(str(fp), "fingerprint"), tool.read_json(str(cal), "cal"))
+
+    rows = {row.motor: row for row in result.rows}
+    shoulder = rows["arm_left_shoulder_pan"]
+    gripper = rows["arm_left_gripper"]
+    assert shoulder.fp_deg_span == pytest.approx((3327 - 627) * 360 / 4095, rel=1e-12)
+    assert shoulder.cal_deg_span == pytest.approx((3327 - 627) * 360 / 4095, rel=1e-12)
+    assert gripper.fp_deg_span == pytest.approx((2072 - 2021) * 360 / 4095, rel=1e-12)
+    assert gripper.cal_deg_span == pytest.approx((2072 - 2021) * 360 / 4095, rel=1e-12)
+
+
+def test_row_columns_keep_their_order(
+    tool: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """整行按列序断言：指纹 range 在标定 range 之前，指纹行程在标定行程之前。"""
+    fingerprint, calibration = _consistent_pair()
+    fp = _write(tmp_path, "fp.json", fingerprint)
+    cal = _write(tmp_path, "cal.json", calibration)
+
+    code = tool.main([str(fp), str(cal)])
+
+    out = capsys.readouterr().out
+    assert code == 0
+    line = next(item for item in out.splitlines() if item.startswith("arm_left_shoulder_pan"))
+    fields = line.split()
+    assert fields[0] == "arm_left_shoulder_pan"
+    assert fields[1] == "range_m100_100"
+    assert fields[2] == "4096"
+    assert fields[3] == "627..3327"
+    assert fields[4] == "627..3327"
+    assert fields[5] == "1.186813"
+    assert fields[6] == "237.36"
+    assert fields[7] == "237.36"
+    assert fields[8] == "0.000"
+    assert fields[9] == "flag=OK"
 
 
 def test_degrees_motor_prints_unit_factor_and_na_angles(
