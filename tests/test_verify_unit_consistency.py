@@ -246,12 +246,12 @@ def test_calibration_only_unit_fields_print_a_note_without_affecting_the_exit(
     assert "SUMMARY: motors=4 mismatched=1 exit=1" in out
     assert "MISMATCH: motor=arm_left_wrist_flex field=presence" in out
     assert (
-        "NOTE: motor=arm_left_wrist_flex calibration 侧带有 resolution=2048，指纹侧无该字段，未比较"
-        in out
+        "NOTE: motor=arm_left_wrist_flex calibration 侧带有 resolution=2048，"
+        "指纹侧没有这台电机，未比较" in out
     )
     assert (
         "NOTE: motor=arm_left_wrist_flex calibration 侧带有 normalization=range_0_100，"
-        "指纹侧无该字段，未比较" in out
+        "指纹侧没有这台电机，未比较" in out
     )
 
 
@@ -394,27 +394,34 @@ def test_deg_span_values_follow_the_tick_formula(tool: ModuleType, tmp_path: Pat
 def test_row_columns_keep_their_order(
     tool: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """整行按列序断言：指纹 range 在标定 range 之前，指纹行程在标定行程之前。"""
+    """整行按列序断言：样本两侧故意不对称，``fp_`` 列在前、``cal_`` 列在后。
+
+    把标定侧 ``arm_left_elbow_flex.range_max`` 改成 ``3108``（指纹侧仍是 ``3109``）：于是
+    ``fp_range=947..3109`` 与 ``cal_range=947..3108`` 不同、``fp_deg_span=190.07`` 与
+    ``cal_deg_span=189.98`` 不同，逐列断言能抓住列对调。该电机因此 ``flag=MISMATCH``、
+    退出码 1。
+    """
     fingerprint, calibration = _consistent_pair()
+    calibration["arm_left_elbow_flex"]["range_max"] = 3108
     fp = _write(tmp_path, "fp.json", fingerprint)
     cal = _write(tmp_path, "cal.json", calibration)
 
     code = tool.main([str(fp), str(cal)])
 
     out = capsys.readouterr().out
-    assert code == 0
-    line = next(item for item in out.splitlines() if item.startswith("arm_left_shoulder_pan"))
+    assert code == 1
+    line = next(item for item in out.splitlines() if item.startswith("arm_left_elbow_flex"))
     fields = line.split()
-    assert fields[0] == "arm_left_shoulder_pan"
+    assert fields[0] == "arm_left_elbow_flex"
     assert fields[1] == "range_m100_100"
     assert fields[2] == "4096"
-    assert fields[3] == "627..3327"
-    assert fields[4] == "627..3327"
-    assert fields[5] == "1.186813"
-    assert fields[6] == "237.36"
-    assert fields[7] == "237.36"
-    assert fields[8] == "0.000"
-    assert fields[9] == "flag=OK"
+    assert fields[3] == "947..3109"
+    assert fields[4] == "947..3108"
+    assert fields[5] == "0.950330"
+    assert fields[6] == "190.07"
+    assert fields[7] == "189.98"
+    assert fields[8] == "-0.088"
+    assert fields[9] == "flag=MISMATCH"
 
 
 def test_degrees_motor_prints_unit_factor_and_na_angles(

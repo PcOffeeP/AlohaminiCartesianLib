@@ -346,7 +346,9 @@ def _optional_int(entry: Mapping[str, Any], field: str, side: str, motor: str) -
 
     收值口径同库的 ``_coerce_int``（``capability/detect.py:328``）：``bool`` 拒、``int`` 收、
     ``float`` 且 ``is_integer()`` 收。不静默跳过：``homing_offset: -1359.0`` 这类整值浮点
-    与「字段不在」是两种情况，前者跳过会把真实差异放过。
+    与「字段不在」是两种情况，前者跳过会把真实差异放过。与库的另一处差别：JSON 显式的
+    ``null`` 也算「在场但收不成整数」，同样报退出码 2；库的 ``_coerce_int`` 把 ``None`` 当
+    未知值跳过，本脚本不跳。
     """
     if field not in entry:
         return None
@@ -444,7 +446,7 @@ def _unit_field_notes(
         if fingerprint_value is None:
             notes.append(
                 f"NOTE: motor={name} calibration 侧带有 {field}={calibration_value}，"
-                "指纹侧无该字段，未比较"
+                "指纹侧没有这台电机，未比较"
             )
     return notes
 
