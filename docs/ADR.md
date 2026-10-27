@@ -1,6 +1,6 @@
 # 架构决策记录（ADR）
 
-本文记录 `alohamini-cartesian` 自 v0.1.0 起沿用的决策，编号 D1–D16。每条按背景、决定、后果三段记录，后果同时写正面收益与已知代价。状态写作「已接受（自 vX.Y.Z 起）」，不记具体日期。新的重大取舍按顺序追加编号，已接受的条目不回改。
+本文记录 `alohamini-cartesian` 自 v0.1.0 起沿用的决策，编号 D1–D17。每条按背景、决定、后果三段记录，后果同时写正面收益与已知代价。状态写作「已接受（自 vX.Y.Z 起）」，不记具体日期。新的重大取舍按顺序追加编号，已接受的条目不回改。
 
 ## 索引
 
@@ -22,6 +22,7 @@
 | D14 | 左夹爪标定暂不重做：按现有标定值继续，先定性再修 | 已接受（自 v0.7.0 起） |
 | D15 | V11 的「帧平滑回退」不做：v1 兼容范围界定为「能解析 + 能换算可落」 | 已接受（自 v0.7.0 起） |
 | D16 | lerobot 依赖声明加版本区间：只支持 `lerobot>=0.6.1,<0.7` | 已接受（自 v0.7.0 起） |
+| D17 | 设计规范定为历史设计来源，本库权威以 ADR 与验收基线为准 | 已接受（自 v0.7.0 起） |
 
 ## D1 依赖形态：独立包，lerobot 作为可选 extra
 
@@ -488,3 +489,63 @@ D1 把 `lerobot` 放在 optional extra `runtime` 里，并且有意只写名字�
 触发重新评估的条件（达成任一条即重新评估）：① Pi 现场换到 0.7 及以上，或厂商 fork 的 `version` 越过 0.6.x；② 出现需要跨 minor 的接口变化并有现场需求；③ 现场采集到真实的 `lerobot` 软件版本字段，与本文推断不符。
 
 相关提交：本轮提交（新增 `src/alohamini_cartesian/adapter/lerobot_version.py`，改 `pyproject.toml` 的 `runtime` extra 与本条目）。
+
+## D17 设计规范定为历史设计来源，本库权威以 ADR 与验收基线为准
+
+状态：已接受（自 v0.7.0 起）
+
+### 背景
+
+设计规范 `/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini-cartesian-teleop/docs/alohamini-control/Alohamini-control-design.md` 位于已退役仓库（D4 冻结为只读参考），文件内自标 SSOT（唯一的权威来源）。本库文档长期与它并存：`docs/background.md` §6 曾写「冲突时以设计规范为准」，`AGENTS.md` 曾把它挂为待决事项，优先关系一直没有裁决。
+
+核对之后发现三类实质错位，靠「谁先写的」定不下优先关系。
+
+| 错位 | 设计规范的说法 | 本库现状 |
+| --- | --- | --- |
+| 路径与环境过期 | 控制层模块在 `src/lerobot/robots/alohamini/control/`（该文件 `:235-240` 的模块清单），示例在 `examples/alohamini/control_basic.py`，运行环境为 `Python 3.12+`（`:295`、`:302`） | 本库是独立包 `alohamini_cartesian`，src layout，控制层模块在 `src/alohamini_cartesian/control/`（D1） |
+| Gate A–E 与 D018 归档 JSON 在本库无承载物 | 设计规范 D008 定 Gate A–D（离线）与 Gate E（受控试动）两道门槛；D018 把归档格式定为 `docs/alohamini-control/gates/<side>-gate-<letter>.json`，`schema_version` 为 1，由 `tools/alohamini_gate_record.py` 校验 | 验收改用 V01–V13（`docs/acceptance-baseline.md` §2.1）；按 Gate 归档的验收与归档工具已随 Gate 系统一起删除，归档格式无法产出 |
+| V 编号不同义 | 设计规范的 `V05` 指断网保位的核验口径（D012），`V10` 指 Gate 资格门禁的归档格式（D018） | 本库 `V05` 是反馈异常拦截与时效守护，`V10` 是两道 Gate 资格门禁（判的是本库基准脚本里的 Gate C 与 Gate F 运行时门禁）。同名不同义，逐字对照会误读 |
+
+### 决定
+
+1. 设计规范定为历史设计来源与溯源参考，**不具现行权威**。
+2. 本库权威为本文件（ADR）与 `docs/acceptance-baseline.md`。两份文档之间分工不变：取舍与代价看 ADR，验收看基线。
+3. 设计规范与本库权威文档冲突时，**以本库为准**，差异按本文件格式新增条目记录，不回改设计规范正文。本条即该规则的第一次适用，差异记录就是本条。
+4. 不修改退役仓库里的设计规范（只读参考，见 D4）：不迁入本库，不撤销其内部的 SSOT 标注。
+5. 旧仓库按臂归档的 Gate A–E 退出历史，V01–V13 是唯一验收口径。两边 V 编号撞车时以本库为准，只在对照处标注，不做全局重编号。
+
+### 后果
+
+**（A）继承清单**
+
+设计规范 D001–D018 中仍指导本库行为的条目共 16 条，全部照旧生效。下表编号是设计规范的编号，与本文件 D1–D17 不是一套；落点列引用本文件条目时写作「本库 D10」这类形式以示区分。
+
+| 来源编号 | 内容 | 落点（本库对应位置/条目） |
+| --- | --- | --- |
+| 设计规范 D001 | 首版以受控运动验证为目标，不做完整自主规划与取放 | `docs/background.md` §1 目标、§5 边界首行 |
+| 设计规范 D002 | 机械臂控制原点取该臂肩底座 | `src/alohamini_cartesian/kinematics/assets/am_arm200/kinematics.urdf` 的根链接为 `left_Base`，六关节链从该链接起算；专项 ADR 与验收条目未逐条对号 |
+| 设计规范 D003 | 底盘、升降与机械臂分阶段互锁 | V03；`src/alohamini_cartesian/control/commands.py` 的 `ControlStateMachine` |
+| 设计规范 D004 | 停机优先，停稳后条件恢复，普通受限可有界反向退让 | V04（停止优先与条件恢复）；V06 与 `control/controller.py`（过流 hold 的有界退让） |
+| 设计规范 D005 | 保留 Host 升降初始化，PC 端不额外对机械臂归位 | V07（`connect(...)` 不发动作、不求解 IK） |
+| 设计规范 D006 | 姿态软约束 weight=0.01，优先位置精度 | V08；`src/alohamini_cartesian/control/arm_ik.py` |
+| 设计规范 D007 | 复用底层硬件保护，引入只读 `control_status` 回传 | V06；`control/controller.py` 按 `_control_status.joint_holds` 做过流退让 |
+| 设计规范 D009 | 交付主体为 Python 控制库，键盘降为上层调试示例 | `docs/background.md` §4.3：Python 控制库 SDK 行「已实现」，KeyboardTeleop 行「部分」（离线示例已入库，键盘调试层未实现） |
+| 设计规范 D010 | IK 解耦为独立组件，增加离线基准保障 30 Hz 无卡顿 | V13；`benchmarks/alohamini_ik/benchmark_arm_ik.py`；预算判据的形态见本文件 D13 |
+| 设计规范 D011 | 扩展直线步进（`move_to` / `move_by`）与升降、底盘接口 | `src/alohamini_cartesian/control/api.py` 的 `ArmHandle.move_to` / `move_by`、`LiftHandle`、`BaseHandle`；`docs/background.md` §4.3「Base / Lift action」行 |
+| 设计规范 D012 | V05 验收口径以 Host watchdog 既定行为为准（超时后位置保位、底盘清速、停升降） | 本库无「断网保位」条目，未逐条对号。本库 V05 与之同名不同义：它判的是陈旧或冻结反馈的拦截与时效守护，与断网保位无关 |
+| 设计规范 D013 | 命令间隙保活由调用方负责，Client 不内建心跳 | `control/controller.py` 的 `keepalive_interval_s`（默认 `None` 即关闭）与 `control/api.py:304` 的到期重发；周期由调用方传入 |
+| 设计规范 D014 | 底盘显式零速，不依赖 watchdog 停车 | `control/controller.py` 的 `_tick_base_gap`（显式零速，`ACTIVE(ARM)` 期间除外）；V09 底盘 `stop` 的 dry-run 零发送用例 |
+| 设计规范 D015 | 异常契约：运动类拒绝抛 `MotionBlocked`，`resume()` / reset 与 `stop()` 不抛 | `control/commands.py` 的 `MotionBlocked` 与 `ControlStateMachine`；`control/api.py:62` 的注释直接引 D015 |
+| 设计规范 D016 | FAULT 语义：反馈序号倒退锁存，唯一恢复入口 `reset()`，禁止 FAULT 直跳 READY | `control/commands.py` 的 FAULT 锁存与 `ControlStateMachine.reset`；V05 行引的 `test_b52_sample_id_regression_from_active_faults` 与 `test_t_c12_sample_id_regression_from_non_active_state_faults` |
+| 设计规范 D017 | 命令构造期校验，禁止静默 clamp | 本库 D10（限位取值在 `ArmIK.solve()` 入口校验，违规抛 `ValueError`）；`control/commands.py` 的 frozen 命令构造期校验（例如零时长加非零速度报 `ValueError`，`commands.py:132-133`） |
+
+**（B）被本库取代或另定**
+
+- 设计规范 D008 与 D018（Gate A–E 门槛与归档 JSON 格式）→ 归档，验收改 V01–V13。理由：归档工具随 Gate 系统删除，格式无法产出，门槛没有可核对的载体。
+- 设计规范未涉及、由本库自定的五条：本库 D7（厂商侧协议测试不迁入）、本库 D10（关节限位入口校验，违规抛 `ValueError`）、本库 D12（客户端能力缺失判退出码 9）、本库 D15（不做帧平滑回退）、本库 D16（`lerobot` 版本区间）。这几条不因本 ADR 失效。它们不与设计规范冲突，属于设计规范没讲的空白处，由本库自己定。
+
+**已知代价**
+
+退役文件里仍自标 SSOT，单独读它的人可能误判优先级；纠正只能靠本 ADR 与 `docs/background.md` §6。另有一条：V 编号撞车没有做全局重编号，只在对照处标注，读旧文档时仍需人工分辨哪个 V05 是哪一边的。
+
+相关提交：本轮文档提交（无代码提交）。

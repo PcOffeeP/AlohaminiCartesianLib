@@ -37,7 +37,7 @@
 | 测试 | `1275 passed, 2 skipped` |
 | 跳过的两条 | `tests/test_control_api_lerobot_parity.py`、`tests/test_kinematics_lerobot_parity.py`，需要 `lerobot` 做对照；**不等于全部通过** |
 | 核心依赖与 `lerobot` 引用位置 | 核心只依赖 numpy；`lerobot` 只在 `adapter/protocol.py` 被 import，由 `tests/test_capability.py` 的 AST 断言守着 |
-| 决策记录 | `docs/ADR.md` 现有 D1–D16 |
+| 决策记录 | `docs/ADR.md` 现有 D1–D17 |
 
 ### 4.2 已实现能力
 
@@ -108,8 +108,9 @@
 
 | 文档 | 管什么 | 冲突时谁优先 |
 | --- | --- | --- |
-| 设计规范：`/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini-cartesian-teleop/docs/alohamini-control/Alohamini-control-design.md`（自标 SSOT，尚未迁入本库） | 接口契约、状态机、Gate A–E、决策 D001–D018 | 设计口径以它为准 |
-| `docs/ADR.md` | 本库落地时的取舍与代价（D1–D16） | 与本库代码冲突时以它为准；与设计规范冲突时以设计规范为准 |
+| 设计规范：`/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini-cartesian-teleop/docs/alohamini-control/Alohamini-control-design.md`（自标 SSOT，位于已退役仓库，未迁入本库） | 历史设计来源：接口契约、状态机、决策 D001–D018；Gate A–E 已归档，不再是现行验收口径 | 不参与优先级：历史设计来源与溯源参考 |
+| `docs/ADR.md` | 本库落地时的取舍与代价（D1–D17） | 与本库代码冲突时以它为准；与设计规范冲突时以本库为准，差异记入 `docs/ADR.md`（D17） |
+| `docs/acceptance-baseline.md` | 验收口径（V01–V13）：逐条要求、软件证据、实机证据与判据 | 验收以它为准，是唯一验收口径；退役仓库那份按臂归档的 Gate A–E 已由它替代（D17） |
 | `docs/s4-field-smoke.md` | 现场逐条命令、判据、产物、退出码 | 现场怎么执行以它为准 |
 | `docs/field-results.md` | 现场实际取到的结论与数字，按时间倒序，每条给证据文件 | 现场拿到了什么以它为准；数字与本文第 4.4 节或现场手册不一致时，以它引的证据文件为准 |
 | `docs/library-guide.md` | 配置覆盖规则、能力探测与单位换算、控制层、公开 API、代码约束与机器守卫 | 接口与行为以它为准 |
@@ -120,7 +121,7 @@
 
 | 名字 | 出处 | 指什么 |
 | --- | --- | --- |
-| Gate A–E | 设计规范第 9 节 | 模型门槛：标定与换算的模型正确性 |
+| Gate A–E | 设计规范第 9 节 | 模型门槛：标定与换算的模型正确性。**已归档**：Gate 系统与设计规范 D018 定下的归档 JSON 格式在本库无承载物，不再用作准入记录，验收由 V01–V13 替代（`docs/ADR.md` D17） |
 | Gate A–F | `benchmarks/alohamini_io/measure_latency.py` 的代码运动门禁 | 运行时门禁：这次测量能不能发命令 |
 
 两组不要混用。

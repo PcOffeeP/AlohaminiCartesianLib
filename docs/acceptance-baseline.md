@@ -32,6 +32,10 @@
 
 注意区分两处同名的 Gate：本文说的 Gate A–E 指旧归档；`docs/s4-field-smoke.md` 第 1 节那六道 Gate A–F 是 `benchmarks/alohamini_io/measure_latency.py` 里的运行时门禁，是代码里的检查，不是归档。
 
+**Gate A–E 归档为什么不作准入记录（已决）**：Gate 系统连同设计规范 D018 定下的归档 JSON 格式（`docs/alohamini-control/gates/<side>-gate-<letter>.json`，`schema_version` 1，`tools/alohamini_gate_record.py` 校验）已删除。归档工具不再存在，归档格式无法产出，所以 Gate A–E 不能作为准入记录使用，由本基线（V01–V13）替代。这是已决结论，出处 `docs/ADR.md` D17，不是暂定项。
+
+**本基线未覆盖的缺口：按臂资格档案**：V01–V13 里没有「哪条臂已通过受控试动」的按臂档案。现状是左臂部分通过、右臂完全未测。左臂的数字见 V01 行的原值：`arm_left_wrist_roll` 达成 `87.9%`、`settled=True`；`arm_left_shoulder_pan` `5.9%` 与 `8.8%`、`arm_left_shoulder_lift` `13.2%`，全部 `settled=False`；右臂未测（V02 行同样记「未取」）。若将来需要按臂资格判定，应另立条目，而不是复活 Gate 归档格式。这个缺口不占 V 编号，也不预留占位编号。
+
 ### 2.2 什么时候算关闭
 
 一条算关闭，要同时满足三件事：
