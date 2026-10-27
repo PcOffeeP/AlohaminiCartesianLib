@@ -67,7 +67,7 @@ git log --oneline -3                    # 最近提交
 
 ## 8 相关位置
 
-- 决策记录：`docs/ADR.md`（D1–D13）
+- 决策记录：`docs/ADR.md`（D1–D14）
 - 现场实施：`docs/s4-field-smoke.md`（S4 到现场的逐条命令、判据与产物）
 - 现场结果：`docs/field-results.md`（按时间倒序的结论与数字；查现场到底拿到了什么，先看这里，再看证据目录原文件）
 - 迁移归档：`docs/archive/migration-backlog.md`（迁移已在 v0.4.0 完成）

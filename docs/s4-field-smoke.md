@@ -665,7 +665,7 @@ run 4.4b-load-check-deploy uv run --no-sync python -c "from pathlib import Path;
 
 | 脚本 | 码 | 含义 |
 | --- | --- | --- |
-| 两者 | 2 | 参数解析失败（`--samples < 1`、`--rate-hz <= 0`、`--control-hz` 非有限或小于 1、`--delta-deg <= 0`、`--settle-tolerance-deg` 不小于有效 delta 等），不经过任何 `EXIT_*` 常量；其中 `--rate-hz`、`--control-hz`、`--host-loop-hz`、`--timeout-s`、`--settle-timeout-s`、`--settle-tolerance-deg`、`--delta-deg` 七项一律把有限性与符号一起查，非有限值（`nan` / `inf`，以及 `float()` 后变成 `inf` 的 `1e400`）与非正值都落 `2`；`capture` 的 `--timeout-s` 是同一形状的校验。合法预算在运行中到期不走 `2`：`capture` 落 `4`，`measure` 的 rtt 落 `7`、tracking 落 `1` |
+| 两者 | 2 | 参数解析失败，一律 `2`，不经过任何 `EXIT_*` 常量；所有判定都在打开任何 socket 与调用 `client_factory(...)` 之前完成。`measure`（rtt 与 tracking 共用同一个 `parse_args`，rtt 也查这些旋钮）：argparse 自身产生的用法错误 —— 未知选项、缺少 `--host`、`--mode` 不在 `rtt`/`tracking`、任一 `type=` 转换失败（`--port` / `--samples` / `--request-window` / `--steps` 非整数，或任一 `type=float` 选项不是可解析的数值文本；`--csv` 的 `type=Path` 对命令行字符串不会抛，不在此列）；整数下界 3 项 —— `--samples < 1`、`--request-window < 1`、`--steps <= 0`；「有限且带符号」同查 7 项 —— `--rate-hz`（有限且 `> 0`）、`--control-hz`（有限且 `>= 1`）、`--host-loop-hz`（有限且 `> 0`）、`--timeout-s`（有限且 `> 0`）、`--settle-timeout-s`（有限且 `> 0`）、`--settle-tolerance-deg`（有限且 `>= 0`，`0` 合法即最严格设置）、`--delta-deg`（有限且 `> 0`），非有限值（`nan` / `inf`，含 `float()` 后变成 `inf` 的 `1e400`）与不满足符号条件的值都落 `2`；交叉校验 1 项 —— `--settle-tolerance-deg >= resolve_delta_deg(args)`（与钳到 1.0° 上限之后的有效 delta 比较）。`capture` 的数值校验只有 2 项 —— `--samples < 1`、`--timeout-s` 有限且 `> 0`（不查 `--rate-hz` / `--control-hz` 之类），另加同一形状的 argparse 用法错误（未知选项、缺少 `--host`、`--port` 非整数）。以上为 `2` 的全部触发点。合法预算在运行中到期不走 `2`：`capture` 落 `4`，`measure` 的 rtt 落 `7`、tracking 落 `1` |
 | capture | 0 | payload 已写盘 |
 | capture | 3 | 建客户端、`connect()` 或观测传输失败 |
 | capture | 4 | `--timeout-s` 到期仍不够 `--samples` |
