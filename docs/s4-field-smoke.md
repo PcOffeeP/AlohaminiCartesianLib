@@ -867,11 +867,11 @@ $S4DIR/                       # = ~/pi-workspace/alohamini-cartesian-teleop/evid
 | `settled` | 是否在容差内稳住 |
 | `note` | `ok`、`settle budget exhausted`、`interrupted` 或 `aborted: <原因>` |
 
-### tracking 模式 sidecar CSV：safety 快照（8 列）
+### tracking 模式 sidecar CSV：safety 快照（9 列）
 
 `--mode tracking` 除主 CSV 外还会写第二份文件：safety 快照 sidecar（贴着主文件写的副产物）。主 CSV 仍是 14 列、一行一步；sidecar 是长表，**每帧每电机一行**。安全面为何单独成册而不进 14 列，见 `docs/ADR.md` D18。
 
-**文件名规则**（`safety_csv_path`，`benchmarks/alohamini_io/measure_latency.py:1234`）：与主 CSV 同目录，主文件名去掉尾部 `.csv` 再加 `-safety.csv`。
+**文件名规则**（`safety_csv_path`，`benchmarks/alohamini_io/measure_latency.py:1256`）：与主 CSV 同目录，主文件名去掉尾部 `.csv` 再加 `-safety.csv`。
 
 | 主 CSV | 对应 sidecar |
 | --- | --- |
@@ -881,7 +881,7 @@ $S4DIR/                       # = ~/pi-workspace/alohamini-cartesian-teleop/evid
 
 **产生条件**：只在 `--mode tracking` 产生；`--mode rtt` 不产生（该模式不读 `latest_safety_status`）。
 
-**8 列**（`SAFETY_CSV_FIELDS`，`:590`，顺序固定）：
+**9 列**（`SAFETY_CSV_FIELDS`，`:606`，顺序固定）：
 
 | 列 | 含义 |
 | --- | --- |
@@ -893,6 +893,7 @@ $S4DIR/                       # = ~/pi-workspace/alohamini-cartesian-teleop/evid
 | `requested_target` | 厂商帧 `requested_targets` 的该电机项，即 `_arm_goal_positions`（源码阅读：`alohamini.py:987`，该表在 `:895-896` 写入）。写入点在 `ensure_safe_goal_position`（`alohamini.py:872-896`）**之后**、电流限幅（`_limit_gripper_goal_by_current` / `_limit_joint_goal_by_current`，`:897-905`）**之前**。单位是 action 键的归一化单位，不是度。被电流限幅钳过时与本行的 `accepted_target` 不相等；被 `max_relative_target` 相对限幅改过时两列都是改后值、可能仍相等（盲区见下面判读第 3 条） |
 | `accepted_target` | Host 实际采纳的目标，单位同上（`_arm_sent_positions`，`alohamini.py:988`） |
 | `hold_active` | 该电机是否在 Host 的 hold 表 `joint_holds` 里。**盘上写法是 Python 字面量 `True` / `False`**（`write_csv` 把布尔原样交给 `csv.writer`，落盘是 `str(True)` 的文本），不是 `1`/`0`，也不是空/非空；`joint_holds` 不可读（不是容器）时这一格为空。下游按字符串解析时按 `True` / `False` 这两个词判，不要用真值判断（`"False"` 是非空字符串，按真值判会读反）。**钉住的 vendor（`ec65318f`）上恒 `False`**，成因与后果见下面「怎么用它判肩部」 |
+| `target_source` | **整帧属性**：该帧的目标由哪一层给出，取值 `none` / `command` / `watchdog` / `protection`（`alohamini_host.py:261`/`:330`/`:357`/`:373`/`:392`）。同一 `sample_sequence` 的每一行同值；缺失或不在四值之内（包括空串、未知字符串）时这一格为空——空格是「这帧没说」，`none` 是「这帧说没有层产出目标」，两者不混读。因 `hold_active` 在现场恒 `False`，判「肩部是否被扣住」要看这一列（`protection` 即保护路径接管）与 `current_ma` 走势（`docs/ADR.md` D18） |
 
 **长表语义**：一行 = 一个（帧, 电机）。同一 `sample_sequence` 的若干行属同一时刻，组内 `step_index` 与 `t_monotonic_s` 相同。行按帧到达顺序排列，组内按帧自己列电机的顺序。一帧 18 个电机就是 18 行。
 
@@ -912,7 +913,7 @@ $S4DIR/                       # = ~/pi-workspace/alohamini-cartesian-teleop/evid
 
 计数取自 sidecar 自己的行（`_safety_frame_counts`），警告与文件不会互相矛盾：`frames` 是本次记录的帧数，`frames_with_motor_table` 是其中至少带一个电机名的帧数，差值是空 `motor` 帧数。判据是**整轮计数**而不是「开局探一次」：只探一次的话，4 帧里坏 3 帧会静默通过。
 
-sidecar 写盘失败（`OSError`）也只打一条自己的警告，**退出码不变**：主 CSV 才是主产物，判据顺序（hold 失败 > 写失败 > 中止）只看主 CSV。**这两件事不要混**：「最多一条」只约束降级本身（两个分支互斥）；写盘失败是另一件事实，同一次运行既降级又写盘失败时，stderr 会有两条——一条降级、一条写盘，各自说的是不同的事。
+sidecar 写盘失败（`OSError`）也只打一条自己的警告，**退出码不变**：主 CSV 才是主产物，判据顺序（hold 失败 > 写失败 > 中止）只看主 CSV。**这几件事不要混**：「最多一条」只约束降级本身（两个分支互斥）；写盘失败是另一件事实。一次运行**合法可出现三条 stderr**：① safety 面降级警告（分支 A 或 B，最多一条）② timing 面回落点名（sidecar 的 `t_monotonic_s` 或 90% 交叉点的到达时刻回落到轮询时钟，整轮一条；Pi 上 vendor 不发布 `latest_request_timing`，所以只要这轮至少记录到一帧就会打；「在记录到任何新帧之前就中止 → 不会打」只在不含交叉点置位的路径上成立，因为 90% 交叉点那一处置位与 `observation_sequence` 无关，见 `docs/ADR.md` D18 第 11 条与已知代价第 2 条）③ sidecar 写盘失败警告。timing 提示与 safety 降级那一对**互斥分支**互不抑制、可区分（safety 的两条彼此是 `if` / `elif`，最多一条）：回落点名讲的是 `latest_request_timing`、不含 `latest_safety_status`，落点也是独立的一条 `if` 而非降级互斥链的一支。回落点名是「这一列是什么」的说明，**不是故障**，不要按故障处理。
 
 **体量与内存**：行数 = 记录帧数 × 电机数（18 电机时就 ×18）。帧数随 `--steps`、`--settle-timeout-s`、`--control-hz` 增长；行在内存里攒到跑完再写盘，与主 CSV 同一种做法。按 50 Hz × 每步 1 s 的 settle 预算算术推算，20 步约 1000 帧 × 18 电机 ≈ 1.8 万行（推算，非实测）。跑长参数前先估这一笔。
 
@@ -920,7 +921,7 @@ sidecar 写盘失败（`OSError`）也只打一条自己的警告，**退出码�
 
 1. **先读 `hold_active` 的成因，别把它当判据**。钉住的 vendor（本地 fork HEAD `ec65318f`，Pi 上跑的就是它）里 `_joint_hold_goal` **没有写入点**：`alohamini.py:298` 初始化为 `{}`，`:985`/`:1076`/`:1088`/`:1128`/`:1131` 只读或 pop。所以 `joint_holds` 恒为空，`hold_active` 在现场恒 `False`。这个 `False` 的诚实含义是「可读的 hold 表没列这个电机」，**不是**「确认没被扣过」。**因此这一列不能回答「肩部目标是否被 hold 扣住」**；把全列 `False` 读成「没被扣」是误读。上述是源码阅读结论（本地 fork HEAD `ec65318f` 已核对），不是现场读数。
 2. **看 `current_ma` 的逐帧走势**。按 `sample_sequence` 从小到大、固定一个 `motor` 取序列，与主 CSV 同一步的 `measured_deg − baseline_deg` 对照。判据是「持续非零且随步进不回落」：同一步内连续 ≥ 2 帧 `current_ma` 高于静止态基线，而该步位移不足 1 tick（0.0879°）。注意基线本身不可靠：静止态实测 18 个电机全为 `0.0`、偶见 `6.5`（本节「电流字段不可用」），所以「多少 mA 算高」没有现场标定值，只有相对比较可用（例如与同轮能跟随的 `arm_left_wrist_roll` 交叉比对）。这一条未验证。
-3. **比 `requested_target` 与 `accepted_target`**（列定义见上面 8 列表）。同一行内两者不相等，说明 Host 收到的目标与它真正采纳的目标不同，即目标在半路被改过（电流限幅是两列之间那一道）；两者相等只说明这一次没被改，不说明从没被扣过。**盲区**：`max_relative_target` 的相对限幅由 `ensure_safe_goal_position`（`alohamini.py:872-896`）执行，早于 `_arm_goal_positions.update`（`:895-896`），所以在 `requested_target` 与 `accepted_target` 的**上游**——它改过的目标在两列里都是改后的值，两者仍可能相等，sidecar 看不到这一道。该参数默认 `None`（`config_alohamini.py:79`，等于不启用），Pi 上的实际取值**未验证**。
+3. **比 `requested_target` 与 `accepted_target`**（列定义见上面 9 列表）。同一行内两者不相等，说明 Host 收到的目标与它真正采纳的目标不同，即目标在半路被改过（电流限幅是两列之间那一道）；两者相等只说明这一次没被改，不说明从没被扣过。**盲区**：`max_relative_target` 的相对限幅由 `ensure_safe_goal_position`（`alohamini.py:872-896`）执行，早于 `_arm_goal_positions.update`（`:895-896`），所以在 `requested_target` 与 `accepted_target` 的**上游**——它改过的目标在两列里都是改后的值，两者仍可能相等，sidecar 看不到这一道。该参数默认 `None`（`config_alohamini.py:79`，等于不启用），Pi 上的实际取值**未验证**。
 
 三类判读结论，判据写成可以逐行核的形式（不用感觉）：
 
@@ -930,7 +931,7 @@ sidecar 写盘失败（`OSError`）也只打一条自己的警告，**退出码�
 | 过流但无进展 | 该电机在该步内 `current_ma` 连续 ≥ 2 帧高于静止态基线，且该步 `measured_deg − baseline_deg` < 0.0879° | 基线只有静止态读数（`0.0` / `6.5`），「高于」的阈值无现场标定值 |
 | 两条都不成立 | `requested_target == accepted_target` 全段成立，且 `current_ma` 与静止态基线同量级 | 结论只覆盖「Host 安全面没留下痕迹」，不排除伺服侧或机械侧原因 |
 
-还有一个更直接的痕迹本 sidecar 没记：Host 安全载荷里的 `target_source`（取值 `none` / `command` / `watchdog` / `protection`，`alohamini_host.py:261`/`:330`/`:357`/`:373`/`:392`），它点名目标是谁给的，`protection` 就是保护路径接管。该键本轮未纳入 sidecar，作为待办记在 `TODO.md` 的跨阶段工程债里。
+该 sidecar 直接记下了 Host 安全载荷里的 `target_source`（末列，取值 `none` / `command` / `watchdog` / `protection`），它点名目标是谁给的，`protection` 就是保护路径接管——这是目前最直接的「目标被扣住」痕迹，判读时与 `current_ma` 走势同看。
 
 ## 11 验收标准
 

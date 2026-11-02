@@ -262,7 +262,14 @@ tracking run writes it to a sidecar beside the tracking CSV
 (``safety_csv_path``: ``tracking-<utc>-safety.csv``), one row per motor per
 FRESH frame (``safety_frame_rows``).  The tracking table itself is frozen at its
 14 columns -- downstream evidence files parse it as 14 columns -- so the safety
-snapshot never becomes a column of it.
+snapshot never becomes a column of it.  The sidecar carries nine columns: the
+frame coordinates, the motor and its current, the requested / accepted target,
+the hold flag and, last, ``target_source`` (a whole-frame attribute: which layer
+produced that frame's targets, one of ``none`` / ``command`` / ``watchdog`` /
+``protection``, empty when the frame says nothing usable).  ``hold_active`` is
+structurally ``False`` on the pinned vendor client, which is why the column that
+answers "was this target held back" is ``target_source`` read together with the
+current trend (``docs/ADR.md`` D18).
 
 "Fresh" is the liveness signal above: rows are booked only on a frame whose
 ``observation_sequence`` grew, at both recording sites (the step-start
@@ -271,7 +278,12 @@ row.  ``t_monotonic_s`` is the frame's arrival stamp
 (``latest_request_timing["received_monotonic_s"]``, ``_arrival_monotonic_s``)
 with the poll clock of that observation as its fallback; the sidecar adds no
 clock read of its own, so the pacing, the settle budgets and the achieved rates
-keep being computed from exactly the readings they used before.
+keep being computed from exactly the readings they used before.  A run that had
+to fall back names it on stderr exactly once -- one line for the whole run, not
+one per frame -- saying that at least one of its ``t_monotonic_s`` stamps is the
+poll clock because ``latest_request_timing`` could not answer; a run whose timing
+face answered every frame stays silent, and the notice never names the safety
+face, so it stays distinguishable from the two safety warnings below.
 
 Size: one row per motor per fresh frame, so the number of rows grows with
 ``frames x motors``, and the frames grow with ``--steps``, ``--settle-timeout-s``
@@ -587,6 +599,10 @@ TRACKING_CSV_FIELDS = (
 # (``safety_frame_rows``).  Deliberately NOT appended to ``TRACKING_CSV_FIELDS``:
 # that table is frozen at 14 columns because downstream evidence files parse it
 # as 14 columns, so the safety snapshot gets its own file (``safety_csv_path``).
+# ``target_source`` is the ninth and last column, appended after ``hold_active``:
+# ``hold_active`` is structurally ``False`` on the pinned vendor client (nothing
+# writes ``joint_holds``), so it cannot answer "is this joint being held back";
+# the whole-frame ``target_source`` plus the ``current_ma`` trend can.
 SAFETY_CSV_FIELDS = (
     "step_index",
     "sample_sequence",
@@ -596,7 +612,13 @@ SAFETY_CSV_FIELDS = (
     "requested_target",
     "accepted_target",
     "hold_active",
+    "target_source",
 )
+# The four values the vendor frame may carry in ``target_source`` (a WHOLE-frame
+# attribute: which layer produced this frame's targets).  Only these four strings
+# are written to the sidecar; anything else is an empty cell, never a guess and
+# never a defaulted value (``docs/ADR.md`` D18).
+TARGET_SOURCE_VALUES = frozenset({"none", "command", "watchdog", "protection"})
 
 # Base body velocities are pinned to zero in every command: a command that
 # omits them would leave the base chasing whatever was last sent.
@@ -2544,6 +2566,38 @@ def _safety_hold_flag(face: Any, motor: str) -> bool | None:
         return None
 
 
+def _safety_target_source(face: Any) -> str | None:
+    """Which layer produced the frame's targets, or ``None`` when it says nothing usable.
+
+    ``target_source`` is a WHOLE-frame attribute of the vendor frame, not a
+    per-motor one: the host stamps which layer produced the targets of this frame
+    (``none`` / ``command`` / ``watchdog`` / ``protection``,
+    ``TARGET_SOURCE_VALUES``), so every row of a frame carries the same value.
+
+    Only those four strings are written.  Everything else -- a frame without the
+    key, a value the frame cannot answer, a ``bool``, a number, a list, an empty
+    string, or a string the vendor never sends -- leaves the cell EMPTY, and an
+    empty cell is not the same statement as ``none``: ``none`` is the frame saying
+    "no layer produced these targets", an empty cell is "this row has no source to
+    report".  A defaulted read (``getattr`` / ``dict.get`` with a fallback) would turn
+    the second into the first, so the key is read as it is and the VALUE is what
+    gets checked.
+
+    Never raises, for the same reason as every other read of this face: it is client
+    state, and a proxy whose subscript raises is a corrupt frame, not a reason to
+    lose the run.
+    """
+    if not isinstance(face, Mapping):
+        return None
+    try:
+        value = face["target_source"]
+    except Exception:  # absent key, or a mapping whose subscript raises
+        return None
+    if not isinstance(value, str) or value not in TARGET_SOURCE_VALUES:
+        return None
+    return value
+
+
 def _safety_row(
     *,
     step_index: Any,
@@ -2554,8 +2608,9 @@ def _safety_row(
     requested_target: float | None,
     accepted_target: float | None,
     hold_active: bool | None,
+    target_source: str | None,
 ) -> dict[str, Any]:
-    """One sidecar row: exactly the eight ``SAFETY_CSV_FIELDS`` keys, no more.
+    """One sidecar row: exactly the nine ``SAFETY_CSV_FIELDS`` keys, no more.
 
     A single construction site for both shapes ``safety_frame_rows`` returns, so an
     insert into the sidecar can never come out with a field missing (``write_csv``
@@ -2571,6 +2626,7 @@ def _safety_row(
         "requested_target": requested_target,
         "accepted_target": accepted_target,
         "hold_active": hold_active,
+        "target_source": target_source,
     }
 
 
@@ -2601,6 +2657,10 @@ def safety_frame_rows(
     floats (``_safety_number``: ``bool`` and non-numbers are no measurement), and
     ``hold_active`` is membership in ``joint_holds`` (``True``/``False`` for a real
     container, ``None`` when the value is no container -- ``_safety_hold_flag``).
+    ``target_source`` is the frame's own source stamp (``_safety_target_source``):
+    a whole-frame attribute, so every row of the frame carries the same value on
+    both shapes -- the degraded ``motor=None`` row included, because the frame did
+    say which layer produced its targets even when its motor table is unreadable.
 
     A cell stays empty (``None``, i.e. an empty CSV cell) when the frame carries no
     usable value, and it is never filled with ``0``.  That is a refusal to
@@ -2626,6 +2686,7 @@ def safety_frame_rows(
         # numeric motor name beside the real ones would leave the operator unable
         # to tell which motor a row belongs to, so the whole frame degrades.
         motors = []
+    target_source = _safety_target_source(face)
     if not motors:
         return [
             _safety_row(
@@ -2637,6 +2698,7 @@ def safety_frame_rows(
                 requested_target=None,
                 accepted_target=None,
                 hold_active=None,
+                target_source=target_source,
             )
         ]
     requested_targets = _safety_mapping(face, "requested_targets")
@@ -2651,6 +2713,7 @@ def safety_frame_rows(
             requested_target=_safety_target(requested_targets, motor),
             accepted_target=_safety_target(accepted_targets, motor),
             hold_active=_safety_hold_flag(face, motor),
+            target_source=target_source,
         )
         for motor in motors
     ]
@@ -2694,6 +2757,7 @@ def _tracking_summary(
     elapsed_s: float = float("nan"),
     safety_rows: Sequence[Mapping[str, Any]] = (),
     safety_missing: Sequence[str] = (),
+    timestamp_fallback: bool = False,
 ) -> dict[str, Any]:
     """Assemble the tracking report from the rows recorded so far.
 
@@ -2710,6 +2774,12 @@ def _tracking_summary(
     the caller writes the sidecar beside the tracking CSV, and so a summary read by
     a test or a caller cannot silently lose the probe result that explains an empty
     sidecar.
+
+    ``timestamp_fallback`` is the run-wide answer to "did any recorded frame (or the
+    90 % crossing) have to be stamped with the poll clock instead of
+    ``latest_request_timing["received_monotonic_s"]``".  It is a property of the run
+    and not of a frame, so ``_run_tracking_mode`` names it on stderr exactly once; a
+    run whose timing face answered every frame carries ``False`` and warns nothing.
     """
     rise_times_s = [row["rise_90_time_s"] for row in rows if row["rise_90_time_s"] is not None]
     settle_errors_deg = [abs(row["error_deg"]) for row in rows if row["settled"]]
@@ -2730,6 +2800,7 @@ def _tracking_summary(
         "hold_error": hold_error,
         "safety_rows": list(safety_rows),
         "safety_missing": list(safety_missing),
+        "timestamp_fallback": timestamp_fallback,
     }
 
 
@@ -2838,7 +2909,11 @@ def run_tracking_steps(
     reading the caller had already taken for that observation -- no clock read is
     added here, so the pacing, the settle budgets and the achieved rates keep being
     judged against exactly the readings they were judged against before the sidecar
-    existed.
+    existed.  The fallback is a property of the whole run, not of a frame: as soon
+    as one recorded frame (or the 90 % crossing) had to be stamped by the poll
+    clock, ``summary["timestamp_fallback"]`` is ``True`` and ``_run_tracking_mode``
+    names it on stderr exactly once, instead of repeating the note on every frame
+    or leaving the operator to guess why the stamps look like poll instants.
     """
     sleep_fn = time.sleep if sleep is None else sleep
     clock_fn = time.monotonic if clock is None else clock
@@ -2877,6 +2952,11 @@ def run_tracking_steps(
     # over by a defaulted ``getattr``.
     safety_missing = missing_safety_capabilities(client)
     safety_rows: list[dict[str, Any]] = []
+    # Run-wide, not per frame: set as soon as one recorded frame (or the 90 %
+    # crossing) had to be stamped with the poll clock because the timing face could
+    # not answer an arrival stamp.  It travels to the caller through the summary so
+    # ``_run_tracking_mode`` can name the fallback once for the whole run.
+    timestamp_fallback = False
 
     def _pace_command(now_s: float) -> float:
         """Wait for the next command slot and return the stamp of that write.
@@ -2930,7 +3010,7 @@ def run_tracking_steps(
         pacing, the settle budgets and the achieved rates are arithmetic over that
         clock -- and so ``step_index`` is the step the frame was polled in.
         """
-        nonlocal last_sequence, stale_polls, observations
+        nonlocal last_sequence, stale_polls, observations, timestamp_fallback
         state = client.get_observation(include_cameras=False)
         observations += 1
         # Kept even when the frame is a cached repeat: the closing hold has to
@@ -2947,6 +3027,8 @@ def run_tracking_steps(
             # are this function, so the step-start frame and every settle-loop poll
             # are covered alike.
             arrival_s = _arrival_monotonic_s(client)
+            if arrival_s is None:
+                timestamp_fallback = True
             safety_rows.extend(
                 safety_frame_rows(
                     _safety_face(),
@@ -3062,6 +3144,8 @@ def run_tracking_steps(
                         # stamped by the client; ``now_s`` was read before the
                         # blocking read and is one observation too early.
                         reached_received_s = _arrival_monotonic_s(client)
+                        if reached_received_s is None:
+                            timestamp_fallback = True
                         reached_s = now_s if reached_received_s is None else reached_received_s
                     if abs(measured_deg - target_deg) <= settle_tolerance_deg:
                         note = "settled"
@@ -3110,6 +3194,7 @@ def run_tracking_steps(
             elapsed_s=clock_fn() - started_s,
             safety_rows=safety_rows,
             safety_missing=safety_missing,
+            timestamp_fallback=timestamp_fallback,
         )
         if record is not None:
             record["summary"] = summary
@@ -3319,6 +3404,26 @@ def _run_tracking_mode(client: Any, args: argparse.Namespace) -> int:
             f"sidecar {sidecar_path} records empty cells for the motor currents, the requested / "
             "accepted targets and the hold flags on those frames.  The run itself is unaffected: "
             "the tracking CSV, the report and the exit code do not depend on that face.",
+            file=sys.stderr,
+        )
+    # A separate ``if`` and not another branch of the chain above: that chain is
+    # about the *safety* face and its two branches are mutually exclusive, while
+    # this notice is about the *timing* face and may accompany either of them.  One
+    # line for the whole run, never one per frame or per poll: the fallback is a
+    # property of the run, and the operator needs to know once that at least one
+    # of its timestamps -- a sidecar ``t_monotonic_s`` stamp or the 90 % crossing's
+    # arrival instant, not necessarily every one of them -- is a poll instant rather
+    # than the client's arrival stamp.  It names ``latest_request_timing`` and never
+    # ``latest_safety_status``, so the two kinds of line stay distinguishable.
+    if summary.get("timestamp_fallback"):
+        print(
+            f"warning: at least one timestamp of this run is the poll clock, not the client's "
+            f"arrival time: latest_request_timing answered no usable received_monotonic_s for "
+            f"the t_monotonic_s stamp of a safety sidecar row ({sidecar_path}) or for the "
+            "arrival instant of the 90 % rise crossing, so that stamp is the reading taken "
+            "before the blocking read.  The measurement itself is unaffected: no clock read "
+            "was added, and the pacing, the settle budgets and the achieved rates are judged "
+            "against the same readings as before.",
             file=sys.stderr,
         )
     # Same tail-interrupt rule as in rtt mode: the hold is already on the wire, the

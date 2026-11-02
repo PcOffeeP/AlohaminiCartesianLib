@@ -23,7 +23,7 @@
 | D15 | V11 的「帧平滑回退」不做：v1 兼容范围界定为「能解析 + 能换算可落」 | 已接受（自 v0.7.0 起） |
 | D16 | lerobot 依赖声明加版本区间：只支持 `lerobot>=0.6.1,<0.7` | 已接受（自 v0.7.0 起） |
 | D17 | 设计规范定为历史设计来源，本库权威以 ADR 与验收基线为准 | 已接受（自 v0.7.0 起） |
-| D18 | tracking 模式的 safety 快照单独成 sidecar（8 列长表），不进 14 列主表 | 已接受（未发版：`pyproject.toml` 仍为 `0.7.0`；`docs/changelog.md` 尚未记本条，留待发版时补） |
+| D18 | tracking 模式的 safety 快照单独成 sidecar（9 列长表），不进 14 列主表 | 已接受（未发版：`pyproject.toml` 仍为 `0.7.0`；`docs/changelog.md` 尚未记本条，留待发版时补） |
 
 ## D1 依赖形态：独立包，lerobot 作为可选 extra
 
@@ -551,7 +551,7 @@ D1 把 `lerobot` 放在 optional extra `runtime` 里，并且有意只写名字�
 
 相关提交：本轮文档提交（无代码提交）。
 
-## D18 tracking 模式的 safety 快照单独成 sidecar：8 列长表，不进 14 列主表
+## D18 tracking 模式的 safety 快照单独成 sidecar：9 列长表，不进 14 列主表
 
 状态：已接受（未发版：`pyproject.toml` 仍为 `0.7.0`、`git tag -l` 只到 `v0.6.0`，本条随本轮改动落地但不升版；`docs/changelog.md` 尚未记本条，留待发版时补）
 
@@ -566,8 +566,8 @@ D1 把 `lerobot` 放在 optional extra `runtime` 里，并且有意只写名字�
 
 ### 决定
 
-1. **单独成 sidecar（贴着主文件写的副产物）**。`--mode tracking` 在同目录额外写一份 `<主文件名>-safety.csv`（`safety_csv_path`，`benchmarks/alohamini_io/measure_latency.py:1234`）：与主 CSV 同目录，主文件名去掉尾部 `.csv` 再加 `-safety.csv`；名字里的点保留（`a.b.csv` → `a.b-safety.csv`），不以 `.csv` 结尾的名字也照加。主 CSV 仍是 14 列，`--mode rtt` 不产生 sidecar。
-2. **8 列，顺序固定**（`SAFETY_CSV_FIELDS`，`:590`）：`step_index`、`sample_sequence`、`t_monotonic_s`、`motor`、`current_ma`、`requested_target`、`accepted_target`、`hold_active`。
+1. **单独成 sidecar（贴着主文件写的副产物）**。`--mode tracking` 在同目录额外写一份 `<主文件名>-safety.csv`（`safety_csv_path`，`benchmarks/alohamini_io/measure_latency.py:1256`）：与主 CSV 同目录，主文件名去掉尾部 `.csv` 再加 `-safety.csv`；名字里的点保留（`a.b.csv` → `a.b-safety.csv`），不以 `.csv` 结尾的名字也照加。主 CSV 仍是 14 列，`--mode rtt` 不产生 sidecar。
+2. **9 列，顺序固定**（`SAFETY_CSV_FIELDS`，`:606`）：`step_index`、`sample_sequence`、`t_monotonic_s`、`motor`、`current_ma`、`requested_target`、`accepted_target`、`hold_active`、`target_source`。`target_source` 是末列，追加在 `hold_active` 之后；原有 8 列的顺序与含义一字未动（主 CSV 与既有证据文件按位置读，只有 sidecar 长了这一列）。加这一列的理由：`hold_active` 在钉住的 vendor 客户端上**结构上恒为 `False`**（`_joint_hold_goal` 只有 `alohamini.py:298` 的初始化与 `:985`/`:1076`/`:1088`/`:1128`/`:1131` 的读取/pop，无写入点，故 `joint_holds` 恒为 `{}`），因此它答不了「肩部是否被扣住」；判「是否被扣住」以 `target_source`（`none` / `command` / `watchdog` / `protection`）与 `current_ma` 的走势为准。取值口径：`target_source` 是**整帧属性**（`face["target_source"]`，不是逐电机属性），同一帧的每一行填同一个值；缺失、读不出、或值不是这四个字符串之一（非字符串、`bool`、数字、列表、未知字符串一律算）时记 `None`，即空单元格——不猜、不补默认值、不写空串。空格是「这帧没说到」，`none` 是「这帧说没有层产出目标」，两者不得混读。降级行（`currents_ma` 无电机表 → 唯一 `motor=None` 行）也填帧值，因为它不是逐电机属性。
 3. **长表，一帧一电机一行**，不摊成宽表。理由：厂商帧的电机集合由帧自己决定（`safety_frame_rows` 按 `face["currents_ma"]` 的键集合出行），宽表得预先知道列名；帧只带 3 个电机时宽表要么留空列、要么改表头。代价对比：
 
    | 形态 | 行数 | 加一个电机的代价 | 加一个指标的代价 | 本库的选择 |
@@ -575,15 +575,16 @@ D1 把 `lerobot` 放在 optional extra `runtime` 里，并且有意只写名字�
    | 长表（每帧每电机一行） | 帧数 × 电机数 | 每帧多一行 | 加一列 | 采用 |
    | 宽表（每帧一行，电机与指标进列名） | 帧数 | 加 4 列（该电机的 4 个值列） | 加 18 列（每个电机一列） | 不采用 |
 
-   8 列不是「每个电机 8 列」：其中 3 列是帧级列（`step_index` / `sample_sequence` / `t_monotonic_s`，宽表里也只有这一组，不随电机增加）、1 列是电机名列（`motor`，宽表里进列名、不单独占列），真正随电机增加的只有 `current_ma` / `requested_target` / `accepted_target` / `hold_active` 这 4 个值列。所以宽表加一个电机是加 4 列；加一个指标才是每个电机各加一列（18 电机 = 18 列）。
+   9 列不是「每个电机 9 列」：其中 3 列是帧级列（`step_index` / `sample_sequence` / `t_monotonic_s`，宽表里也只有这一组，不随电机增加）、1 列是电机名列（`motor`，宽表里进列名、不单独占列）、`target_source` 也是帧级列（整帧同值，宽表里同样只占一列），真正随电机增加的只有 `current_ma` / `requested_target` / `accepted_target` / `hold_active` 这 4 个值列。所以宽表加一个电机是加 4 列；加一个指标才是每个电机各加一列（18 电机 = 18 列）。
 
 4. **只记新帧**：sidecar 复用 tracking 既有的陈旧检测，只在该次观测的 `observation_sequence` 增长时记行，缓存重复帧不重复记；`_run_tracking_mode` 正式跑之前那次 preflight 观测（读序号取基线）不计行。取舍是「不引入第二套去重判据」——代价是 sidecar 的帧数定义跟着主循环走，主循环判陈旧的口径变了，sidecar 的帧数也跟着变。
-5. **时间列**：`t_monotonic_s` 优先取该帧到达时刻（`latest_request_timing["received_monotonic_s"]`，`_arrival_monotonic_s`，`:2407`），取不到回落到该次观测的轮询时钟读数；不新增时钟读取，所以节拍、settle 预算与达成率仍用改动前那几次读数计算。
-6. **键空间差异**：`currents_ma` / `joint_holds` 的键是裸电机名，`requested_targets` / `accepted_targets` 的键是 `<motor>.pos`（两者分别由 `_arm_goal_positions` / `_arm_sent_positions` 填入，`alohamini.py:987-988`）。`_safety_target`（`:2480`）两种形状都认；同一电机两键并存时**裸名优先**，因为 `motor` 列打的就是裸名，行要由它自己的名字描述。`motor` 已带 `.pos` 时不再二次加后缀。
+5. **时间列**：`t_monotonic_s` 优先取该帧到达时刻（`latest_request_timing["received_monotonic_s"]`，`_arrival_monotonic_s`，`:2429`），取不到回落到该次观测的轮询时钟读数；不新增时钟读取，所以节拍、settle 预算与达成率仍用改动前那几次读数计算。
+6. **键空间差异**：`currents_ma` / `joint_holds` 的键是裸电机名，`requested_targets` / `accepted_targets` 的键是 `<motor>.pos`（两者分别由 `_arm_goal_positions` / `_arm_sent_positions` 填入，`alohamini.py:987-988`）。`_safety_target`（`:2502`）两种形状都认；同一电机两键并存时**裸名优先**，因为 `motor` 列打的就是裸名，行要由它自己的名字描述。`motor` 已带 `.pos` 时不再二次加后缀。
 7. **空单元格，不补 0**：`current_ma` / `requested_target` / `accepted_target` 只在能转成有限数值时写数值，否则留空；`bool` 不算数值（`float(True) == 1.0` 会凭空写出一条 1 mA 的电流）。`0 mA` 读起来像「测到的零电流」、`0` 目标读起来像「Host 采纳过 0」，两者都是伪观测，所以拒绝填充。
 8. **降级判据用整轮计数**，不用「开局探一次」：能力缺失（分支 A，点名缺的属性）与内容不完整（分支 B，点名 `latest_safety_status` 并带 `frames=<int>, frames_with_motor_table=<int>`）两个分支互斥，所以**降级**警告一次运行最多一条（sidecar 写盘失败的警告是另一件事实，见第 9 条，它会在降级警告之外再加一条）；退出码不变，sidecar 照写。理由：部署的客户端属性一直存在（初值 `{}`），只会内容为空，所以「某一时刻探一次」看不到「4 帧里坏 3 帧」这种形态；整轮计数把坏帧数点出来。
 9. **写盘失败只警告**：sidecar 的 `OSError` 打一条 stderr 警告，不落 `EXIT_WRITE_FAILED`——主 CSV 才是主产物，判据顺序（hold 失败 > 写失败 > 中止）只看主 CSV；中断分支尽力重写一次（`after_interrupt=True`）。
 10. **与 D12 的关系**：本 sidecar 给 safety 面单独开列，不顶替任何东西；`latest_control_status` 的读取路径一行未改，`SAFETY_CLIENT_CAPABILITIES` 与 `CLIENT_CAPABILITIES` 是两个并列元组，任一面缺失都不会被另一个面的读数掩盖。
+11. **时间戳回落要点名，整轮恰好一条**：一次运行里只要有至少一个记录帧的 `t_monotonic_s`（或 90% 交叉点的到达时刻）落到轮询时钟，`run_tracking_steps` 就在 `summary["timestamp_fallback"]` 里落下这个事实，由 `_run_tracking_mode` 在 stderr 打一条提示：本轮**至少一处**时间戳是轮询时刻而非客户端到达时间戳——可能是 sidecar 行的 `t_monotonic_s`，也可能是 90% 交叉点的到达时刻，不必然每一处都回落；原因是 `latest_request_timing` 答不出可用的 `received_monotonic_s`。整轮一条、不是每帧或每次轮询一条（回落是运行级事实，不是帧级事实），一个回落都没发生时一条都不打。这条提示是独立的 `if`，不塞进那两个 safety 降级分支的互斥链：safety 降级的两条彼此是 `if` / `elif`，互斥，一次运行最多一条；timing 提示与 safety 降级那一对**互斥分支**互不抑制、可区分，两者可以同时出现（timing 提示讲 `latest_request_timing`、不含 `latest_safety_status`）。点名不改变退出码、abort 判定、节拍、settle 预算与达成率：它只描述 sidecar 的 `t_monotonic_s`，以及主 CSV 里 `received_monotonic_s` 留空、`rise_90_time_s`（及报告里的 `rise_90_ms`）改用轮询戳这件事。
 
 ### 后果
 
@@ -592,18 +593,17 @@ D1 把 `lerobot` 放在 optional extra `runtime` 里，并且有意只写名字�
 **已知代价**
 
 1. **无真机验证**：sidecar 只有离线测试覆盖（`tests/benchmarks/test_measure_latency_safety.py`，假 client），真机上的帧形态、`motor` 空行占比与行数从未观测。
-2. **Pi 上 `t_monotonic_s` 是轮询时刻，不是到达时刻**：厂商客户端只有 `latest_host_timing`、没有 `latest_request_timing`（`docs/ADR.md` D12），`_arrival_monotonic_s` 取不到到达戳，回落到该次观测的轮询时钟。回落静默、无警告、无行内说明。
-3. **`hold_active` 在现场恒 `False`**：钉住的 vendor（本地 fork HEAD `ec65318f`）里 `_joint_hold_goal` 没有写入点（`alohamini.py:298` 初始化，`:985`/`:1076`/`:1088`/`:1128`/`:1131` 只读或 pop），`joint_holds` 恒为 `{}`。`False` 的诚实含义是「可读的 hold 表没列这个电机」，**不是**「确认没被扣过」；因此该列不能用来判「肩部目标是否被过流 hold 扣住」，全列 `False` 不得读成「没被扣」。替代判据是 `current_ma` 的逐帧走势加 `requested_target` 与 `accepted_target` 是否相等。
+2. **Pi 上 `t_monotonic_s` 是轮询时刻，不是到达时刻**：厂商客户端只有 `latest_host_timing`、没有 `latest_request_timing`（`docs/ADR.md` D12），`_arrival_monotonic_s` 取不到到达戳，回落到该次观测的轮询时钟。回落已在 stderr 点名（第 11 条），但触发有条件：Pi 的 vendor 没有 `latest_request_timing`，所以**只要这轮至少记录到一帧，这条提示就会出现**。`timestamp_fallback` 的置位有两处，两处都在 `run_tracking_steps` 里：由 **sidecar 行**触发的那一支只在新帧分支里走（条件 `sequence > last_sequence` 在 `measure_latency.py:3020`，置位在 `:3029-3031`）；另一支在 90% 交叉点（交叉点判定在 `:3142`，置位在 `:3146-3148`），与 `observation_sequence` 无关，陈旧帧上也会走到。因此「在记录到任何新帧之前就中止 → 不会打这条提示」只在**不含交叉点置位**的路径上成立，不是无条件结论。它说明的是「这一列是什么」，不是「这次运行有问题」，不要按故障处理。
+3. **`hold_active` 在现场恒 `False`**：钉住的 vendor（本地 fork HEAD `ec65318f`）里 `_joint_hold_goal` 没有写入点（`alohamini.py:298` 初始化，`:985`/`:1076`/`:1088`/`:1128`/`:1131` 只读或 pop），`joint_holds` 恒为 `{}`。`False` 的诚实含义是「可读的 hold 表没列这个电机」，**不是**「确认没被扣过」；因此该列不能用来判「肩部目标是否被过流 hold 扣住」，全列 `False` 不得读成「没被扣」。替代判据是 `target_source`（`protection` 即保护路径接管）与 `current_ma` 的逐帧走势，再加 `requested_target` 与 `accepted_target` 是否相等。
 4. **整轮计数会把单帧偶发损坏也打成一条警告**：一帧坏、其余全好也告警，可能被读成噪音。
 5. **内存与 CSV 体量随「帧数 × 电机数」增长**：行数 = 记录帧数 × 电机数（18 电机即 ×18），帧数随 `--steps`、`--settle-timeout-s`、`--control-hz` 增长；行在内存里攒到跑完再写盘，与主 CSV 同构。按 50 Hz × 每步 1 s 的 settle 预算算术推算，20 步约 1000 帧 × 18 电机 ≈ 1.8 万行（推算，非实测）。
-6. **以下键有意不记**：本 sidecar 只覆盖 8 列，`latest_safety_status` 里的下列键本轮**有意**未记，每条写明为什么不记、以及它可能是谁的证据。
-   - `target_source`（`none` / `command` / `watchdog` / `protection`，`alohamini_host.py:261`/`:330`/`:357`/`:373`/`:392`）：不记是因为它按帧给一个枚举，侧写它要再增一列、且本轮范围只定在每电机那 4 个值列；它可能是该 vendor 版本过流路径（`protection` 接管）的直接证据。作为待办记在 `TODO.md` 的跨阶段工程债。
+6. **以下键有意不记**：本 sidecar 只覆盖 9 列，`latest_safety_status` 里的下列键本轮**有意**未记，每条写明为什么不记、以及它可能是谁的证据。
    - `joint_hold_events`（`alohamini.py:984` 发的是 `self._joint_hold_events`）：不记是因为它是全轮累计计数、不分电机，长表的行放不下一个整轮量；它是「这轮发生过关节 hold」的证据，能把「从没 hold 过」与「hold 过又释放了」分开。
    - `watchdog_active`（`alohamini_host.py:386`，初值 `:257`）：不记是因为它是逐帧布尔、与 `hold_active` 同形但语义是命令看门狗接管而非关节 hold 表，混进同一列会把两种「扣住」读成一种；它是「目标被 watchdog 接管」的证据。
    - `watchdog_events`（`alohamini_host.py:387`，初值 `:258`，`:356` 累加）：不记是因为它同样是全轮累计计数、按事件而非按电机；它是「看门狗这轮触发过几次」的证据。
    - `control_owner` / `control_epoch`（`alohamini_host.py:390-391`；`alohamini_client.py:665` 只在键存在时读，所以是「若宿主发布」）：不记是因为它们是控制权归属而不是安全面测量值；它是「同一轮里有另一个客户端抢过控制权」的证据——若 `requested_target` 与主 CSV 的 `cmd_units` 对不上，这一对键能区分「Host 自己改了目标」与「别的客户端下了目标」。
    - `gripper_holds`（`alohamini.py:986` 发的是 `self._gripper_hold_goal`）：**与 `joint_holds` 不同，厂商在 `alohamini.py:1040` 有写入点**（`_limit_gripper_goal_by_current` 里写 `self._gripper_hold_goal[motor] = hold_goal`），所以现场很可能非空，而 `joint_holds` 恒空。不记是因为它与本次要回答的问题（肩部目标是否被扣住）无关，混进同一列还会让读者以为关节也能 hold。它可能是「夹爪接触后按电流 hold 住」的证据。它不影响 `hold_active`：那一列只读 `joint_holds`（`_safety_hold_flag`），夹爪 hold 不会让它变 `True`。
 
-触发重新评估的条件（达成任一条即重新评估）：① 现场首跑后 `current_ma` 与目标列的形态与本文描述不符；② 决定把 `target_source` 纳入 sidecar；③ 厂商换到有 `_joint_hold_goal` 写入点的版本，`hold_active` 重新具备判读价值。
+触发重新评估的条件（达成任一条即重新评估）：① 现场首跑后 `current_ma`、目标列或 `target_source` 的形态与本文描述不符；② 厂商换到有 `_joint_hold_goal` 写入点的版本，`hold_active` 重新具备判读价值。
 
 相关提交：随本次 `feat:` 提交同批落地（提交哈希见 `git log -- docs/ADR.md`）。代码改动在 `benchmarks/alohamini_io/measure_latency.py`，与本条文档同批提交。

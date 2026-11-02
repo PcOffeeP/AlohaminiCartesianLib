@@ -17,9 +17,11 @@ file ships its own scriptable stand-in (``_SafetyFake``), a frozen clock
 Frozen interface (the tests below are the expectation, not a description of an
 implementation):
 
-* ``SAFETY_CSV_FIELDS`` — the eight sidecar columns in this order:
+* ``SAFETY_CSV_FIELDS`` — the nine sidecar columns in this order:
   ``step_index``, ``sample_sequence``, ``t_monotonic_s``, ``motor``,
-  ``current_ma``, ``requested_target``, ``accepted_target``, ``hold_active``.
+  ``current_ma``, ``requested_target``, ``accepted_target``, ``hold_active``,
+  ``target_source`` (`target_source` is appended *after* `hold_active`; the
+  eight columns that came before it keep their position and their meaning).
 * ``SAFETY_CLIENT_CAPABILITIES == ("latest_safety_status",)``.
 * ``TRACKING_CSV_FIELDS`` stays the frozen 14-column table.
 * ``safety_csv_path(csv_path)`` — the main CSV path without its ``.csv`` suffix
@@ -29,6 +31,24 @@ implementation):
 * ``safety_frame_rows(face, *, step_index, sample_sequence, t_monotonic_s)`` —
   pure, **never raises**, one row per motor of ``face["currents_ma"]`` (or
   exactly one row with ``motor=None`` when no usable motor list exists).
+* ``target_source`` is a WHOLE-frame attribute of the vendor frame
+  (``face["target_source"]``), not a per-motor one: every row of a frame carries
+  the same value.  Only the four vendor values (``none``, ``command``,
+  ``watchdog``, ``protection``) are ever written.  A frame without the key, a
+  value that cannot be read, and a value that is not one of those four strings
+  (``bool``, number, list and an unknown string alike) all leave the cell empty —
+  and only that cell: no other column of the row changes, and nothing is
+  defaulted in.  An empty cell is "unavailable", never "none": ``none`` is a
+  vendor statement about the frame, an empty cell is the absence of one.
+* the arrival-stamp fallback is NAMED, once per run: a run that had to stamp at
+  least one recorded frame (or the 90 % crossing) with the poll clock instead of
+  ``latest_request_timing["received_monotonic_s"]`` prints exactly one stderr
+  line saying so — the stamp is the poll instant, not the client's timestamp, and
+  the reason is that face.  One line for the whole run, not one per frame, and
+  its wording is distinguishable from the two safety warnings below: it names
+  ``t_monotonic_s`` / ``latest_request_timing`` and never
+  ``latest_safety_status``.  A run whose timing face answers a finite
+  ``received_monotonic_s`` stays silent.
 * ``run_tracking_steps`` summary carries ``safety_rows`` (rows in arrival order)
   and ``safety_missing`` (the probe result of that run's start).
 * the sidecar is written on the tracking path only; a missing
@@ -101,6 +121,40 @@ this file red):
 * **an unguarded read of the arrival stamp** — ``latest_request_timing[...]`` on
   a face whose readers raise aborts the step as a feedback failure instead of
   falling back to the poll clock (Important 3.2).
+
+Regression intents of the ninth column and the named fallback (same rule: a
+plausible-but-wrong implementation has to turn this file red):
+
+* **one fallback notice per frame or per poll** — the fallback cases count the
+  notices (``== 1``) over a run of 4 unstamped frames, so per-frame wording
+  writes 4 and per-poll wording writes 5;
+* **a fallback notice worded like a safety warning** — the notice may not name
+  ``latest_safety_status``, and the safety-face lines of the same otherwise-clean
+  run have to be 0: two warnings an operator cannot tell apart are one warning;
+* **``getattr(face, ..., None)`` / ``face.get(...)`` with a default** — a
+  defaulted read of ``target_source`` turns "the frame said nothing" into a
+  fabricated value, so the missing-key case fails;
+* **no value check on ``target_source``** — writing ``"manual"``, ``""``, ``5``
+  or ``True`` straight into the column is what the unusable-value cases refuse
+  (``none`` is the honest empty answer, not a placeholder for anything else);
+* **``target_source`` read per motor** — e.g. looked up in ``requested_targets``
+  under ``<motor>.pos``, the shape the two target columns use; the per-motor
+  tables never carry the key, so the whole-frame consistency case fails;
+* **``target_source`` inserted before or inside the other columns** — the frozen
+  nine-column order and the sidecar header pin it directly after
+  ``hold_active``;
+* **the first frame's ``target_source`` reused for the whole run** — the
+  mixed-frame case has one frame carrying ``"command"`` and the next carrying
+  nothing, and each frame's rows have to answer for their own frame.
+* **the degraded ``motor=None`` row losing the frame's ``target_source``** — the
+  frame whose motor table is unreadable is the one an operator reaches for after
+  an over-current, so the corrupt-currents and empty-table cases pin the source
+  on the placeholder row (and only that cell: the rest stays empty);
+* **the poll-clock notice folded into the safety warning's branch** — an
+  ``elif`` on the safety chain silently drops it on exactly the run that hits
+  both faces, so the both-degraded case counts the two notices separately, pins
+  that they are two different stderr lines, and pins that their identifying
+  markers do not overlap (otherwise the two counts are one measurement).
 """
 
 from __future__ import annotations
@@ -184,6 +238,26 @@ def _face_for_poll(index: int) -> dict[str, Any]:
         "watchdog_active": False,
         "watchdog_events": 0,
     }
+
+
+# The four values the vendor frame may carry in ``target_source`` (a whole-frame
+# attribute: which layer produced this frame's targets).
+_TARGET_SOURCE_VALUES = ("none", "command", "watchdog", "protection")
+
+
+def _face_with_source(source: Any = None, *, include: bool = True) -> dict[str, Any]:
+    """A healthy vendor-shaped frame, optionally carrying ``target_source``.
+
+    ``include=False`` builds the frame without the key at all, which is the
+    "this vendor frame does not publish the attribute" shape: the column has to
+    stay empty rather than take a default.  The value is written verbatim,
+    including values the vendor should never send (a ``bool``, a number, a list,
+    an unknown string) -- those are the unusable-value cases.
+    """
+    face = _face_for_poll(0)
+    if include:
+        face["target_source"] = source
+    return face
 
 
 class _FrozenClock:
@@ -466,8 +540,14 @@ def _frame_rows(latency: Any, face: Any, **coordinates: Any) -> list[dict[str, A
 # ===========================================================================
 
 
-def test_safety_csv_fields_should_be_the_frozen_eight_columns(latency: Any) -> None:
-    """The sidecar column tuple is frozen, in order, and free of duplicates."""
+def test_safety_csv_fields_should_be_the_frozen_nine_columns(latency: Any) -> None:
+    """The sidecar column tuple is frozen, in order, and free of duplicates.
+
+    ``target_source`` is the ninth column and sits directly after ``hold_active``;
+    the eight columns before it keep their order and their meaning (the main CSV
+    and the evidence files are parsed by position, only the sidecar grew).
+    """
+    assert isinstance(latency.SAFETY_CSV_FIELDS, tuple)
     assert latency.SAFETY_CSV_FIELDS == (
         "step_index",
         "sample_sequence",
@@ -477,9 +557,18 @@ def test_safety_csv_fields_should_be_the_frozen_eight_columns(latency: Any) -> N
         "requested_target",
         "accepted_target",
         "hold_active",
+        "target_source",
     )
-    assert isinstance(latency.SAFETY_CSV_FIELDS, tuple)
-    assert len(set(latency.SAFETY_CSV_FIELDS)) == 8
+    assert len(latency.SAFETY_CSV_FIELDS) == 9, (
+        f"the sidecar has to be nine columns, got {latency.SAFETY_CSV_FIELDS!r}"
+    )
+    assert latency.SAFETY_CSV_FIELDS[7] == "hold_active", (
+        f"target_source has to be appended after the hold flag: {latency.SAFETY_CSV_FIELDS!r}"
+    )
+    assert latency.SAFETY_CSV_FIELDS[8] == "target_source", (
+        f"target_source has to be the last column: {latency.SAFETY_CSV_FIELDS!r}"
+    )
+    assert len(set(latency.SAFETY_CSV_FIELDS)) == 9
 
 
 def test_tracking_csv_fields_should_still_be_the_frozen_fourteen_columns(latency: Any) -> None:
@@ -607,13 +696,14 @@ def test_missing_safety_capabilities_should_only_probe_the_named_attribute(laten
 
 
 def test_safety_frame_rows_should_return_exactly_the_declared_columns(latency: Any) -> None:
-    """Every row carries the eight declared keys, no more and no less."""
+    """Every row carries the nine declared keys, no more and no less."""
     rows = _frame_rows(latency, _face_for_poll(0))
 
     assert len(rows) == 2, f"one row per motor of currents_ma, got {len(rows)}"
     for row in rows:
         assert set(row) == set(latency.SAFETY_CSV_FIELDS), f"row keys: {sorted(row)}"
-        assert len(row) == 8
+        assert len(row) == 9
+        assert "target_source" in row, f"the ninth column is missing from the row: {sorted(row)}"
 
 
 def test_safety_frame_rows_should_pass_the_frame_coordinates_through(latency: Any) -> None:
@@ -949,6 +1039,187 @@ def test_safety_frame_rows_should_never_raise_for_a_corrupt_currents_mapping(lat
     assert rows[0]["current_ma"] is None
 
 
+# ---------------------------------------------------------------------------
+# D2. ``target_source`` — the ninth column, a WHOLE-frame attribute
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("source", _TARGET_SOURCE_VALUES)
+def test_safety_frame_rows_should_stamp_every_row_of_a_frame_with_its_target_source(
+    latency: Any, source: str
+) -> None:
+    """One frame, two motors, one source: the attribute is per frame, not per motor.
+
+    ``target_source`` sits on the frame (``face["target_source"]``), so both rows
+    of a frame carry the same value and every one of the four vendor values is
+    written through unchanged.  A lookup in the per-motor tables
+    (``requested_targets`` / ``accepted_targets``, keyed ``<motor>.pos``) finds
+    nothing there and writes two empty cells for every frame of a real run.
+    """
+    rows = _frame_rows(latency, _face_with_source(source))
+
+    assert len(rows) == 2, f"one row per motor of currents_ma, got {len(rows)}"
+    written = [row.get("target_source") for row in rows]
+    assert written == [source, source], (
+        f"every row of the frame has to carry {source!r}: {written!r}"
+    )
+    assert len({row.get("target_source") for row in rows}) == 1
+
+
+def test_safety_frame_rows_should_leave_target_source_empty_when_the_frame_has_none(
+    latency: Any,
+) -> None:
+    """No ``target_source`` key: an empty cell, and no other column moves.
+
+    A defaulted read (``getattr``/``dict.get`` with a fallback) turns "the frame
+    said nothing" into a fabricated value, and a per-motor read would move the
+    empty cell into a different shape.  The comparison below is the other half of
+    the refusal: the missing key may cost exactly its own column.
+    """
+    with_source = _frame_rows(latency, _face_with_source("command"))
+    without_source = _frame_rows(latency, _face_with_source(include=False))
+
+    for row in without_source:
+        assert "target_source" in row, f"the column has to exist and be empty: {sorted(row)}"
+        assert len(row) == 9, f"the row is not nine columns wide: {sorted(row)}"
+    assert [row.get("target_source") for row in without_source] == [None, None], (
+        f"a frame without the key has no source to report: "
+        f"{[row.get('target_source') for row in without_source]!r}"
+    )
+    other_columns = [
+        {key: value for key, value in row.items() if key != "target_source"}
+        for row in without_source
+    ]
+    expected = [
+        {key: value for key, value in row.items() if key != "target_source"} for row in with_source
+    ]
+    assert other_columns == expected, (
+        f"the missing key changed another column: {other_columns!r} != {expected!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [5, 5.0, True, False, ["command"], {"command"}, "manual", "", "None"],
+    ids=[
+        "int",
+        "float",
+        "true",
+        "false",
+        "list",
+        "set",
+        "unknown-str",
+        "empty-str",
+        "capitalised",
+    ],
+)
+def test_safety_frame_rows_should_leave_an_unusable_target_source_empty(
+    latency: Any, source: Any
+) -> None:
+    """Anything but one of the four vendor strings is no source: the cell stays empty.
+
+    ``True`` is an ``int`` in Python, so a bare ``str(value)`` / ``in`` check that
+    skips the type rule would write ``"True"``; an unvalidated pass-through would
+    write ``"manual"``.  Both read like a vendor statement the host never made.
+    The rest of the frame is still read -- an unusable source costs its own column
+    and nothing else.
+    """
+    rows = _frame_rows(latency, _face_with_source(source))
+
+    for row in rows:
+        assert "target_source" in row, f"the column has to exist and be empty: {sorted(row)}"
+        assert len(row) == 9, f"the row is not nine columns wide: {sorted(row)}"
+    assert [row.get("target_source") for row in rows] == [None, None], (
+        f"{source!r} is not one of {_TARGET_SOURCE_VALUES}: "
+        f"{[row.get('target_source') for row in rows]!r}"
+    )
+    assert [row["motor"] for row in rows] == [_MOTOR, _OTHER_MOTOR]
+    assert [row["current_ma"] for row in rows] == [120.0, -45.5]
+    assert [row["hold_active"] for row in rows] == [False, False]
+
+
+def test_safety_frame_rows_should_stamp_the_corrupt_currents_row_with_the_frame_source(
+    latency: Any,
+) -> None:
+    """A frame whose motor table is unreadable still said which layer produced it.
+
+    ``target_source`` is a whole-frame attribute, so the degraded ``motor=None``
+    row -- the one shape that has no motor to be per-motor about -- has to carry
+    the frame's own value.  Dropping it there loses the only column that can
+    answer "was this joint being held back", which is exactly the frame an
+    operator reaches for after an over-current event, and it loses it silently:
+    an empty cell reads like "the frame said nothing".  Every other column stays
+    empty and the coordinates stay the caller's, so the source is the one thing
+    the degradation does not take away.
+    """
+    face = {
+        "currents_ma": _CorruptCurrents(),
+        "joint_holds": [_MOTOR],
+        "target_source": "protection",
+    }
+
+    rows = _frame_rows(latency, face)
+
+    assert len(rows) == 1, f"a frame with no motor table is one placeholder row: {rows!r}"
+    row = rows[0]
+    assert set(row) == set(latency.SAFETY_CSV_FIELDS), f"row keys: {sorted(row)}"
+    assert row["motor"] is None
+    assert row["target_source"] == "protection", (
+        f"the degraded row has to carry the frame's target_source, got {row['target_source']!r}"
+    )
+    for column in ("current_ma", "requested_target", "accepted_target", "hold_active"):
+        assert row[column] is None, f"{column} is no measurement on this frame: {row[column]!r}"
+    assert (row["step_index"], row["sample_sequence"], row["t_monotonic_s"]) == (2, 9, 12.5)
+
+
+@pytest.mark.parametrize(
+    "face",
+    [object(), "command", None],
+    ids=["object", "str-vendor-value", "none"],
+)
+def test_safety_frame_rows_should_leave_the_degraded_source_empty_for_a_non_mapping_face(
+    latency: Any, face: Any
+) -> None:
+    """A face that is no ``Mapping`` carries no frame attribute at all.
+
+    ``"command"`` is deliberate: the *string* is one of the four vendor values,
+    but here it is the whole face, not ``face["target_source"]``.  A reader that
+    falls back to the face itself, or that checks the value without first
+    checking that the frame is a mapping, would stamp the placeholder row with a
+    statement the host never made.
+    """
+    rows = _frame_rows(latency, face)
+
+    assert len(rows) == 1, f"a non-mapping face is one placeholder row: {rows!r}"
+    assert rows[0]["motor"] is None
+    assert rows[0]["target_source"] is None, (
+        f"a face that is no mapping has no target_source: {rows[0]['target_source']!r}"
+    )
+
+
+def test_safety_frame_rows_should_stamp_the_empty_currents_row_with_the_frame_source(
+    latency: Any,
+) -> None:
+    """``currents_ma == {}`` is the deployed degradation: the source survives it.
+
+    The vendor client's face always exists and is often *empty*, so this is the
+    shape a real run hits (not the absent attribute).  The motor table is empty,
+    the frame still names the layer that produced its targets, and that one cell
+    is filled while the motor-dependent cells stay empty.
+    """
+    face = {"currents_ma": {}, "joint_holds": [], "target_source": "command"}
+
+    rows = _frame_rows(latency, face)
+
+    assert len(rows) == 1, f"no motor keys is one placeholder row, got {len(rows)}"
+    assert rows[0]["motor"] is None
+    assert rows[0]["target_source"] == "command", (
+        f"the empty-table row has to carry the frame's target_source, "
+        f"got {rows[0]['target_source']!r}"
+    )
+    assert rows[0]["current_ma"] is None
+
+
 # ===========================================================================
 # E. ``run_tracking_steps`` — the summary carries the safety rows
 # ===========================================================================
@@ -1075,6 +1346,36 @@ def test_run_tracking_steps_should_record_the_hold_flag_per_motor(latency: Any) 
     assert held == {_MOTOR: True, _OTHER_MOTOR: False}
     assert held[_MOTOR] is True
     assert held[_OTHER_MOTOR] is False
+
+
+def test_run_tracking_steps_should_read_target_source_per_recorded_frame(latency: Any) -> None:
+    """Frame 1 carries ``"command"``, frame 2 carries nothing: each row answers for its own frame.
+
+    A recorder that reads the attribute once (at the run start, or at the first
+    frame) and reuses it writes ``"command"`` on all four frames; one that reads
+    it per motor writes nothing anywhere.  The alternating frame script pins both:
+    the four recorded frames are ``command`` / empty / ``command`` / empty, with
+    both motors of a frame agreeing with each other.
+    """
+
+    def face(index: int) -> Any:
+        """Every even poll carries the source, every odd poll does not."""
+        frame = _face_for_poll(index)
+        if index % 2 == 0:
+            frame["target_source"] = "command"
+        return frame
+
+    rows = _run_tracking(latency, _SafetyFake(face=face))["safety_rows"]
+
+    by_frame: dict[Any, list[Any]] = {}
+    for row in rows:
+        by_frame.setdefault(row["sample_sequence"], []).append(row.get("target_source"))
+    assert by_frame == {
+        1: ["command", "command"],
+        2: [None, None],
+        3: ["command", "command"],
+        4: [None, None],
+    }, f"each frame has to answer for itself: {by_frame!r}"
 
 
 # ===========================================================================
@@ -1220,7 +1521,7 @@ def test_main_tracking_should_keep_the_frozen_fourteen_column_main_csv(
         f"the column shared by the main CSV and the sidecar moved: {sorted(shared_columns)}"
     )
     safety_only_columns = set(latency.SAFETY_CSV_FIELDS) - shared_columns
-    assert len(safety_only_columns) == 7, (
+    assert len(safety_only_columns) == 8, (
         f"the sidecar-exclusive columns moved: {sorted(safety_only_columns)}"
     )
     leaked = [field for field in header if field in safety_only_columns]
@@ -1411,7 +1712,7 @@ def test_main_tracking_should_warn_once_when_the_published_face_never_carries_a_
     assert sidecar.is_file(), f"no sidecar next to {out}"
     header, rows = _read_csv(sidecar)
     assert header == latency.SAFETY_CSV_FIELDS
-    assert len(header) == 8, f"the sidecar lost a column: {header}"
+    assert len(header) == 9, f"the sidecar lost a column: {header}"
     assert len(rows) == 4, f"one placeholder row per growing frame, got {len(rows)}"
     for row in rows:
         assert row["motor"] == ""
@@ -1578,4 +1879,306 @@ def test_main_rtt_should_not_write_a_safety_sidecar(latency: Any, tmp_path: Path
     assert out.is_file(), "the rtt CSV itself must still be written"
     assert not latency.safety_csv_path(out).exists(), (
         f"rtt mode wrote {latency.safety_csv_path(out)}"
+    )
+
+
+# ===========================================================================
+# G. ``target_source`` on disk — the ninth sidecar column
+# ===========================================================================
+
+
+@pytest.mark.parametrize(
+    ("source", "cell", "include"),
+    [
+        pytest.param("none", "none", True, id="none"),
+        pytest.param("command", "command", True, id="command"),
+        pytest.param("watchdog", "watchdog", True, id="watchdog"),
+        pytest.param("protection", "protection", True, id="protection"),
+        pytest.param(None, "", False, id="missing-key"),
+        pytest.param("manual", "", True, id="unknown-str"),
+        pytest.param(5, "", True, id="int"),
+    ],
+)
+def test_main_tracking_should_write_the_target_source_of_each_row(
+    latency: Any, tmp_path: Path, source: Any, cell: str, include: bool
+) -> None:
+    """The ninth column of a healthy frame's rows is the frame's source, or an empty cell.
+
+    A frame without the key and a frame with an unusable value both leave the cell
+    empty -- never a default, never the string form of the value -- while the eight
+    columns beside it stay exactly what the same frame produced before the column
+    existed (motor names, currents, targets and the hold flag all filled).
+    """
+    out = tmp_path / "tracking-target-source.csv"
+    client = _SafetyFake(face=_face_with_source(source, include=include))
+
+    code = latency.main(_main_argv(out), client_factory=_Factory(client))
+
+    assert code == latency.EXIT_OK, f"the run failed with {code}"
+    header, rows = _read_csv(latency.safety_csv_path(out))
+    assert header == latency.SAFETY_CSV_FIELDS
+    assert len(header) == 9, f"the sidecar is not nine columns: {header}"
+    assert len(rows) == 8, f"expected 4 growing frames x 2 motors, got {len(rows)} rows"
+    assert [row["target_source"] for row in rows] == [cell] * 8, (
+        f"expected {cell!r} on every row, got {[row['target_source'] for row in rows]!r}"
+    )
+    # The other eight columns are untouched by the empty / unusable source.
+    assert [row["motor"] for row in rows] == [_MOTOR, _OTHER_MOTOR] * 4
+    assert all(row["current_ma"] != "" for row in rows), [row["current_ma"] for row in rows]
+    assert all(row["requested_target"] != "" for row in rows)
+    assert all(row["accepted_target"] != "" for row in rows)
+    assert all(row["hold_active"] != "" for row in rows)
+
+
+def test_main_tracking_should_write_a_nine_column_sidecar_and_a_fourteen_column_main_csv(
+    latency: Any, tmp_path: Path
+) -> None:
+    """``target_source`` is appended after ``hold_active``; the main CSV is still frozen at 14.
+
+    Two tables, two widths: the sidecar grew the one column it was allowed to grow,
+    in last position, and the tracking table (parsed by position downstream) did
+    not move at all.
+    """
+    out = tmp_path / "tracking-columns.csv"
+
+    code = latency.main(_main_argv(out), client_factory=_Factory(_SafetyFake()))
+
+    assert code == latency.EXIT_OK, f"the run failed with {code}"
+    sidecar_header, sidecar_rows = _read_csv(latency.safety_csv_path(out))
+    main_header, main_rows = _read_csv(out)
+    assert sidecar_header == latency.SAFETY_CSV_FIELDS
+    assert len(sidecar_header) == 9, f"the sidecar is not nine columns: {sidecar_header}"
+    assert sidecar_header[8] == "target_source", (
+        f"target_source has to be the last sidecar column: {sidecar_header}"
+    )
+    assert main_header == latency.TRACKING_CSV_FIELDS
+    assert len(main_header) == 14, f"the main CSV grew a column: {main_header}"
+    assert len(sidecar_rows) == 8
+    assert len(main_rows) == 2
+
+
+# ===========================================================================
+# H. The poll-clock fallback is named once per run
+# ===========================================================================
+
+# Ways ``latest_request_timing`` can fail to answer an arrival stamp: an empty
+# face, a face without the key, a non-finite stamp, and readers that raise.
+_UNUSABLE_TIMING = [
+    pytest.param({"timed": False}, id="empty-face"),
+    pytest.param({"timing": {"sent_monotonic_s": 1000.0}}, id="received-missing"),
+    pytest.param({"timing": {"received_monotonic_s": float("nan")}}, id="received-nan"),
+    pytest.param({"timing": {"received_monotonic_s": float("inf")}}, id="received-inf"),
+    pytest.param({"timing": _ExplodingTiming()}, id="readers-raise"),
+]
+
+
+def _fallback_notices(stderr: str) -> list[str]:
+    """The stderr lines that name the poll-clock fallback of the arrival stamp.
+
+    Matched on the three things the notice has to say -- the column it is about
+    (``t_monotonic_s``), what the value really is (``poll clock``) and why
+    (``latest_request_timing`` is unusable) -- instead of on one frozen sentence:
+    the wording belongs to the implementation, these three do not.  A safety
+    warning is deliberately NOT matched: it never names the timing face.
+    """
+    return [
+        line
+        for line in stderr.splitlines()
+        if "t_monotonic_s" in line and "poll clock" in line and "latest_request_timing" in line
+    ]
+
+
+@pytest.mark.parametrize("timing_kwargs", _UNUSABLE_TIMING)
+def test_main_tracking_should_name_the_poll_clock_fallback_exactly_once(
+    latency: Any, tmp_path: Path, capsys: pytest.CaptureFixture[str], timing_kwargs: dict[str, Any]
+) -> None:
+    """4 unstamped frames, 1 notice: the fallback is a property of the run, not of a frame.
+
+    Every recorded frame of this run falls back to the poll clock, so wording that
+    fires per frame writes 4 lines and wording that fires per poll writes 5.  The
+    operator needs to know once that ``t_monotonic_s`` is a poll instant rather
+    than the client's timestamp -- and the sidecar is still written, stamped, with
+    the same number of rows as a timed run.
+    """
+    out = tmp_path / "tracking-untimed.csv"
+    client = _SafetyFake(**timing_kwargs)
+
+    code = latency.main(_main_argv(out), client_factory=_Factory(client))
+    printed = capsys.readouterr()
+
+    assert code == latency.EXIT_OK, f"the fallback changed the exit code: {code}"
+    notices = _fallback_notices(printed.err)
+    assert len(notices) == 1, (
+        f"the poll-clock fallback has to be named exactly once, got {notices!r} "
+        f"(stderr={printed.err!r})"
+    )
+    # The rows are still there and still stamped -- the fallback is a real clock
+    # reading, not an empty cell.
+    header, rows = _read_csv(latency.safety_csv_path(out))
+    assert header == latency.SAFETY_CSV_FIELDS
+    assert len(rows) == 8, f"the frames went down with the stamp: {len(rows)} rows"
+    assert all(row["t_monotonic_s"] != "" for row in rows), [r["t_monotonic_s"] for r in rows]
+    assert all(float(row["t_monotonic_s"]) >= 0.0 for row in rows)
+    # Distinguishable from the two safety warnings: it never names that face, and
+    # this otherwise-clean client produced no safety warning at all.
+    assert "latest_safety_status" not in notices[0], (
+        f"the fallback notice reads like a safety warning: {notices[0]!r}"
+    )
+    assert _lines_mentioning(printed.err, "latest_safety_status") == [], (
+        f"a clean safety face warned: {printed.err!r}"
+    )
+
+
+def test_main_tracking_should_not_name_the_poll_clock_when_the_frame_carries_a_stamp(
+    latency: Any, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A finite ``received_monotonic_s`` on every frame: zero notices.
+
+    Without this case a "warn always" implementation would look green on the
+    fallback tests and leave an operator unable to tell a timed run from an
+    untimed one.
+    """
+    out = tmp_path / "tracking-timed.csv"
+    client = _SafetyFake()
+
+    code = latency.main(_main_argv(out), client_factory=_Factory(client))
+    printed = capsys.readouterr()
+
+    assert code == latency.EXIT_OK, f"the run failed with {code}"
+    notices = _fallback_notices(printed.err)
+    assert notices == [], f"a timed run warned about the poll clock: {notices!r}"
+    assert _lines_mentioning(printed.err, "latest_request_timing") == [], (
+        f"a timed run named the timing face on stderr: {printed.err!r}"
+    )
+
+
+# The safety face and the timing face fail independently of one another, so a run
+# can hit both at once.  The two notices are about different faces, printed by
+# different branches, and both are needed on exactly that run -- folding either
+# one into the other's branch silences one of them.
+_DEGRADED_SAFETY_FACES = [
+    pytest.param(lambda: _NO_FACE, id="face-absent"),
+    pytest.param(
+        lambda: {"currents_ma": _CorruptCurrents(), "joint_holds": [_MOTOR]},
+        id="currents-corrupt",
+    ),
+    pytest.param(lambda: {"currents_ma": {}, "joint_holds": []}, id="currents-empty"),
+]
+
+_UNUSABLE_TIMING_FACES = [
+    pytest.param({"timed": False}, id="timing-empty"),
+    pytest.param({"timing": _ExplodingTiming()}, id="timing-readers-raise"),
+]
+
+
+@pytest.mark.parametrize("safe_face", _DEGRADED_SAFETY_FACES)
+@pytest.mark.parametrize("timing_kwargs", _UNUSABLE_TIMING_FACES)
+def test_main_tracking_should_warn_about_both_faces_when_both_degrade_together(
+    latency: Any,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    safe_face: Any,
+    timing_kwargs: dict[str, Any],
+) -> None:
+    """Both faces down at once: two warnings, one per face, neither suppressing the other.
+
+    The safety warning is about what the sidecar cannot record; the poll-clock
+    notice is about what its ``t_monotonic_s`` column really is.  An operator
+    hitting a degraded host usually gets both, so the pair is the normal bad case,
+    not an exotic one -- and it is the case a shared ``if``/``elif`` chain loses.
+    Each face is therefore counted on its own and then compared to the run where
+    only the safety face is down: that run has to name the safety face and say
+    nothing about the poll clock, which is what makes the second notice here the
+    timing face's own line rather than a second wording of the first.
+
+    The two identifying substrings are exclusive in the implementation, which is
+    what makes the two counts independent: the fallback notice names
+    ``t_monotonic_s`` / ``poll clock`` / ``latest_request_timing`` and never
+    ``latest_safety_status``, while the safety warning names
+    ``latest_safety_status`` and none of the three timing markers.  The assertions
+    on the lines themselves keep that exclusivity pinned: if the wording ever
+    starts to overlap, these two counts stop being two independent measurements
+    and this test says so instead of counting one line twice.
+    """
+    single_out = tmp_path / "tracking-safety-only.csv"
+    both_out = tmp_path / "tracking-both-degraded.csv"
+
+    single_code = latency.main(
+        _main_argv(single_out), client_factory=_Factory(_SafetyFake(face=safe_face()))
+    )
+    single = capsys.readouterr()
+    code = latency.main(
+        _main_argv(both_out),
+        client_factory=_Factory(_SafetyFake(face=safe_face(), **timing_kwargs)),
+    )
+    printed = capsys.readouterr()
+
+    assert code == latency.EXIT_OK, f"two degraded faces must not change the exit code: {code}"
+    assert code == single_code, (
+        f"the timing degradation changed the exit code: {single_code} -> {code}"
+    )
+
+    # Baseline: the same safety degradation with a healthy timing face.  It names
+    # the safety face once and stays silent about the poll clock.
+    assert len(_lines_mentioning(single.err, "latest_safety_status")) == 1, (
+        f"the safety-only run has to name the face exactly once: {single.err!r}"
+    )
+    assert _fallback_notices(single.err) == [], (
+        f"the safety face must not trigger the poll-clock notice: {_fallback_notices(single.err)!r}"
+    )
+
+    safety_lines = _lines_mentioning(printed.err, "latest_safety_status")
+    notices = _fallback_notices(printed.err)
+    assert len(safety_lines) == 1, (
+        f"the safety face has to be named exactly once, got {safety_lines!r} "
+        f"(stderr={printed.err!r})"
+    )
+    assert len(notices) == 1, (
+        f"the poll-clock fallback has to be named exactly once, got {notices!r} "
+        f"(stderr={printed.err!r})"
+    )
+
+    # Two different lines, and the markers really are exclusive.
+    assert "latest_safety_status" not in notices[0], (
+        f"the fallback notice reads like a safety warning: {notices[0]!r}"
+    )
+    overlapping = [
+        marker
+        for marker in ("poll clock", "latest_request_timing", "t_monotonic_s")
+        if marker in safety_lines[0]
+    ]
+    assert overlapping == [], (
+        f"the safety warning picked up the timing markers {overlapping!r}: {safety_lines[0]!r} "
+        "-- the two notice counts would no longer be independent measurements"
+    )
+    assert notices[0] not in safety_lines[0], (
+        f"the two warnings collapsed into one line: {notices[0]!r}"
+    )
+    assert safety_lines[0] not in notices[0], (
+        f"the two warnings collapsed into one line: {safety_lines[0]!r}"
+    )
+    stderr_lines = printed.err.splitlines()
+    assert stderr_lines.index(safety_lines[0]) != stderr_lines.index(notices[0]), (
+        f"both notices landed on the same stderr line: {stderr_lines!r}"
+    )
+
+    # Neither degradation costs a row: the sidecar is the same file the
+    # safety-only run wrote (one placeholder row per recorded frame, still
+    # stamped), and the main CSV still carries its two steps.
+    header, rows = _read_csv(latency.safety_csv_path(both_out))
+    single_header, single_rows = _read_csv(latency.safety_csv_path(single_out))
+    assert header == single_header == latency.SAFETY_CSV_FIELDS
+    assert len(rows) == len(single_rows) == 4, (
+        f"one placeholder row per recorded frame (4), got {len(rows)} vs {len(single_rows)}"
+    )
+    assert [row["motor"] for row in rows] == [""] * 4, [row["motor"] for row in rows]
+    assert all(row["t_monotonic_s"] != "" for row in rows), (
+        f"the fallback is a clock reading, not an empty cell: "
+        f"{[r['t_monotonic_s'] for r in rows]!r}"
+    )
+    main_header, main_rows = _read_csv(both_out)
+    single_main_header, single_main_rows = _read_csv(single_out)
+    assert main_header == single_main_header
+    assert len(main_rows) == len(single_main_rows) == 2, (
+        f"the run lost a step: {len(main_rows)} vs {len(single_main_rows)}"
     )
