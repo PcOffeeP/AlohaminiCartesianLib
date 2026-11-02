@@ -489,7 +489,7 @@ def test_red_connect_session_stop_is_non_throwing() -> None:
 # ---------------------------------------------------------------------------
 # Appended to the cycle-1 suite; the 13 cycle-1 cases above are untouched.
 #
-# Interpretation pinned by these tests (V07 for B4; D011 直线步进落点见 control/api.py；
+# Interpretation pinned by these tests (V07 for B4; 设计规范 D011 的直线步进落点见 control/api.py；
 #   继承见 docs/ADR.md D17):
 #
 # * B4 — after ``connect`` the SDK plans/dispatches NO homing/return
@@ -856,7 +856,7 @@ def test_red_b4_connect_dry_run_stays_silent() -> None:
 
 
 # ---------------------------------------------------------------------------
-# B2 / V01 — move_to blocks until arrival + standstill; times out; reports.
+# B2 / 设计规范 D011 — move_to blocks until arrival + standstill; times out; reports.
 # ---------------------------------------------------------------------------
 def test_red_b2_move_to_blocks_until_arrival_and_returns_report() -> None:
     """move_to returns only after the measured residual is within tolerance.
@@ -1018,7 +1018,8 @@ def test_red_b2_move_to_dry_run_returns_step_diagnostics_and_never_sends() -> No
 # ---------------------------------------------------------------------------
 # Appended to the cycle-1/2 suite; the 20 earlier cases are untouched.
 #
-# Interpretation pinned by these tests (V08 / V02 / V03；D003 继承见 docs/ADR.md D17):
+# Interpretation pinned by these tests (V02 / V03；B6 整路径预检的证据列在 V08 条目；
+#   设计规范 D003 继承见 docs/ADR.md D17):
 #
 # * B6 — ``ArmHandle.move_to`` discretises the straight line from the current
 #   measured FK pose to the target and, *before dispatching any arm action*,
@@ -1468,8 +1469,8 @@ def test_red_move_to_fast_fails_on_fault_without_timeout() -> None:
 # ---------------------------------------------------------------------------
 # Appended to the cycle-1/2/3 suite; the 28 earlier cases are untouched.
 #
-# Interpretation pinned by these tests (D013 keepalive / D014 底盘显式零速，落点见
-#   control/controller.py 与 V09；继承见 docs/ADR.md D17):
+# Interpretation pinned by these tests (设计规范 D013 keepalive / 设计规范 D014 底盘显式零速，
+#   落点见 control/controller.py；继承见 docs/ADR.md D17):
 #
 # * B9 — ``connect(..., keepalive_interval_s=K)`` arms each per-side
 #   controller's ``next_deadline`` (``last_send + K``).  While a blocking
@@ -1948,7 +1949,7 @@ def test_red_b8_explicit_invalid_feedback_is_not_arrival() -> None:
 # ---------------------------------------------------------------------------
 # Appended to the cycle-1..4 suite; the 39 earlier cases are untouched.
 #
-# Required behavior (acceptance, 本 cycle 冻结; D011 落点见 control/api.py 的
+# Required behavior (acceptance, 本 cycle 冻结; 设计规范 D011 落点见 control/api.py 的
 #   move_to/move_by、LiftHandle、BaseHandle；继承见 docs/ADR.md D17):
 #
 # * B11 — ``ArmHandle.move_by(dx, dy, dz)`` adds the body-frame increment to the
