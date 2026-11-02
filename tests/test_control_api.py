@@ -856,7 +856,7 @@ def test_red_b4_connect_dry_run_stays_silent() -> None:
 
 
 # ---------------------------------------------------------------------------
-# B2 / 设计规范 D011 — move_to blocks until arrival + standstill; times out; reports.
+# B2 / 设计规范 D011、§2 — move_to blocks until arrival + standstill; times out; reports.
 # ---------------------------------------------------------------------------
 def test_red_b2_move_to_blocks_until_arrival_and_returns_report() -> None:
     """move_to returns only after the measured residual is within tolerance.
@@ -1018,8 +1018,8 @@ def test_red_b2_move_to_dry_run_returns_step_diagnostics_and_never_sends() -> No
 # ---------------------------------------------------------------------------
 # Appended to the cycle-1/2 suite; the 20 earlier cases are untouched.
 #
-# Interpretation pinned by these tests (V02 / V03；B6 整路径预检的证据列在 V08 条目；
-#   设计规范 D003 继承见 docs/ADR.md D17):
+# Interpretation pinned by these tests (V02 / V03；B6 整路径预检无本库单列验收条目，
+#   溯源见设计规范 §2；设计规范 D003 继承见 docs/ADR.md D17):
 #
 # * B6 — ``ArmHandle.move_to`` discretises the straight line from the current
 #   measured FK pose to the target and, *before dispatching any arm action*,
