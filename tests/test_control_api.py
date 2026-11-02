@@ -489,7 +489,8 @@ def test_red_connect_session_stop_is_non_throwing() -> None:
 # ---------------------------------------------------------------------------
 # Appended to the cycle-1 suite; the 13 cycle-1 cases above are untouched.
 #
-# Interpretation pinned by these tests (design SSOT V07/D005 + V01/D011):
+# Interpretation pinned by these tests (V07 for B4; D011 直线步进落点见 control/api.py；
+#   继承见 docs/ADR.md D17):
 #
 # * B4 — after ``connect`` the SDK plans/dispatches NO homing/return
 #   trajectory.  Its first arm action is a ZERO-DISPLACEMENT hold at the
@@ -1017,7 +1018,7 @@ def test_red_b2_move_to_dry_run_returns_step_diagnostics_and_never_sends() -> No
 # ---------------------------------------------------------------------------
 # Appended to the cycle-1/2 suite; the 20 earlier cases are untouched.
 #
-# Interpretation pinned by these tests (design SSOT §2 + V02/V03 + D003):
+# Interpretation pinned by these tests (V08 / V02 / V03；D003 继承见 docs/ADR.md D17):
 #
 # * B6 — ``ArmHandle.move_to`` discretises the straight line from the current
 #   measured FK pose to the target and, *before dispatching any arm action*,
@@ -1467,7 +1468,8 @@ def test_red_move_to_fast_fails_on_fault_without_timeout() -> None:
 # ---------------------------------------------------------------------------
 # Appended to the cycle-1/2/3 suite; the 28 earlier cases are untouched.
 #
-# Interpretation pinned by these tests (design SSOT §12.4 / D013 / D014):
+# Interpretation pinned by these tests (D013 keepalive / D014 底盘显式零速，落点见
+#   control/controller.py 与 V09；继承见 docs/ADR.md D17):
 #
 # * B9 — ``connect(..., keepalive_interval_s=K)`` arms each per-side
 #   controller's ``next_deadline`` (``last_send + K``).  While a blocking
@@ -1946,7 +1948,8 @@ def test_red_b8_explicit_invalid_feedback_is_not_arrival() -> None:
 # ---------------------------------------------------------------------------
 # Appended to the cycle-1..4 suite; the 39 earlier cases are untouched.
 #
-# Required behavior (acceptance, 本 cycle 冻结; design SSOT §1/§5 + D011):
+# Required behavior (acceptance, 本 cycle 冻结; D011 落点见 control/api.py 的
+#   move_to/move_by、LiftHandle、BaseHandle；继承见 docs/ADR.md D17):
 #
 # * B11 — ``ArmHandle.move_by(dx, dy, dz)`` adds the body-frame increment to the
 #   CURRENT measured FK pose (never to the previous commanded target), so a
@@ -2693,7 +2696,7 @@ def test_red_c6_move_by_missing_metadata_is_feedback_lost() -> None:
 #   These are regression guards (currently GREEN).
 # * B3 — the arrival standstill gate is fail-closed: a frame that carries
 #   ``settled=True`` but OMITS ``valid`` must NOT be treated as arrival
-#   (design SSOT §12.4).
+#   (V05).
 #
 # Healthy-frame convention: ``_c2_obs`` / ``_c3_both_obs`` / ``_c5_lift_obs`` /
 # ``_c6_arm_lift_obs`` now advertise ``valid: True`` explicitly.  Tests that
