@@ -252,6 +252,56 @@ counter is never reset by a step boundary), the command stops being re-issued,
 and the last cached frame is still merged into the hold state so the closing
 command stays full-shape instead of freezing only the joints it can see.
 
+Safety sidecar (tracking mode)
+------------------------------
+The vendor host publishes a second, *side-channel* frame on
+``client.latest_safety_status`` every control loop: the signed motor currents in
+milliamps, the hold flags and hold events, and the requested / accepted joint
+targets.  It is part of neither ``get_observation()`` nor the tracking CSV, so a
+tracking run writes it to a sidecar beside the tracking CSV
+(``safety_csv_path``: ``tracking-<utc>-safety.csv``), one row per motor per
+FRESH frame (``safety_frame_rows``).  The tracking table itself is frozen at its
+14 columns -- downstream evidence files parse it as 14 columns -- so the safety
+snapshot never becomes a column of it.
+
+"Fresh" is the liveness signal above: rows are booked only on a frame whose
+``observation_sequence`` grew, at both recording sites (the step-start
+observation and every settle-loop observation), so a cached repeat frame adds no
+row.  ``t_monotonic_s`` is the frame's arrival stamp
+(``latest_request_timing["received_monotonic_s"]``, ``_arrival_monotonic_s``)
+with the poll clock of that observation as its fallback; the sidecar adds no
+clock read of its own, so the pacing, the settle budgets and the achieved rates
+keep being computed from exactly the readings they used before.
+
+Size: one row per motor per fresh frame, so the number of rows grows with
+``frames x motors``, and the frames grow with ``--steps``, ``--settle-timeout-s``
+and ``--control-hz``.  On a long, fast run both the sidecar CSV and the row list
+this harness holds in memory until the run ends get large -- the same shape the
+tracking CSV has always had (one row per step, on a list held the same way), not
+something the sidecar introduced.
+
+Nothing here substitutes one face for another: ``latest_safety_status`` is a
+different frame from ``latest_control_status`` and ``docs/ADR.md`` D12 forbids
+standing one in for the other.  The safety snapshot lands in its own sidecar
+columns, and every ``latest_control_status`` read of this harness is untouched.
+
+A client that does not publish ``latest_safety_status`` still gets a sidecar: the
+run probes the capability once (``missing_safety_capabilities``), names the face
+on stderr exactly once, and writes rows whose ``motor`` and safety columns are
+empty.  The face that *is* published and left at least one recorded frame without
+a readable ``currents_ma`` motor table -- the degradation a real client really
+hits, its attribute always exists -- gets the same empty cells and one warning
+that counts the whole run (``frames=<recorded frames>``,
+``frames_with_motor_table=<how many of them carried a table>``,
+``_safety_frame_counts``), so 3 broken frames out of 4 are named instead of
+passing as a healthy run.  A run whose every recorded frame carried a table is not
+warned about at all, and the two branches are mutually exclusive: one stderr line
+at most.  An empty cell is never a ``0`` -- see ``safety_frame_rows`` for why that
+is a refusal to fabricate a measurement rather than a silent degradation.  A
+sidecar that cannot be written is a warning, never an exit code: the tracking CSV
+is the primary artefact of the run, and ``--mode rtt`` writes no sidecar at all
+(it does not move the robot, so it has no safety frame to snapshot).
+
 Ctrl-C
 ------
 ``main`` never lets ``KeyboardInterrupt`` escape, in either mode: the interrupt
@@ -533,6 +583,21 @@ TRACKING_CSV_FIELDS = (
     "note",
 )
 
+# Sidecar columns of the tracking mode: one row per motor per fresh safety frame
+# (``safety_frame_rows``).  Deliberately NOT appended to ``TRACKING_CSV_FIELDS``:
+# that table is frozen at 14 columns because downstream evidence files parse it
+# as 14 columns, so the safety snapshot gets its own file (``safety_csv_path``).
+SAFETY_CSV_FIELDS = (
+    "step_index",
+    "sample_sequence",
+    "t_monotonic_s",
+    "motor",
+    "current_ma",
+    "requested_target",
+    "accepted_target",
+    "hold_active",
+)
+
 # Base body velocities are pinned to zero in every command: a command that
 # omits them would leave the base chasing whatever was last sent.
 BASE_VELOCITY_KEYS = ("x.vel", "y.vel", "theta.vel")
@@ -563,6 +628,18 @@ HOST_METADATA_SCHEMA_VERSION = 2
 # semantically different neighbour (``latest_safety_status``) is refused with
 # ``EXIT_CLIENT_UNSUPPORTED`` rather than sampled into empty columns.
 CLIENT_CAPABILITIES = ("latest_request_timing",)
+# Client attribute the tracking *sidecar* reads (``safety_frame_rows``).  A second
+# tuple beside ``CLIENT_CAPABILITIES`` on purpose: the safety frame is a different
+# capability from the request timing, a client may publish one without the other,
+# and neither answer may stand in for the other.
+#
+# Substitution is not what this is: ``docs/ADR.md`` D12 forbids reading
+# ``latest_safety_status`` in place of ``latest_control_status`` (different
+# frames, different structure), and this harness does not do that.  The safety
+# face lands in its OWN sidecar columns, and every ``latest_control_status`` read
+# path is unchanged, line for line.  The name lives in its own tuple so a reader
+# can tell the two faces apart at the definition as well as at the call site.
+SAFETY_CLIENT_CAPABILITIES = ("latest_safety_status",)
 # The keys of ``latest_request_timing`` rtt mode actually consumes, i.e. the
 # *necessary* set a face has to carry before a row may be built from it.  Taken
 # from the consumers, never from "whatever the client happens to publish": a
@@ -1115,9 +1192,62 @@ def _write_csv_after_interrupt(
     return None
 
 
+def _write_safety_sidecar(
+    path: Path, rows: Sequence[Mapping[str, Any]], *, after_interrupt: bool = False
+) -> None:
+    """Best-effort write of the safety sidecar: a failure costs a warning, not the run.
+
+    The tracking CSV is the primary artefact and the sidecar is the snapshot taken
+    beside it, so an ``OSError`` here (a full disk, a read-only mount) is printed as
+    one warning and never becomes ``EXIT_WRITE_FAILED`` -- the run measured what it
+    measured, and only the currents snapshot is missing.  The caller's verdict order
+    (hold failure > write failure > abort) therefore depends on the main CSV alone.
+
+    ``after_interrupt`` selects the interrupt-tolerant retry
+    (``_write_csv_after_interrupt``), which turns a second Ctrl-C into "not written"
+    instead of an exception escaping ``main``.  On the normal path a Ctrl-C is left
+    to propagate: an operator interrupt is still an interrupt there, and only the
+    write retry of the interrupt branch swallows a repeat.
+    """
+    if after_interrupt:
+        error = _write_csv_after_interrupt(path, rows, SAFETY_CSV_FIELDS)
+    else:
+        try:
+            write_csv(path, rows, SAFETY_CSV_FIELDS)
+        except OSError as exc:
+            error = str(exc)
+        else:
+            error = None
+    if error is not None:
+        print(
+            f"warning: the safety sidecar {path} could not be written: {error} "
+            "(the tracking CSV and the run itself are unaffected)",
+            file=sys.stderr,
+        )
+
+
 def _default_csv_path(mode: str) -> Path:
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     return ARTIFACT_DIR / f"{mode}-{stamp}.csv"
+
+
+def safety_csv_path(csv_path: Path | str) -> Path:
+    """The safety sidecar belonging to a tracking CSV path.
+
+    Same directory, the trailing ``.csv`` replaced by ``-safety.csv``: ``a.b.csv``
+    becomes ``a.b-safety.csv`` because only the suffix is dropped (a ``.`` in the
+    stem or in a parent directory name survives -- ``Path('/tmp/dir.with.dots/'
+    'tracking.csv')`` keeps the directory as it is), and a name that never carried
+    ``.csv`` still gets the suffix (``notes`` -> ``notes-safety.csv``).
+
+    Pure name arithmetic, so the sidecar always lands next to the file it belongs
+    to and no caller has to re-derive the naming rule: the path is what ties the
+    snapshot to its run, and two runs that differ only in their timestamped file
+    name must not share a sidecar.
+    """
+    path = Path(csv_path)
+    stem = path.name[: -len(".csv")] if path.name.endswith(".csv") else path.name
+    return path.with_name(f"{stem}-safety.csv")
 
 
 def default_client_factory(host: str, port: int, robot_model: str, request_window: int) -> Any:
@@ -1159,6 +1289,31 @@ def missing_client_capabilities(
     This is the *first* of the two capability probes: it answers "is the face
     there?".  The second one, ``unfilled_client_capabilities``, answers "is the
     face filled?" -- a published but always-``{}`` face is not caught here.
+    """
+    return [name for name in names if not hasattr(client, name)]
+
+
+def missing_safety_capabilities(
+    client: Any, names: Sequence[str] = SAFETY_CLIENT_CAPABILITIES
+) -> list[str]:
+    """The client attributes of ``names`` the connected client does not publish.
+
+    The same ``hasattr`` probe ``missing_client_capabilities`` applies to the rtt
+    timing face, kept as its own function and fed its own tuple
+    (``SAFETY_CLIENT_CAPABILITIES``): a client may publish the safety frame without
+    the request timing, so neither answer may stand in for the other.  Pure and
+    offline -- it reads the named attribute and nothing else, which is what makes it
+    testable without a robot -- and the result keeps the order of ``names``; empty
+    means the face is there.
+
+    Unlike the rtt timing face this is NOT a refusal: a missing
+    ``latest_safety_status`` costs the sidecar its contents -- ``motor=None`` and
+    empty safety cells, one row per frame (``safety_frame_rows``) -- and one stderr
+    warning, never the run and never the exit code.  The caller reports the name
+    this probe returns instead of reading the attribute through a defaulted
+    ``getattr``, so an absent face can never be mistaken for a frame that said
+    "nothing to report": the sidecar says which of the two it is by naming the
+    motor or leaving the ``motor`` cell empty.
     """
     return [name for name in names if not hasattr(client, name)]
 
@@ -2256,11 +2411,276 @@ def _arrival_monotonic_s(client: Any) -> float | None:
     response actually arrived; the poll clock is read *before* the blocking read,
     so using it as the moment of a 90 % crossing inflates the rise time by one
     observation.
+
+    Never raises, and ``None`` is its whole failure mode: the timing face is client
+    state like any other, and this function is now read twice per frame (when the
+    safety sidecar row of a fresh frame is booked, and at the 90 % crossing), so a
+    face whose readers raise -- a ``Mapping`` whose ``get`` explodes, an attribute
+    read that throws -- may cost a frame its stamp but not the run.  Both call
+    sites fall back to the poll-clock reading they already hold when this returns
+    ``None``, so the fallback is a real clock reading and never an empty cell.
+
+    The rtt path is deliberately untouched: it has its own
+    ``unfilled_client_capabilities`` refusal for an unusable timing face, which
+    this lenient read must not soften.
     """
-    timing = getattr(client, "latest_request_timing", None)
-    if not isinstance(timing, Mapping):
+    try:
+        timing = getattr(client, "latest_request_timing", None)
+        if not isinstance(timing, Mapping):
+            return None
+        return _finite_or_none(timing.get("received_monotonic_s"))
+    except Exception:  # a timing face whose readers raise is not a broken link
         return None
-    return _finite_or_none(timing.get("received_monotonic_s"))
+
+
+def _safety_number(value: Any) -> float | None:
+    """``value`` as a finite float when it *is* a measurement, else ``None``.
+
+    ``bool`` is refused explicitly, and before the conversion: ``True`` is an
+    ``int`` in Python, so ``float(True) == 1.0`` would write a 1 mA current (or a
+    target of 1) out of a flag.  Everything ``_finite_or_none`` rejects is refused
+    as well -- text, ``None``, ``nan``, ``inf`` -- and so is a value whose
+    conversion raises anything else, an integer too large to be a double
+    (``float(10**400)`` raises ``OverflowError``) included: the value is client
+    state, and the sidecar contract is "never raise".
+    """
+    if isinstance(value, bool):
+        return None
+    try:
+        return _finite_or_none(value)
+    except Exception:  # a client value may raise out of "just float it" as well
+        return None
+
+
+def _safety_mapping(face: Any, key: str) -> dict[str, Any] | None:
+    """The ``{name: value}`` pairs of ``face[key]``, or ``None`` when it holds none.
+
+    ``None`` means "no readable mapping", which covers every shape the caller has
+    to treat the same way: ``face`` is not a ``Mapping``, the key is absent, the
+    value is not a ``Mapping``, or the mapping cannot be read at all.  Every read
+    is guarded because the face is client state -- a proxy whose
+    ``items()``/``__iter__`` raises is a corrupt frame, not a reason to lose the
+    run -- and the pairs are copied into a plain ``dict`` so that later per-motor
+    lookups cannot hit the same broken reader twice.
+    """
+    if not isinstance(face, Mapping):
+        return None
+    try:
+        container = face[key]
+    except Exception:  # absent key, or a mapping whose subscript raises
+        return None
+    if not isinstance(container, Mapping):
+        return None
+    try:
+        return {name: value for name, value in container.items()}
+    except Exception:  # a mapping whose readers raise instead of reporting
+        return None
+
+
+def _safety_target(targets: Mapping[str, Any] | None, motor: str) -> float | None:
+    """The value ``targets`` holds for ``motor``, or ``None`` when it holds none.
+
+    Both key shapes of the vendor frame are read, because the host does not use
+    one shape for both tables: ``currents_ma`` / ``joint_holds`` are keyed by the
+    bare motor name, while ``requested_targets`` / ``accepted_targets`` are keyed
+    by ``<motor>.pos`` -- they are filled from the ``.pos`` action keys
+    (``alohamini.py:987-988``).  A lookup that knows only the bare name writes two
+    empty target columns on every frame of a real run, and a lookup that knows
+    only ``.pos`` breaks on the older / synthetic bare-name frame.
+
+    When a frame carries **both** keys for the same motor, the bare name wins: it
+    is the key space the ``motor`` column of this row is printed from, so the row
+    stays described by the name it carries.  A ``motor`` that already ends in
+    ``.pos`` is not suffixed a second time.
+
+    A motor absent from the mapping has no target, and the cell therefore stays
+    empty: ``0.0`` would read as a target the host did report.  One function for
+    both target columns so the two cannot drift apart in that rule.
+    """
+    if targets is None:
+        return None
+    if motor in targets:
+        return _safety_number(targets[motor])
+    if motor.endswith(POS_SUFFIX):
+        # Already the qualified shape: there is no ``<motor>.pos.pos`` key to try.
+        return None
+    return _safety_number(targets.get(f"{motor}{POS_SUFFIX}"))
+
+
+def _safety_hold_flag(face: Any, motor: str) -> bool | None:
+    """Whether ``motor`` is held, read from ``face["joint_holds"]``.
+
+    A real container answers the membership question, and a motor it does not list
+    is ``False`` (a readable hold list that omits the motor says "not held").  A
+    value that is no container at all -- ``None``, a number, a ``bool`` -- is no
+    evidence either way, so the cell stays empty (``None``).
+
+    On the pinned vendor client (local fork HEAD ``ec65318f``, the build the Pi
+    runs) ``_joint_hold_goal`` has no write site at all: ``alohamini.py:298``
+    initialises it and ``:985``/``:1076``/``:1088``/``:1128``/``:1131`` only read or
+    pop it.  ``joint_holds`` is therefore ``{}`` on every real run, and this column
+    is ``False`` on every row in the field -- ``False`` is the honest answer there
+    (a readable hold table that omits the motor says "not held"), not a filled-in
+    placeholder.  It also means this column can NOT answer "was the shoulder target
+    held back by an over-current": that judgement rests on ``current_ma`` (a
+    sustained high current with no progress) and, when the target was clipped, on
+    ``requested_target`` vs ``accepted_target``.
+
+    ``str`` is the trap this refuses: a motor name is a substring of its joint key
+    (``"arm_left_shoulder_pan" in "arm_left_shoulder_pan.pos"`` is ``True``), so a
+    membership test on a string would report a hold that no frame reported.  The
+    membership test itself is guarded for the same reason as every other read of
+    this face: a container whose ``__contains__`` raises is a corrupt frame.
+    """
+    try:
+        holds = face["joint_holds"]
+    except Exception:  # absent key, or a mapping whose subscript raises
+        return None
+    if not isinstance(holds, (Mapping, list, tuple, set)):
+        return None
+    try:
+        return motor in holds
+    except Exception:  # a container whose membership test raises
+        return None
+
+
+def _safety_row(
+    *,
+    step_index: Any,
+    sample_sequence: Any,
+    t_monotonic_s: Any,
+    motor: str | None,
+    current_ma: float | None,
+    requested_target: float | None,
+    accepted_target: float | None,
+    hold_active: bool | None,
+) -> dict[str, Any]:
+    """One sidecar row: exactly the eight ``SAFETY_CSV_FIELDS`` keys, no more.
+
+    A single construction site for both shapes ``safety_frame_rows`` returns, so an
+    insert into the sidecar can never come out with a field missing (``write_csv``
+    reads ``row[field]`` and would raise ``KeyError`` on one) or with an extra key
+    no header declares.
+    """
+    return {
+        "step_index": step_index,
+        "sample_sequence": sample_sequence,
+        "t_monotonic_s": t_monotonic_s,
+        "motor": motor,
+        "current_ma": current_ma,
+        "requested_target": requested_target,
+        "accepted_target": accepted_target,
+        "hold_active": hold_active,
+    }
+
+
+def safety_frame_rows(
+    face: Any,
+    *,
+    step_index: Any,
+    sample_sequence: Any,
+    t_monotonic_s: Any,
+) -> list[dict[str, Any]]:
+    """Snapshot one safety frame as sidecar rows: one row per motor, never raising.
+
+    ``face`` is whatever ``client.latest_safety_status`` holds -- a mapping of the
+    vendor side-channel frame -- but nothing here trusts that.  Any object may sit
+    on that attribute, so a face that is not a mapping, a ``currents_ma`` that is
+    not a non-empty mapping, a motor name that is not a ``str``, and a mapping
+    whose readers raise all degrade to the same shape: **exactly one** row with
+    ``motor=None`` and the frame's coordinates passed through.  The reads are
+    wrapped in ``try``/``except Exception`` on purpose -- ``currents_ma`` is client
+    state, so a proxy whose ``items()``/``__iter__``/``__contains__`` raises is a
+    corrupt frame, and a corrupt side frame may cost the sidecar its contents but
+    never the run.
+
+    Motor names come from ``face["currents_ma"]`` in mapping iteration order, so a
+    frame's rows follow the order the frame listed them; ``current_ma``,
+    ``requested_target`` and ``accepted_target`` are that motor's entries of
+    ``currents_ma`` / ``requested_targets`` / ``accepted_targets`` as finite
+    floats (``_safety_number``: ``bool`` and non-numbers are no measurement), and
+    ``hold_active`` is membership in ``joint_holds`` (``True``/``False`` for a real
+    container, ``None`` when the value is no container -- ``_safety_hold_flag``).
+
+    A cell stays empty (``None``, i.e. an empty CSV cell) when the frame carries no
+    usable value, and it is never filled with ``0``.  That is a refusal to
+    fabricate a measurement, not a silent degradation: a ``0 mA`` current reads
+    like a measured zero, and a ``0`` target reads as a target the host never
+    accepted.  The row still names the motor and the frame it came from, so the gap
+    stays visible in the sidecar instead of hiding behind a plausible number.
+
+    Nothing is substituted here: ``latest_safety_status`` is a different frame from
+    ``latest_control_status`` and ``docs/ADR.md`` D12 forbids reading one in place
+    of the other.  The safety snapshot lands in its own sidecar columns, and no
+    control-status read path is touched -- this function reads the face it is
+    handed and nothing else.
+
+    Pure: the face is read, never sampled or mutated, and the coordinates
+    (``step_index``, ``sample_sequence``, ``t_monotonic_s``) are the caller's
+    provenance, passed through unchanged rather than derived here.
+    """
+    current_values = _safety_mapping(face, "currents_ma") or {}
+    motors = [name for name in current_values if isinstance(name, str)]
+    if len(motors) != len(current_values):
+        # One non-``str`` key means the frame cannot be named per motor at all: a
+        # numeric motor name beside the real ones would leave the operator unable
+        # to tell which motor a row belongs to, so the whole frame degrades.
+        motors = []
+    if not motors:
+        return [
+            _safety_row(
+                step_index=step_index,
+                sample_sequence=sample_sequence,
+                t_monotonic_s=t_monotonic_s,
+                motor=None,
+                current_ma=None,
+                requested_target=None,
+                accepted_target=None,
+                hold_active=None,
+            )
+        ]
+    requested_targets = _safety_mapping(face, "requested_targets")
+    accepted_targets = _safety_mapping(face, "accepted_targets")
+    return [
+        _safety_row(
+            step_index=step_index,
+            sample_sequence=sample_sequence,
+            t_monotonic_s=t_monotonic_s,
+            motor=motor,
+            current_ma=_safety_number(current_values[motor]),
+            requested_target=_safety_target(requested_targets, motor),
+            accepted_target=_safety_target(accepted_targets, motor),
+            hold_active=_safety_hold_flag(face, motor),
+        )
+        for motor in motors
+    ]
+
+
+def _safety_frame_counts(rows: Sequence[Mapping[str, Any]]) -> tuple[int, int]:
+    """``(frames, frames_with_motor_table)`` of the sidecar rows a run recorded.
+
+    ``frames`` is the number of frames this run RECORDED, de-duplicated by
+    ``sample_sequence``: one frame is booked per growth of the liveness counter
+    (``safety_frame_rows``), a cached repeat is never recorded, so this is the same
+    number as "how many frames grew" without the run carrying a second counter for
+    it.  Rows whose ``sample_sequence`` is ``None`` form one group together -- that
+    path records nothing today (the growth test in ``run_tracking_steps`` needs an
+    ``int``), but a coordinate that is not a number must not be counted once per
+    row.
+
+    ``frames_with_motor_table`` is how many of those frames carried at least one
+    row with a motor name, i.e. ``motor is not None``: that is exactly a frame whose
+    ``currents_ma`` was a readable, ``str``-keyed, non-empty motor table, because
+    ``safety_frame_rows`` degrades every other shape to a single ``motor=None`` row.
+    Equal numbers therefore mean every recorded frame carried a table, and the
+    difference is the number of frames whose sidecar rows have an empty ``motor``
+    cell -- the degradation a whole-run warning is about.
+    """
+    frames: dict[Any, bool] = {}
+    for row in rows:
+        sequence = row["sample_sequence"]
+        frames[sequence] = frames.get(sequence, False) or row["motor"] is not None
+    return len(frames), sum(1 for has_table in frames.values() if has_table)
 
 
 def _tracking_summary(
@@ -2272,6 +2692,8 @@ def _tracking_summary(
     commands_issued: int = 0,
     observations: int = 0,
     elapsed_s: float = float("nan"),
+    safety_rows: Sequence[Mapping[str, Any]] = (),
+    safety_missing: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Assemble the tracking report from the rows recorded so far.
 
@@ -2280,6 +2702,14 @@ def _tracking_summary(
     ``achieved_command_hz`` and ``achieved_rate_hz`` are measured evidence rather
     than the requested knobs echoed back: a run whose pacing thinned its sampling
     reports the thinned rate.  Both are ``nan`` when a rate cannot be computed.
+
+    ``safety_rows`` carries the sidecar snapshots in arrival order (one row per
+    motor per fresh frame, ``safety_frame_rows``) and ``safety_missing`` is the
+    capability probe of the run's start (``missing_safety_capabilities``): the
+    report itself does not print either of them -- they travel with the summary so
+    the caller writes the sidecar beside the tracking CSV, and so a summary read by
+    a test or a caller cannot silently lose the probe result that explains an empty
+    sidecar.
     """
     rise_times_s = [row["rise_90_time_s"] for row in rows if row["rise_90_time_s"] is not None]
     settle_errors_deg = [abs(row["error_deg"]) for row in rows if row["settled"]]
@@ -2298,6 +2728,8 @@ def _tracking_summary(
         "max_overshoot_deg": max(overshoots_deg) if overshoots_deg else float("nan"),
         "hold_action": dict(hold_action),
         "hold_error": hold_error,
+        "safety_rows": list(safety_rows),
+        "safety_missing": list(safety_missing),
     }
 
 
@@ -2386,6 +2818,27 @@ def run_tracking_steps(
     measurement — ``--delta-deg 1.0`` with ``--settle-tolerance-deg 0.15`` is
     the default instance of it — and this function does not change the judgement
     order or the sampling to paper over it; the report surfaces it instead.
+
+    Safety sidecar: every frame whose ``observation_sequence`` grew is also
+    snapshotted into ``summary["safety_rows"]`` (``safety_frame_rows``, one row per
+    motor), at the step-start observation as well as on every settle poll, in
+    arrival order; a cached repeat frame adds nothing, because the same growth test
+    that feeds the stall counter decides it.  ``summary["safety_missing"]`` is the
+    capability probe of the run's start (``missing_safety_capabilities``); when it
+    names ``latest_safety_status`` the rows are still recorded, with empty cells,
+    and ``_run_tracking_mode`` says so on stderr once.  These rows are evidence
+    *beside* the measurement and never change its outcome: an absent face and a
+    corrupt one leave the rows, the abort verdicts and the exit code untouched.
+    Nothing is substituted either: the safety face fills its own sidecar columns and
+    no ``latest_control_status`` path of this harness is touched (``docs/ADR.md``
+    D12).
+
+    ``t_monotonic_s`` of a sidecar row is the frame's arrival stamp
+    (``_arrival_monotonic_s``) and, when the frame carries none, the poll-clock
+    reading the caller had already taken for that observation -- no clock read is
+    added here, so the pacing, the settle budgets and the achieved rates keep being
+    judged against exactly the readings they were judged against before the sidecar
+    existed.
     """
     sleep_fn = time.sleep if sleep is None else sleep
     clock_fn = time.monotonic if clock is None else clock
@@ -2416,6 +2869,14 @@ def run_tracking_steps(
     commands_issued = 0
     observations = 0
     last_command_s: float | None = None
+    # Safety sidecar: the capability is probed ONCE, at the run's start, so the
+    # answer cannot drift between "the client publishes the face" and "the run said
+    # it does not", and every fresh frame of the run is recorded the same way.  The
+    # rows accumulate in arrival order and reach the caller through the summary; a
+    # missing face is reported by name (``safety_missing``) instead of being papered
+    # over by a defaulted ``getattr``.
+    safety_missing = missing_safety_capabilities(client)
+    safety_rows: list[dict[str, Any]] = []
 
     def _pace_command(now_s: float) -> float:
         """Wait for the next command slot and return the stamp of that write.
@@ -2442,8 +2903,33 @@ def run_tracking_steps(
         last_command_s = slot_s
         return slot_s
 
-    def _observe() -> tuple[Any, str | None]:
-        """Read one frame, remember its pose and update the liveness counter."""
+    def _safety_face() -> Any:
+        """The safety frame the client publishes, or ``None`` when it has none.
+
+        Gated on the run-start probe instead of a defaulted ``getattr``: a client
+        without the face is *named* (``safety_missing``, one stderr line in
+        ``_run_tracking_mode``) and its rows carry empty cells, so an absent face is
+        never quietly read as a frame that said nothing.  The attribute read is
+        guarded as well: a face that vanishes mid-run reads as an absent one, because
+        no side-channel read may abort the measurement.
+        """
+        if safety_missing:
+            return None
+        try:
+            return client.latest_safety_status
+        except Exception:  # a face that vanished mid-run is not a broken link
+            return None
+
+    def _observe(step_index: int, poll_s: float) -> tuple[Any, str | None]:
+        """Read one frame, remember its pose and update the liveness counter.
+
+        ``poll_s`` is the poll-clock reading the caller took for this observation
+        (before the blocking read).  It stamps the safety snapshot of a frame whose
+        client publishes no arrival stamp; it is passed in rather than read here so
+        that an observation costs exactly the clock reads it always cost -- the
+        pacing, the settle budgets and the achieved rates are arithmetic over that
+        clock -- and so ``step_index`` is the step the frame was polled in.
+        """
         nonlocal last_sequence, stale_polls, observations
         state = client.get_observation(include_cameras=False)
         observations += 1
@@ -2454,17 +2940,36 @@ def run_tracking_steps(
         if sequence is not None and sequence > last_sequence:
             last_sequence = sequence
             stale_polls = 0
+            # One snapshot per FRESH frame, booked on the growth of the very counter
+            # the stall detector watches (never at the step tail only): a cached
+            # repeat carries the numbers the sidecar already holds, so re-booking it
+            # would duplicate a frame the sidecar already has.  Both recording sites
+            # are this function, so the step-start frame and every settle-loop poll
+            # are covered alike.
+            arrival_s = _arrival_monotonic_s(client)
+            safety_rows.extend(
+                safety_frame_rows(
+                    _safety_face(),
+                    step_index=step_index,
+                    sample_sequence=sequence,
+                    t_monotonic_s=poll_s if arrival_s is None else arrival_s,
+                )
+            )
         else:
             stale_polls += 1
         return state, (STALE_FEEDBACK_REASON if stale_polls >= FEEDBACK_STALL_LIMIT else None)
 
     try:
         for step_index in range(steps):
-            if clock_fn() >= deadline_s:
+            # The deadline check reads the poll clock anyway; the reading is kept
+            # because it is the poll stamp of this step-start observation, i.e. the
+            # one ``_observe`` needs for the safety snapshot of that frame.
+            poll_s = clock_fn()
+            if poll_s >= deadline_s:
                 abort_reason = "global --timeout-s exhausted before the step could start"
                 break
             try:
-                state, stale = _observe()
+                state, stale = _observe(step_index, poll_s)
             except Exception as exc:  # any feedback failure stops the probe
                 abort_reason = f"feedback read failed before the step: {exc}"
                 break
@@ -2538,7 +3043,7 @@ def run_tracking_steps(
                         abort_reason = f"command rejected: {exc}"
                         break
                     try:
-                        state, stale = _observe()
+                        state, stale = _observe(step_index, now_s)
                     except Exception as exc:  # any feedback failure stops the probe
                         abort_reason = f"feedback read failed while settling: {exc}"
                         break
@@ -2603,6 +3108,8 @@ def run_tracking_steps(
             commands_issued=commands_issued,
             observations=observations,
             elapsed_s=clock_fn() - started_s,
+            safety_rows=safety_rows,
+            safety_missing=safety_missing,
         )
         if record is not None:
             record["summary"] = summary
@@ -2775,12 +3282,55 @@ def _run_tracking_mode(client: Any, args: argparse.Namespace) -> int:
         summary = record.get("summary") or _tracking_summary([], INTERRUPT_ABORT_REASON, {}, None)
 
     write_error: str | None = None
+    sidecar_path = safety_csv_path(args.csv)
+    # Counted from the very rows the sidecar is written from, so the warning and the
+    # file can never disagree about how much of the run came out empty.
+    frames, frames_with_motor_table = _safety_frame_counts(summary["safety_rows"])
+    if summary["safety_missing"]:
+        # Exactly one line, and it names the face the probe is missing: the absent
+        # capability is reported, never read through a defaulted ``getattr``.  The
+        # sidecar is still written (empty safety cells, one row per frame) and the
+        # exit code is untouched -- no column, no verdict and no rate of this run
+        # depends on the safety face.
+        print(
+            f"warning: the client publishes no {', '.join(summary['safety_missing'])}; the safety "
+            f"sidecar {sidecar_path} records empty cells for the motor currents, the requested / "
+            "accepted targets and the hold flags.  The run itself is unaffected: the tracking CSV, "
+            "the report and the exit code do not depend on that face.",
+            file=sys.stderr,
+        )
+    elif frames_with_motor_table < frames:
+        # The face exists but at least one of the recorded frames carried nothing
+        # usable -- the degradation the deployed client really hits, since the
+        # attribute always exists (initial ``{}``) and only its contents can be
+        # empty.  Judged over the whole run and not over its first frame: a run of 4
+        # frames with 3 broken ones used to pass in silence (it only warned when NO
+        # frame carried a table), leaving the blank ``motor`` cells of the sidecar
+        # unmentioned.  ``frames_with_motor_table < frames`` is false for a run that
+        # recorded no frame at all, so an abort before the first frame warns nothing;
+        # a host that fills the frame on every recorded poll gets no warning either.
+        # The two branches are mutually exclusive, so one line at most, and the exit
+        # code never depends on this face.
+        print(
+            "warning: the client publishes latest_safety_status, but "
+            f"{frames - frames_with_motor_table} of the {frames} frame(s) this run recorded "
+            "carried no readable currents_ma motor table (frames="
+            f"{frames}, frames_with_motor_table={frames_with_motor_table}), so the safety "
+            f"sidecar {sidecar_path} records empty cells for the motor currents, the requested / "
+            "accepted targets and the hold flags on those frames.  The run itself is unaffected: "
+            "the tracking CSV, the report and the exit code do not depend on that face.",
+            file=sys.stderr,
+        )
     # Same tail-interrupt rule as in rtt mode: the hold is already on the wire, the
     # write and the report are all that is left, and a Ctrl-C landing there may not
     # escape ``main``.  The interrupt becomes the abort reason, so the verdict order
     # below is unchanged (hold failure > write failure > interrupt).
     try:
         write_csv(args.csv, summary["rows"], TRACKING_CSV_FIELDS)
+        # After the primary artefact, and best-effort: a sidecar that cannot be
+        # written is a warning, never ``EXIT_WRITE_FAILED`` (see
+        # ``_write_safety_sidecar``).
+        _write_safety_sidecar(sidecar_path, summary["safety_rows"])
         print(_format_tracking_report(summary, args, joint_key, delta_deg, scale))
     except OSError as exc:
         print(f"write failed: {exc}", file=sys.stderr)
@@ -2794,6 +3344,10 @@ def _run_tracking_mode(client: Any, args: argparse.Namespace) -> int:
         write_error = _write_csv_after_interrupt(args.csv, summary["rows"], TRACKING_CSV_FIELDS)
         if write_error is not None:
             print(f"write failed: {write_error}", file=sys.stderr)
+        # The sidecar gets the same best-effort retry, and with the same verdict:
+        # its own failure (or a second interrupt) is a warning, not a write failure
+        # of the run.
+        _write_safety_sidecar(sidecar_path, summary["safety_rows"], after_interrupt=True)
         if summary["abort_reason"] is None:
             summary["abort_reason"] = INTERRUPT_ABORT_REASON
 
