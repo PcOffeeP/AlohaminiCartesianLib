@@ -1,6 +1,6 @@
 # S4 现场执行手册：真机 smoke
 
-这份文档是一次现场窗口的执行手册：从到场核对到收尾，每一节给命令、判据与产物。现场由 Agent 通过 SSH 连上 Pi，照着逐条取数与执行，不因缺信息临时决策。
+这份文档是一次现场窗口的执行手册，从到场核对写到收尾，每一节给命令、判据与产物。现场由 Agent 通过 SSH 连上 Pi，照着逐条取数、执行，不靠临时决策补缺失的信息。
 
 实测边界：第 3、4.1、4.3、5、7.1 节的命令在 2026-10-25 对 `pi5@10.34.170.98` 跑过一轮，产物在证据目录 `evidence/s4-20261025/`，数字汇总见 `docs/field-results.md`。第 4.2、5.3、6.1、6.2、7.2 节是本轮新增，**未在现场执行过**；首跑若输出形态与本文不符，按实际输出修正，并回写到本文档。
 
@@ -8,12 +8,12 @@
 
 执行顺序固定，按下面四步走：
 
-1. 先读第 1 节，把 P0–P5 逐条判完。判不动的条件不要跳过，`P1`–`P5` 任一不满足就停在那一步。
-2. 在同一个 shell 里粘第 2 节的变量块与 `run` 函数，并跑掉 `0.9-probe false` 自证。后面所有命令都假定这两件已经做完。
+1. 先读第 1 节，把 P0–P5 逐条判完。判不了的条件不要跳过：`P1`–`P5` 任一不满足，就停在那一步。
+2. 在同一个 shell 里粘第 2 节的变量块与 `run` 函数，再跑一次 `0.9-probe false` 自证留痕链路。后面所有命令都假定这几步已经做完。
 3. 按第 3 节到第 8 节的顺序执行。每节开头写前置条件，每步命令之后写判据与产物。
-4. 拿到非 0 退出码查第 10 节；处置查第 12 节；问题清单查第 9 节；交回前按第 13 节逐条勾选。
+4. 拿到非 0 退出码先查第 10 节；要处置查第 12 节；查已发现的问题查第 9 节；交回前按第 13 节逐条勾选。
 
-步骤号说明：`run` 的步骤号即本文分节号（如 §3.4 用 `3.4-ports`、§4.3 用 `4.3a-host-args`），产物名里的步骤号就是它。历史证据文件仍沿用重排前的旧步骤号命名（`0.*`、`1.*`、`3.1-tracking` 等），文中引用原件时按原文件名写。
+步骤号说明：`run` 的步骤号就是本文的分节号（§3.4 用 `3.4-ports`，§4.3 用 `4.3a-host-args`），产物名里的步骤号也是它。历史证据文件仍沿用重排前的旧步骤号命名（`0.*`、`1.*`、`3.1-tracking` 等），文中引用原件时按原文件名写。
 
 一页总览：
 
@@ -26,7 +26,7 @@
 | 7 受控试动 | 开跑勾选单、单关节步进、肩部目标接受判定 | 本文未设预算 | 是，单臂单关节 | `tracking/tracking-$STAMP.csv`、其 sidecar、`stdout/7.2-*` | exit 0；exit 8 按第 12 节处置 |
 | 8 收尾 | 断电时序、Host 停启留痕、产物归档 | 本文未设预算 | 否 | `stdout/8.*` | 每步三件套齐全，Host 停启有记录 |
 
-只有到场核对有时间预算（10 分钟），来源是本次任务的约定。其余各节的实际耗时记进 `$S4DIR/stdout/` 存档，本文不设预算。
+只有到场核对有预算（10 分钟），依据是本次任务的约定。其余各节不设预算，实际耗时记进 `$S4DIR/stdout/` 存档。
 
 哪些步骤要现场授权：
 
@@ -56,11 +56,11 @@ P0 结论：已关闭。Pi 上的运行时升级到含 metadata v2 的版本，H
 
 ## 2 变量块、留痕函数、时间基准
 
-现场凡是 Pi 侧的信息（Host 进程、端口、vendor 代码、配置实际取值），统一用 `ssh` 取，不靠口头转述。理由有两条：口头转述没有落盘证据，出错时无法回溯；`run` 函数会把命令原文、输出原文、退出码一起写进 `$S4DIR/stdout/`，事后能复核。
+Pi 侧的信息（Host 进程、端口、vendor 代码、配置实际取值）一律用 `ssh` 取，不靠口头转述。理由有两条：口头转述没有落盘证据，出错无法回溯；`run` 函数把命令原文、输出原文、退出码一起写进 `$S4DIR/stdout/`，事后能复核。
 
 ### 变量块
 
-先建一个会话内的变量块。粘进当前 shell 一次，后面所有命令都用它：
+先建一个会话内的变量块，粘进当前 shell 一次，后面所有命令都用它：
 
 ```bash
 export PI_HOST=<现场确认的 Pi 地址>
@@ -115,7 +115,7 @@ run() {
 
 每次调用产出三个文件：`.cmd` 是命令原文，`.log` 是 stdout 与 stderr 的合并原文，`.exit` 是退出码。
 
-步骤号即分节号；历史证据文件仍沿用重排前的旧步骤号命名，文中引用原件时按原文件名写。
+步骤号即分节号。历史证据文件用的是重排前的旧步骤号，引用原件时按原文件名写。
 
 为什么不用 `| tee`：管道会把 `$?` 变成 `tee` 的退出码，拿到的永远是 `tee` 的 0，与「拿非 0 退出码看第 10 节」直接冲突。这个函数先把输出落盘再 `cat` 回显，退出码取自被调命令本身。
 
@@ -134,7 +134,7 @@ run 3.2-host-procs ssh "$PI" 'pgrep -af "alohamini_host|lerobot"'
 run 0.9-probe false
 ```
 
-第三条应返回 1，并写出 `$S4DIR/stdout/0.9-probe-$STAMP.exit`，内容为 `1`。写出来的不是 `1`，先修 `S4DIR` 与函数定义，再往下做。
+第三条应返回 1，并写出 `$S4DIR/stdout/0.9-probe-$STAMP.exit`，内容为 `1`。写出来的不是 `1`，说明留痕链路没接好：先修 `S4DIR` 与函数定义，再往下做。
 
 ### SSH 连接检查与连不上时的处置
 
@@ -169,14 +169,14 @@ export PI="pi5@$PI_HOST"
 
 然后重跑 `3.1a-ssh-check`。
 
-3. 问现场要地址：问清 Pi 当前的 IPv4 地址，按第 2 步的方式改 `PI_HOST` 与 `PI` 后重跑 `3.1a-ssh-check`。
+3. 问现场要地址：拿到 Pi 当前的 IPv4 地址，按第 2 步的方式改 `PI_HOST` 与 `PI`，再重跑 `3.1a-ssh-check`。
 4. 现场答不上来时，在路由器管理页查 DHCP 列表，找主机名 `pi5` 或对应 MAC 的地址。
 
 本节产物：`$S4DIR/stdout/3.1a-ssh-check-*`、`3.1b-ssh-mdns-*`、`3.1-ping-*`、`0.9-probe-*`。
 
 ## 3 到场核对
 
-`$S4DIR` 与 `$STAMP` 由第 2 节的变量块给出，本节不重复定义。证据目录已由那个块建好，本节不再新建。
+`$S4DIR` 与 `$STAMP` 由第 2 节的变量块给出，本节不重复定义；证据目录也已由那个块建好，本节不再新建。
 
 ### 3.1 网络可达
 
@@ -192,7 +192,7 @@ run 3.1-ping ping -c 3 "$PI_HOST"
 run 3.2-host-procs ssh "$PI" 'pgrep -af "alohamini_host|lerobot"'
 ```
 
-判据：`.log` 里至少一行，行首有 PID。没有输出说明 Host 没起，按第 6.1 节的命令骨架起 Host，再往下做。
+判据：`.log` 里至少一行，行首有 PID。没有输出说明 Host 没起：按第 6.1 节的命令骨架起 Host，再往下做。
 
 `pgrep` 默认按扩展正则解释，`|` 直接写，不要转义。写成 `\|` 时 ERE 把反斜杠加竖线当字面量，有进程也可能匹配不到。
 
@@ -202,7 +202,7 @@ run 3.2-host-procs ssh "$PI" 'pgrep -af "alohamini_host|lerobot"'
 run 3.3-tools ssh "$PI" 'command -v ss netstat; echo "---"; ss -ltn | head -20'
 ```
 
-这一条只回答一个问题：`ss` / `netstat` 在不在。`command -v` 打出路径即存在；`ss -ltn` 那一段不管有没有端口，都能看出工具本身能不能跑。
+这一条只回答一个问题：`ss` / `netstat` 在不在。`command -v` 打出路径即存在；`ss -ltn` 那一段不看端口，只看工具本身能不能跑。
 
 ### 3.4 5555 与 5556 在听
 
@@ -218,7 +218,7 @@ run 3.4b-ports-netstat ssh "$PI" 'netstat -ltnp | grep -E ":5555|:5556"'
 
 判据：两个端口各至少一行 `LISTEN`。
 
-`3.4` 空输出有两种可能：工具缺失，或没有监听。`3.3-tools` 用来区分这两种。**空输出本身不构成「Host 未运行」的证明**，要结合 `3.2` 的进程检查一起判。2026-10-25 实测：`ss` 与 `netstat` 在 Pi 上都存在（`/usr/bin/ss`、`/usr/bin/netstat`），`3.4` 两条输出为空是因为确实没有 LISTEN 的 5555/5556。该结论来自 2026-10-25 的独立复核（`command -v` 与 `ss -ltn`），不是通过 `3.3-tools` 步骤本身取得。
+`3.4` 空输出有两种可能：工具缺失，或没有监听。`3.3-tools` 用来区分这两种。**空输出本身不构成「Host 未运行」的证明**，要结合 `3.2` 的进程检查一起判。2026-10-25 实测：`ss` 与 `netstat` 在 Pi 上都存在（`/usr/bin/ss`、`/usr/bin/netstat`），`3.4` 两条输出为空是因为确实没有 LISTEN 的 5555/5556。该结论由 2026-10-25 的独立复核（`command -v` 与 `ss -ltn`）得出，`3.3-tools` 这一步本身没有取到它。
 
 ### 3.5 Pi 地址核对
 
@@ -250,7 +250,7 @@ run 3.7c-video ls -l /dev/video*
 run 3.7d-video-pi ssh "$PI" 'ls -l /dev/video* 2>/dev/null | head -20'
 ```
 
-`3.7b` 与 `3.7c` 的判据不能按 `.exit` 是否为 0 判成功。`ls` 在无匹配时返回 2；2026-10-25 实测 Pi 上没有 `/dev/ttyUSB*`，末条 `ls` 无匹配使整条命令 exit 2，而 `by-id` 与 `ttyACM` 的输出完全正常。判据是：看 `.log` 里有没有 `/dev/ttyACM*` 行；`3.7c` 同理，看有没有 `/dev/video*` 行。`.exit` 为 2 但 `.log` 里有该有的行，这一条算取到。
+`3.7b` 与 `3.7c` 的判据不能只看 `.exit` 是否为 0。`ls` 在无匹配时返回 2；2026-10-25 实测 Pi 上没有 `/dev/ttyUSB*`，末条 `ls` 无匹配使整条命令 exit 2，而 `by-id` 与 `ttyACM` 的输出完全正常。判据是看 `.log`：`3.7b` 要有 `/dev/ttyACM*` 行，`3.7c` 要有 `/dev/video*` 行。`.exit` 为 2 但 `.log` 里有该有的行，这一条算取到。
 
 标定文件核对（换机或重装后要确认标定文件还在）：
 
@@ -264,7 +264,7 @@ run 3.7e-calib ssh "$PI" 'ls -l ~/.cache/huggingface/lerobot/calibration/robots/
 
 ### 3.8 产物路径纪律：一律显式传 `--out` / `--csv`
 
-默认文件名的坑：两个脚本的默认产物目录是 `artifacts/alohamini-io/`，相对当前工作目录解析，不以仓库根为基准。文件名里的时间戳只到秒（格式 `YYYYmmddTHHMMSSZ`），同一秒内跑两次会静默覆盖前一份（`write_text` 直接盖写）。结论：一律显式传 `--out` / `--csv`，不要依赖默认文件名。
+默认文件名有两处要当心：两个脚本的默认产物目录是 `artifacts/alohamini-io/`，相对当前工作目录解析，不以仓库根为基准；文件名里的时间戳只到秒（格式 `YYYYmmddTHHMMSSZ`），同一秒内跑两次会静默覆盖前一份（`write_text` 直接盖写）。所以一律显式传 `--out` / `--csv`，不依赖默认文件名。
 
 `run` 写的 `.cmd/.log/.exit` 是留痕，不算本节产物。
 
@@ -332,7 +332,7 @@ run 4.1-capture uv run --no-sync python benchmarks/alohamini_io/capture_robot_fi
 - 顶层 `schema_version` 是 `1`，它表示 payload 格式版本，永远不是 2。
 - 要等于 2 的是 `robot_metadata.schema_version`。
 
-现场最容易把顶层那个 `1` 当成失败原因。脚本只校验 `robot_metadata.schema_version == 2` 与 `motors` 非空映射，不校验每个电机的 8 个字段是否齐全。8 字段是 `id`、`model`、`normalization`、`drive_mode`、`range_min`、`range_max`、`homing_offset`、`resolution`，齐不齐由宿主决定，现场逐电机记录实际覆盖情况。
+现场最常见的误判是把顶层那个 `1` 当成失败原因。脚本只校验 `robot_metadata.schema_version == 2` 与 `motors` 非空映射，不校验每个电机的 8 个字段是否齐全。8 字段是 `id`、`model`、`normalization`、`drive_mode`、`range_min`、`range_max`、`homing_offset`、`resolution`，齐不齐由宿主决定，现场逐电机记录实际覆盖情况。
 
 v2 宿主（HEAD `6aee1f81`）上 18 个电机的 `homing_offset` 与 `resolution` 全部有值，无 `null`。升级前的 v1 宿主给每个电机只写 6 个键，没有这两个字段。
 
@@ -395,7 +395,7 @@ MOTORS = {
 
 要看的寄存器：`Min_Position_Limit`、`Max_Position_Limit`、`Present_Position`、`Goal_Position`、`Homing_Offset`、`Torque_Enable`、`Operating_Mode`、`Model_Number`、`Status`。
 
-执行方式有三件事需现场确认，本文不编造：
+执行方式有三件事需现场确认，本文不给假定值：
 
 1. 投递方式：把改好的脚本放到 Pi 的 `/tmp/` 属于向 Pi 写文件，需在第 3.9 节的授权记录里写明；投递命令本身需现场确认。
 2. 解释器：脚本 `import` 的是 `lerobot.motors.feetech`，必须用装了厂商包的 Python。证据里 Host 用的是 `/home/pi5/miniconda3/envs/lerobot_alohamini/bin/python`（见第 6.1 节的启动命令原文），该解释器能否直接跑本脚本需现场确认。
@@ -516,7 +516,7 @@ run 4.3e-load-check uv run --no-sync python -c "from pathlib import Path; from a
 
 判据：`.exit` 为 `0`，`.log` 里打印出合并后的 `AlohaMiniSettings`。
 
-设备路径填的是**将来运行本库那台机器**上的路径，不是「随便哪台机器都能用」的路径：
+设备路径填的是**将来运行本库那台机器**上的路径，换一台机器未必通用：
 
 - 真正部署时本库跑在接了机械臂的那台机器上（本项目是 Pi），YAML 里写 Pi 侧路径（`/dev/ttyACM0`、`/dev/ttyACM1`、`/dev/video*`），在这台机器上 `load_settings(check_devices=True)` 才成立。
 - 若只在 Mac 上做配置结构校验，用 `load_settings(check_devices=False)`（这是默认值），只验键名、类型、取值，**不验设备存在性**。此时设备存在性的证据来自 Pi 侧的 `3.7b`/`3.7d` 输出，不要因为本机 `ls` 为空就判「设备缺失」。
@@ -534,7 +534,7 @@ run 4.3e-load-check uv run --no-sync python -c "from pathlib import Path; from a
 
 ## 5 零运动测量（不动机器人）
 
-三条命令都不构造任何运动指令：`measure --mode rtt` 只采样观测。三条都过 `run`，stdout 与 stderr 合并落到 `$S4DIR/stdout/<步骤号>-$STAMP.log`，退出码落到同名 `.exit`。
+三条命令都不构造任何运动指令：`measure --mode rtt` 只采样观测。三条都过 `run`：stdout 与 stderr 合并落到 `$S4DIR/stdout/<步骤号>-$STAMP.log`，退出码落到同名 `.exit`。
 
 ### 5.1 部署形态（请求 30 Hz、窗口 3）
 
@@ -554,7 +554,7 @@ run 5.2-rtt-net uv run --no-sync python benchmarks/alohamini_io/measure_latency.
 
 若返回 `9`：该时点这份 vendor 的 client 不发布 `latest_request_timing`，rtt 无法测量。这是设计行为，按第 10 节记录，不当故障、不重试改参数。升级后 HEAD `6aee1f81` 提供该面，实测 exit 0。
 
-在 Pi 上执行时必须把 `PYTHONPATH` 指向被测代码，否则会 import 到已安装的旧版本。采集脚本的 `default_client_factory()` 直接 `import lerobot`，不经过本库 adapter；不设 `PYTHONPATH` 时表现为指纹计时字段全 `null`，或 `measure --mode rtt` 返回退出码 `9`。这两类现象看着像代码缺陷，实际是跑错了代码。
+在 Pi 上执行时，必须把 `PYTHONPATH` 指向被测代码，否则会 import 到已安装的旧版本。采集脚本的 `default_client_factory()` 直接 `import lerobot`，不经过本库 adapter。不设 `PYTHONPATH` 时有两种表现：指纹计时字段全 `null`，或 `measure --mode rtt` 返回退出码 `9`。两种都看着像代码缺陷，实际原因是跑错了代码。
 
 两条读法必须先定下来：
 
@@ -613,7 +613,7 @@ run 5.3-rtt-net-cross /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venv
 
 ## 6 量级验证：臂总线电流能不能判读
 
-本节产出一个前置事实：「`[Currents]` 这条日志能不能用来判负载」。后面所有依赖电流的判断（第 7.2 节）都以这个结论为准。
+本节要给出一条前置事实：`[Currents]` 这条日志能不能用来判负载。后面所有依赖电流的判断（第 7.2 节）都以这个结论为准。
 
 先固定三件已核对的事：
 
@@ -621,7 +621,7 @@ run 5.3-rtt-net-cross /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venv
 - 电流读取本身正常：同一轮 Host 日志里升降轴 `Present_Current` 读到 `71.5 / 221.0 / 936.0 / 2639.0 mA`（`stdout/v2verify-host-20261025.log`）。
 - 局限在臂总线：2026-10-25 整份日志的 `[Currents]` 共 1278 行、11502 个元素（元素分布：`0` 11056 个、`6` 444 个、`13` 2 个），最大值 `13 mA`，等于 2 个 raw 刻度。静止与轻载下只有 0–2 个刻度，运动中的量级未验证。计数须按整份日志复算，按前缀统计会偏小。
 
-`[Currents]` 数组下标与电机 ID 的映射**没有文档**：禁止按位置推断是哪个电机。要判具体电机的电流，用 sidecar 的 `currents_ma`（带键名，见第 11 节）。
+`[Currents]` 数组下标与电机 ID 的映射**没有文档**：禁止按位置推断是哪个电机。要判具体电机的电流，用 sidecar 的 `current_ma` 列（带键名，见第 11 节）。厂商快照里的键叫 `currents_ma`，写进 sidecar 的列叫 `current_ma`，查代码时别把这两个名字互换。
 
 ### 6.1 静止电流基线
 
@@ -670,9 +670,9 @@ run 6.2b-currents-move ssh "$PI" 'HOSTLOG=/tmp/site-host-<STAMP>.log; grep "\[Cu
 | 出现 ≥3 个 raw 刻度（≥20 mA） | 臂总线电流可判读 | 7.2 的电流走势可以当负载旁证用 |
 | 仍是 0–2 个刻度 | 臂总线电流不能判负载 | 后续所有依赖电流的判断降级为「无电流证据」，不要拿它下结论 |
 
-`13 mA` 是 2 个 raw 刻度，`20 mA` 对应 3 个刻度，两个门槛就在这一档。
+`13 mA` 是 2 个 raw 刻度，`20 mA` 对应 3 个刻度，判读门槛就卡在这一档。
 
-两点必须一起写进记录：打印值是 mA，不是 raw 刻度；`[Currents]` 的数组下标与电机 ID 没有映射文档，禁止按位置推断是哪个电机。要判具体电机，用 sidecar 的 `currents_ma`（带键名，列定义见第 11 节）。
+两点必须一起写进记录：打印值是 mA，不是 raw 刻度；`[Currents]` 的数组下标与电机 ID 没有映射文档，禁止按位置推断是哪个电机。要判具体电机，用 sidecar 的 `current_ma`（带键名，列定义见第 11 节）。
 
 判据另一半：主 CSV 与 sidecar 都写出。产物：`tracking/tracking-6.2-$STAMP.csv` 与其 sidecar、`stdout/6.2-currents-move-*`、`stdout/6.2b-currents-move-*`。
 
@@ -726,7 +726,7 @@ run 7.1-tracking uv run --no-sync python benchmarks/alohamini_io/measure_latency
 
 `--delta-deg` 的硬上限与 stdout 表现：常量 `MAX_STEP_DELTA_DEG = 1.0`（`benchmarks/alohamini_io/measure_latency.py:494`，`resolve_delta_deg` 用 `min(delta_deg, MAX_STEP_DELTA_DEG)`）。请求 `--delta-deg 2.0` 时实际按 1.0 执行，report 首部把两者都打印出来，原文形如 `delta_deg=1.000 (requested 2.000)`（打印在 `measure_latency.py:3265-3266`）。要凑更大总行程，只能改成「1° × 更多步」，加大 `--delta-deg` 无效。
 
-关于 `rise_90_time_s` 为空：源码的说法是这一列 can be empty，即**可能**为空。是否为空取决于该关节是否在同一次轮询里越过 90% 线，不是「容差取小了就一定空、取大了就一定不空」。
+关于 `rise_90_time_s` 为空：源码的说法是这一列 can be empty，即**可能**为空。是否为空取决于该关节是否在同一次轮询里越过 90% 线；容差取小未必空，取大也未必不空。
 
 运动学事实：
 
@@ -737,7 +737,7 @@ run 7.1-tracking uv run --no-sync python benchmarks/alohamini_io/measure_latency
 - hold 是就地冻结：把实测 `*.pos` 当目标，三轴速度钉 0，反馈带高度就回写实测高度。报告里只写 `hold_issued`，不写「sent」，因为 action socket 是 PUSH/CONFLATE 无确认。
 - exit 8 表示 hold 被拒，也就是停命令没到。这一条按「机器可能仍在动」处置：先断电，再排查。处置见第 8.1 节与第 12 节。
 
-一条注意：电机名到关节观测键（如 `arm_left_shoulder_pan.pos`）的对应关系本文未核实。`--joint` 写错时由代码 Gate B 拒绝（exit 6、零命令），不会动机器人。
+一处未核实：电机名到关节观测键（如 `arm_left_shoulder_pan.pos`）的对应关系本文没有核实过。`--joint` 写错时由代码 Gate B 拒绝（exit 6、零命令），不会动机器人。
 
 产物：`tracking/tracking-$STAMP.csv`、其 sidecar `tracking-$STAMP-safety.csv`、report 原文与 `stdout/7.1-tracking-*`。
 
@@ -753,7 +753,7 @@ run 7.1-tracking uv run --no-sync python benchmarks/alohamini_io/measure_latency
 
 1. `target_source`（末列，整帧属性）：取值 `none` / `command` / `watchdog` / `protection`，点名该帧的目标由哪一层给出。同一 `sample_sequence` 的每一行同值。
 2. `requested_target` 与 `accepted_target`：同一行内两者不相等，说明 Host 收到的目标与它真正采纳的目标不同，即目标在半路被改过（电流限幅是两列之间那一道）。
-3. `currents_ma` 逐帧走势：按 `sample_sequence` 递增、固定一个 `motor` 取序列，与主 CSV 同一步的 `measured_deg − baseline_deg` 对照。判据是「持续非零且随步进不回落」。
+3. `current_ma` 逐帧走势：按 `sample_sequence` 递增、固定一个 `motor` 取序列，与主 CSV 同一步的 `measured_deg − baseline_deg` 对照。判据是「持续非零且随步进不回落」。
 
 结论只有三类，现场必须落到其中一类并写明：
 
@@ -776,7 +776,7 @@ run 7.2-joint-hold-write ssh "$PI" 'grep -n "_joint_hold_goal\[" ~/lerobot_aloha
 
 本地 fork（HEAD `ec65318f`）的读法结论是「无写入点」：`alohamini.py:298` 初始化为 `{}`，`:985`/`:1076`/`:1088`/`:1128`/`:1131` 只读或 pop。Pi 上跑的是合并后的 `6aee1f81`，是否相同以本步输出为准，不要沿用本地结论。
 
-旁证：Host stdout 的 `[HOST TRACKING][<joint>]` 行，含 `target= / command= / measured= / error= / current=`。取法是从 Host 日志里 grep 该前缀，把原文落盘：
+旁证是 Host stdout 的 `[HOST TRACKING][<joint>]` 行，行内含 `target= / command= / measured= / error= / current=`。从 Host 日志里 grep 该前缀，把原文落盘：
 
 ```bash
 run 7.2b-host-tracking ssh "$PI" 'HOSTLOG=/tmp/site-host-<STAMP>.log; grep "\[HOST TRACKING\]" "$HOSTLOG" | grep "shoulder_pan\|shoulder_lift" | tail -30'
@@ -807,12 +807,12 @@ run 7.2b-host-tracking ssh "$PI" 'HOSTLOG=/tmp/site-host-<STAMP>.log; grep "\[HO
 ### 8.3 产物归档与交回
 
 - `$S4DIR` 就在本机证据目录下（`~/pi-workspace/alohamini-cartesian-teleop/evidence/`），不需要回传。
-- 若某步在 Pi 上生成了文件（寄存器脚本副本、Host 日志），取回方式需现场确认：`scp` 需要网络授权。替选是在 Pi 上把原文 `cat` 出来，落进 `stdout/*.log`。
+- 若某步在 Pi 上生成了文件（寄存器脚本副本、Host 日志），取回方式需现场确认：`scp` 需要网络授权。替代做法是在 Pi 上把原文 `cat` 出来，落进 `stdout/*.log`。
 - 交回前按第 13 节逐条勾选，把未完成项与「需现场确认」的条目列给调度方。数字入 `docs/field-results.md` 需另一次任务授权，本手册不写台账。
 
 ## 9 已发现问题与已定方案
 
-一条问题一行，写的是「到现场怎么处理」，不是当初怎么发现。
+一条问题一行，写的是「到现场怎么处理」；发现经过不放这张表。
 
 | 问题 | 现场怎么处理 | 判据 | 产物 |
 | --- | --- | --- | --- |
@@ -841,7 +841,7 @@ run 7.2b-host-tracking ssh "$PI" 'HOSTLOG=/tmp/site-host-<STAMP>.log; grep "\[HO
 
 | 脚本 | 码 | 含义 |
 | --- | --- | --- |
-| 两者 | 2 | 参数解析失败，一律 `2`，不经过任何 `EXIT_*` 常量；所有判定都在打开任何 socket 与调用 `client_factory(...)` 之前完成。`measure`（rtt 与 tracking 共用同一个 `parse_args`，rtt 也查这些旋钮）：argparse 自身产生的用法错误 —— 未知选项、缺少 `--host`、`--mode` 不在 `rtt`/`tracking`、任一 `type=` 转换失败（`--port` / `--samples` / `--request-window` / `--steps` 非整数，或任一 `type=float` 选项不是可解析的数值文本；`--csv` 的 `type=Path` 对命令行字符串不会抛，不在此列）；整数下界 3 项 —— `--samples < 1`、`--request-window < 1`、`--steps <= 0`；「有限且带符号」同查 7 项 —— `--rate-hz`（有限且 `> 0`）、`--control-hz`（有限且 `>= 1`）、`--host-loop-hz`（有限且 `> 0`）、`--timeout-s`（有限且 `> 0`）、`--settle-timeout-s`（有限且 `> 0`）、`--settle-tolerance-deg`（有限且 `>= 0`，`0` 合法即最严格设置）、`--delta-deg`（有限且 `> 0`），非有限值（`nan` / `inf`，含 `float()` 后变成 `inf` 的 `1e400`）与不满足符号条件的值都落 `2`；交叉校验 1 项 —— `--settle-tolerance-deg >= resolve_delta_deg(args)`（与钳到 1.0° 上限之后的有效 delta 比较）。`capture` 的数值校验只有 2 项 —— `--samples < 1`、`--timeout-s` 有限且 `> 0`（不查 `--rate-hz` / `--control-hz` 之类），另加同一形状的 argparse 用法错误（未知选项、缺少 `--host`、`--port` 非整数）。以上为 `2` 的全部触发点。合法预算在运行中到期不走 `2`：`capture` 落 `4`，`measure` 的 rtt 落 `7`、tracking 落 `1` |
+| 两者 | 2 | 参数解析失败，一律 `2`，不经过任何 `EXIT_*` 常量；触发点全部列在表下「退出码 2 的全部触发点」小节 |
 | capture | 0 | payload 已写盘 |
 | capture | 3 | 建客户端、`connect()` 或观测传输失败 |
 | capture | 4 | `--timeout-s` 到期仍不够 `--samples` |
@@ -857,6 +857,10 @@ run 7.2b-host-tracking ssh "$PI" 'HOSTLOG=/tmp/site-host-<STAMP>.log; grep "\[HO
 | measure | 9 | 客户端不发布 rtt 模式所测量的能力（`latest_request_timing`），或发布了但内容填不满。三种形态都返回 `9`、都不写 CSV，形态与触发点见下表 |
 
 `capture_robot_fingerprint.py` 不产生 `9`：缺 `latest_request_timing` 时它继续采集并把计时字段记 `null`。
+
+### 退出码 2 的全部触发点
+
+参数解析失败，一律 `2`，不经过任何 `EXIT_*` 常量；所有判定都在打开任何 socket 与调用 `client_factory(...)` 之前完成。`measure`（rtt 与 tracking 共用同一个 `parse_args`，rtt 也查这些旋钮）：argparse 自身产生的用法错误 —— 未知选项、缺少 `--host`、`--mode` 不在 `rtt`/`tracking`、任一 `type=` 转换失败（`--port` / `--samples` / `--request-window` / `--steps` 非整数，或任一 `type=float` 选项不是可解析的数值文本；`--csv` 的 `type=Path` 对命令行字符串不会抛，不在此列）；整数下界 3 项 —— `--samples < 1`、`--request-window < 1`、`--steps <= 0`；「有限且带符号」同查 7 项 —— `--rate-hz`（有限且 `> 0`）、`--control-hz`（有限且 `>= 1`）、`--host-loop-hz`（有限且 `> 0`）、`--timeout-s`（有限且 `> 0`）、`--settle-timeout-s`（有限且 `> 0`）、`--settle-tolerance-deg`（有限且 `>= 0`，`0` 合法即最严格设置）、`--delta-deg`（有限且 `> 0`），非有限值（`nan` / `inf`，含 `float()` 后变成 `inf` 的 `1e400`）与不满足符号条件的值都落 `2`；交叉校验 1 项 —— `--settle-tolerance-deg >= resolve_delta_deg(args)`（与钳到 1.0° 上限之后的有效 delta 比较）。`capture` 的数值校验只有 2 项 —— `--samples < 1`、`--timeout-s` 有限且 `> 0`（不查 `--rate-hz` / `--control-hz` 之类），另加同一形状的 argparse 用法错误（未知选项、缺少 `--host`、`--port` 非整数）。以上为 `2` 的全部触发点。合法预算在运行中到期不走 `2`：`capture` 落 `4`，`measure` 的 rtt 落 `7`、tracking 落 `1`
 
 ### 退出码 `9` 的三种形态
 
@@ -1017,7 +1021,7 @@ sidecar 写盘失败（`OSError`）也只打一条自己的警告，**退出码�
 - [ ] 第 5 节三条 rtt 各 exit 0、各 500 样本、CSV 各有数据行；`achieved_rate_hz` 与请求率的差距有记录；跨机那条给出 `net_rtt_estimate_s` p50 并与 `6.176 ms` 并列
 - [ ] 第 6 节两段 `[Currents]` 原文与计数在盘，并写出结论：臂总线电流可判读，或不能判负载
 - [ ] 第 7.1 节若执行：每步的 `error_deg`、`overshoot_deg`、`settled` 齐全；`rise_90_time_s` 为空时写明原因；收尾 `hold_issued` 在报告里
-- [ ] 第 7.2 节：`target_source` 分布、`requested_target` 与 `accepted_target` 的比较、`currents_ma` 走势三项有结论，且落到三类之一；`_joint_hold_goal` 有无写入点的 grep 原文在盘
+- [ ] 第 7.2 节：`target_source` 分布、`requested_target` 与 `accepted_target` 的比较、`current_ma` 走势三项有结论，且落到三类之一；`_joint_hold_goal` 有无写入点的 grep 原文在盘
 - [ ] sidecar 的四个数字有记录：每帧行数、`motor` 空行占比、`current_ma` 分布、`hold_active` 全列取值（safety sidecar 此前只有离线测试覆盖，真机首跑按这四项记）
 - [ ] 第 8 节：断电与上电有记录，Host 停启有 PID 与两条命令原文，停机与重启时间都是 UTC
 - [ ] `$S4DIR/stdout/` 里每步都有 `.cmd`、`.log`、`.exit` 三件套
