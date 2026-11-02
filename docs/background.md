@@ -87,7 +87,7 @@
 | 阶段 1 零运动测量与指纹 | 已取得 | `capture` exit 0，`schema_version` 为 `2`，18 个电机的 `homing_offset` 与 `resolution` 全部有值，样本 5，与 codex 原分支逐字段对比 `field diffs: 0`。`measure --mode rtt` exit 0，`achieved_rate_hz=49.8`（请求 1000 Hz，受 Host 50 Hz 主循环封顶），`request_age_ms` p50 20.109，`net_rtt_estimate_ms` p50 6.176，`host_timing_missing=0/100`。这组 RTT 是 Pi 本机回环，不是 PC 到 Pi 的链路延迟 |
 | 阶段 2 制造代码 Gate F 拒绝 | 第一段已取得，第二段未验证 | 第一段：v1 宿主时期 exit 6、零命令，报文 `Gate F refused: the host metadata schema_version is 1, expected 2.`。第二段（换算字段不全时的拒绝）在 v2 宿主上未触发、未验证：现在 18/18 字段齐全，第二段不会拒 |
 | 阶段 3 受控试动（Mode B） | 已首次执行（2026-10-25） | 腕部跟随 87.9%（`arm_left_wrist_roll`，净行程 +1.758°/指令 2.0°，两步 `settled=True`，误差 0.121°）；肩部未跟随：首次试动 `arm_left_shoulder_pan`（1°×3 步）5.9%，随后同一轴 8.8%（1°×3 步）与 8.8%（1°×2 步），`arm_left_shoulder_lift` 13.2%（1°×2 步），全部 `settled=False`，未停稳。五份 CSV 的 `note` 列无 `aborted`，均未中途中止。扭矩状态与肩部不跟随的原因排查中。数据见 `docs/s4-field-smoke.md` 第 7 节 |
-| 阶段 4 配置样例 | 已完成 | 两份 YAML 已入库（`configs/template.yaml`、`configs/site.yaml`），`site.yaml` 的 `observation_request_window` / `watchdog_timeout_ms` / `max_loop_freq_hz` 取现场实测 `3` / `1000` / `50`（出处 Pi `config_alohamini.py:110/122/125`，见 `docs/s4-field-smoke.md` 第 8 节）；两份都能被 `load_settings` 读通。`stdout/4.*` 命令与日志齐备 |
+| 阶段 4 配置样例 | 已完成 | 两份 YAML 已入库（`configs/template.yaml`、`configs/site.yaml`），`site.yaml` 的 `observation_request_window` / `watchdog_timeout_ms` / `max_loop_freq_hz` 取现场实测 `3` / `1000` / `50`（出处 Pi `config_alohamini.py:110/122/125`，见 `docs/s4-field-smoke.md` 第 4.3 节）；两份都能被 `load_settings` 读通。`stdout/4.*` 命令与日志齐备 |
 
 证据目录：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261025/`。逐条命令与判据见 `docs/s4-field-smoke.md`。
 

@@ -619,7 +619,7 @@ run 5.3-rtt-net-cross /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venv
 
 - 打印值已经是 mA，不是 raw 刻度：Host 侧按 `int(raw × 6.5)` 截断后打印。
 - 电流读取本身正常：同一轮 Host 日志里升降轴 `Present_Current` 读到 `71.5 / 221.0 / 936.0 / 2639.0 mA`（`stdout/v2verify-host-20261025.log`）。
-- 局限在臂总线：2026-10-25 整份日志的 `[Currents]` 共 1020 行、9180 个元素，最大值 `13 mA`，等于 2 个 raw 刻度。静止与轻载下只有 0–2 个刻度，运动中的量级未验证。
+- 局限在臂总线：2026-10-25 整份日志的 `[Currents]` 共 1278 行、11502 个元素（元素分布：`0` 11056 个、`6` 444 个、`13` 2 个），最大值 `13 mA`，等于 2 个 raw 刻度。静止与轻载下只有 0–2 个刻度，运动中的量级未验证。计数须按整份日志复算，按前缀统计会偏小。
 
 `[Currents]` 数组下标与电机 ID 的映射**没有文档**：禁止按位置推断是哪个电机。要判具体电机的电流，用 sidecar 的 `currents_ma`（带键名，见第 11 节）。
 
@@ -643,7 +643,7 @@ run 6.1b-currents-idle ssh "$PI" 'sleep 30; HOSTLOG=/tmp/site-host-<启动该 Ho
 
 日志路径里的 `<启动该 Host 时的 STAMP>` 按实际文件名填，同一会话里就是上一条命令里的 `$STAMP`。这条 grep 是本轮新写的，未在现场执行过；判据不依赖它的具体写法，只看有没有 `[Currents]` 原文与计数。
 
-判据：`.exit` 为 `0`；`.log` 里有一行计数（`[Currents]` 的行数）与至少 3 行 `[Currents]` 原文。基线量级参考 2026-10-25 那份日志：1020 行、9180 个元素、最大 13 mA。
+判据：`.exit` 为 `0`；`.log` 里有一行计数（`[Currents]` 的行数）与至少 3 行 `[Currents]` 原文。基线量级参考 2026-10-25 那份日志：1278 行、11502 个元素、最大 13 mA（计数须按整份日志复算，按前缀统计会偏小）。
 
 产物：`stdout/6.1a-host-start-*`（若启了 Host）、`stdout/6.1b-currents-idle-*`。
 
