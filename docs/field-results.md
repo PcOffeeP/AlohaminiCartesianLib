@@ -98,7 +98,7 @@
 - 不影响 A 阶段：夹爪不是运动学关节（`kinematics/joint_adapter.py:54-55`、`:64-65` 明确 gripper 不进关节向量）。
 - 不影响 Gate F：`range_max > range_min`、换算字段齐全，第二段不会因这件事拒绝。既有测试对这一条没有预期变化。
 
-现场只读确认步骤见 `docs/s4-field-smoke.md` 第 13 节「左夹爪标定行程只有 51 tick」。
+现场只读确认步骤见 `docs/s4-field-smoke.md` 第 4.2 节「左夹爪 ID7 只读确认」。
 
 ## 2026-10-25 · S4 现场窗口
 
@@ -116,6 +116,7 @@
 | 五次试动均未中途中止 | `note` 列只有 `ok` 与 `settle budget exhausted`；首次 report 记 `steps_completed=3`、`abort_reason=None`、`hold_issued=yes` | 左臂单关节，五次运行 | 五份 `tracking/*.csv`、`stdout/modeB-first-20261025.stdout`（stderr 0 字节） |
 | 伺服寄存器配置查不出肩部与腕部的差别 | 152 次读全部成功、零失败；`Torque_Limit` 1000、`Max_Torque_Limit` 1000、`P`/`I`/`D` = 16/0/32、`Operating_Mode` 0，四台逐项相同 | 停 Host 后只读，左臂 ID 1/2/3/6 | `stdout/reg_read_1792923639.log` |
 | 扭矩处于开启态，写入者未识别 | `Torque_Enable=1`、`Lock=0`；`Status` 全 0，温度 22–27 ℃、电压 10.6–10.8 V | 停 Host 后只读 | 同上 |
+| 臂总线电流读得到，在静止与轻载下量级极小 | `[Currents]` 整份日志 1278 行、11502 个元素：值分布 `0` 11056 个、`6` 444 个、`13` 2 个，**最大 13 mA**（= 2 个 raw 刻度）；打印值**已经是 mA**（Host 侧按 `int(raw × 6.5)` 截断），不是 raw 刻度 | 全日志落在静止 / 轻载窗口；运动中的量级未验证 | `stdout/v2verify-host-20261025.log` |
 | 回环 RTT | `net_rtt_est` p50 6.18 ms、p95 6.45 ms；`achieved_rate_hz=49.8`（请求 1000 Hz）；`host_timing_missing=0/100` | Pi 本机回环（`host=127.0.0.1`） | `rtt/rtt-loopback-merged-20261025.csv`、`stdout/3.2-rtt-20261025T094446Z.log` |
 | Gate F 第一段有真实拒绝记录 | exit `6`、零命令；报文 `Gate F refused: the host metadata schema_version is 1, expected 2.` | v1 宿主，升级前 | `stdout/2.2b-gateF-attempt-20261025T074158Z.log` |
 
@@ -128,6 +129,7 @@
 | 右臂试动数据 | 本轮只动左臂，`tracking/` 五份 CSV 全为 `arm_left_*` |
 | 相机帧数据 | 采集时返回零帧，目录内无任何图像文件；`capture/*.json` 的 `robot_metadata.cameras` 只有 2 项，「4 路相机全零帧」这一条在证据目录里没有直接记录 |
 | 运行后的回弹量 | 试动结束后未继续采样该轴，`tracking/` 里没有运行之后的记录 |
+| 运动窗口内的电流量级 | 现有 `[Currents]` 最大 13 mA（2 个 raw 刻度），全落在静止与轻载窗口；运动中的读数未采集 |
 
 ### 读法
 
@@ -136,6 +138,7 @@
 | 达成率 | 净行程 ÷ 指令行程。净行程 = 末步 `measured_deg` − 首步 `baseline_deg`；指令行程 = Σ（每步 `cmd_deg` − 该步 `baseline_deg`），不用「步数 × 1°」。例：`1.7582 ÷ 2.0000 = 87.9%` |
 | 停稳 | `settled=True` 指该步在 settle 预算内稳住（本轮容差 0.15°）；`note` 为 `settle budget exhausted` 即预算用完仍未稳 |
 | 1 tick | 0.0879°。腕部每步约 10 tick，肩部每步约 1 tick |
-| `tracking/` CSV 列 | 14 列含义见 `docs/s4-field-smoke.md` 第 10 节。要点：`cmd_deg` 是该步的绝对目标角，`baseline_deg` 是该步起点的实测角，`measured_deg` 是该步收尾的实测角 |
+| `tracking/` CSV 列 | 14 列含义见 `docs/s4-field-smoke.md` 第 11 节。要点：`cmd_deg` 是该步的绝对目标角，`baseline_deg` 是该步起点的实测角，`measured_deg` 是该步收尾的实测角 |
 | 回环 RTT 的读法 | `net_rtt_est_s` 是扣掉 host 采样、相位、排队与预取等待之后的估计值，不是纯往返时延；`host=127.0.0.1` 表示这是 Pi 本机回环，不能当网络延迟读 |
+| 电流的单位、粒度与计数 | `[Currents]` 打印值已是 mA（Host 侧 `int(raw × 6.5)` 截断）：`6` 是 1 个 raw 刻度，`13` 是 2 个刻度。同一份日志里升降轴 `Present_Current` 读到 `71.5` / `221.0` / `936.0` / `2639.0` mA，说明电流读取本身正常；局限在臂总线静止与轻载下只有 0–2 个 raw 刻度。**运动中的量级未验证**，不要拿它反推负载。计数须按整份文件复算：`grep -c '\[Currents\]'` 给 1278、元素 11502；`docs/s4-field-smoke.md` 第 6 节记的「1020 行、9180 个元素」止于本文件第 1035 行（约前 50 KB），与整份文件差 258 行，引用时不要混用。判读门槛见 `docs/s4-field-smoke.md` 第 6.2 节 |
 | 时间基准 | 证据文件名与日志时间戳都由 `date -u` 生成，是 UTC。本文件正文里的日期（如 `2026-10-25`）也是 UTC 日期。本机时间是 UTC+8，钟点比日志数字大 8 小时：UTC 07:00 对应本地 15:00，UTC 09:33 对应本地 17:33。Pi 的系统时区在证据目录内没有 `timedatectl` 记录 |
