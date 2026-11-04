@@ -15,6 +15,8 @@
 
 步骤号说明：`run` 的步骤号就是本文的分节号（§3.4 用 `3.4-ports`，§4.3 用 `4.3a-host-args`），产物名里的步骤号也是它。历史证据文件仍沿用重排前的旧步骤号命名（`0.*`、`1.*`、`3.1-tracking` 等），文中引用原件时按原文件名写。
 
+新步骤号 `4.1b-lerobot-version` 在执行顺序上**先于 4.1**（它是 4.1 的输入），与后文的 `4.1b-probe`（校准字段齐全性探测）是两件事，只共用 `4.1b` 前缀，产物文件名不冲突。
+
 一页总览：
 
 | 节 | 内容 | 时长 | 是否动机器人 | 主要产物 | 完成判据 |
@@ -300,19 +302,40 @@ EOF
 
 本节全部是只读动作：4.1 只请求观测，4.1b 只读 JSON，4.2 只读伺服寄存器（Host 已停、串口空闲），4.3 只在 Pi 上读代码与配置。
 
+### 4.1b-lerobot-version 取 Pi 上 lerobot 版本（只读，先于 4.1 执行）
+
+4.1 的指纹 JSON 要记 Pi 端 Host 用的 lerobot 版本；Mac 上没装 lerobot，所以先从 Pi 取，4.1 时把取到的值传进去。
+
+```bash
+run 4.1b-lerobot-version ssh "$PI" '~/miniconda3/envs/lerobot_alohamini/bin/python -c "import importlib.metadata; print(importlib.metadata.version(\"lerobot\"))"'
+```
+
+把取到的值收进 shell 变量，下一步 4.1 要引用：
+
+```bash
+export PI_LEROBOT_VERSION=$(tr -d '[:space:]' < "$S4DIR/stdout/4.1b-lerobot-version-$STAMP.log")
+echo "PI_LEROBOT_VERSION=$PI_LEROBOT_VERSION"
+```
+
+判据：`.log` 里只有一行形如 `0.6.1` 的版本号，`$PI_LEROBOT_VERSION` 非空。若出现 `Traceback` / `PackageNotFoundError` / 空行，说明该解释器没装 lerobot 或路径变了 → 记「未取到」，**不要**手填版本号，4.1 就**不要**传 `--lerobot-version`（JSON 里会记 `null`，那是诚实的缺失记录）。
+
+产物：`stdout/4.1b-lerobot-version-$STAMP.{cmd,log,exit}`。
+
 ### 4.1 capture 指纹
 
 ```bash
-run 4.1-capture uv run --no-sync python benchmarks/alohamini_io/capture_robot_fingerprint.py --host "$PI_HOST" --out "$S4DIR/capture/fingerprint-$STAMP.json"
+run 4.1-capture uv run --no-sync python benchmarks/alohamini_io/capture_robot_fingerprint.py --host "$PI_HOST" --lerobot-version "$PI_LEROBOT_VERSION" --out "$S4DIR/capture/fingerprint-$STAMP.json"
 ```
 
 判据：exit 0，`$S4DIR/capture/fingerprint-$STAMP.json` 写出，JSON 里 `robot_metadata.schema_version` 为 `2`。P0 就靠这一条判定。
 
-`4.1` 的默认值：`--samples 5`、`--timeout-s 30.0`、`--port 5556`。
+第二条判据：JSON 里 `lerobot_version` 非 `null`，且与 `4.1b-lerobot-version` 取到的 `$PI_LEROBOT_VERSION` **逐字一致**。
+
+`4.1` 的默认值：`--samples 5`、`--timeout-s 30.0`、`--port 5556`；`--lerobot-version` 不给时回落到本机已装的 `lerobot`，本机也没有就记 `null`；空串会被拒绝（exit 2）。
 
 产物：`capture/fingerprint-$STAMP.json`、`stdout/4.1-capture-*`。
 
-#### capture 的 JSON 有 10 个顶层键
+#### capture 的 JSON 有 11 个顶层键
 
 | 键 | 含义 |
 | --- | --- |
@@ -326,6 +349,7 @@ run 4.1-capture uv run --no-sync python benchmarks/alohamini_io/capture_robot_fi
 | `robot_metadata` | 宿主 metadata 原样拷贝 |
 | `control_status` | 最后一帧观测带的宿主控制状态帧，宿主没发时为 `null` |
 | `observation_state` | 连接后取到的一帧 state-only 观测，只保留有限数值 |
+| `lerobot_version` | Pi 端 Host 用的 lerobot 版本（`--lerobot-version` 原样传入）；取不到时为 `null`，不伪造 |
 
 #### 这个 JSON 里有两个 `schema_version`
 
@@ -395,17 +419,178 @@ MOTORS = {
 
 要看的寄存器：`Min_Position_Limit`、`Max_Position_Limit`、`Present_Position`、`Goal_Position`、`Homing_Offset`、`Torque_Enable`、`Operating_Mode`、`Model_Number`、`Status`。
 
-执行方式有三件事需现场确认，本文不给假定值：
+执行方式有三件事，其中两件已定值，一件仍需现场确认：
 
-1. 投递方式：把改好的脚本放到 Pi 的 `/tmp/` 属于向 Pi 写文件，需在第 3.9 节的授权记录里写明；投递命令本身需现场确认。
-2. 解释器：脚本 `import` 的是 `lerobot.motors.feetech`，必须用装了厂商包的 Python。证据里 Host 用的是 `/home/pi5/miniconda3/envs/lerobot_alohamini/bin/python`（见第 6.1 节的启动命令原文），该解释器能否直接跑本脚本需现场确认。
+1. 投递方式：有「向 Pi 写文件」授权就走下面的 scp 支；没有授权就走 stdin 支（不向 Pi 落盘）。
+2. 解释器：`/home/pi5/miniconda3/envs/lerobot_alohamini/bin/python`，即 Host 自己用的解释器（第 6.1 节启动命令原文，上次现场已验证存在）。
 3. 端口别名：脚本里 `PORT = "/dev/am_arm_follower_left"` 是别名，原脚本注释写它指向 `ttyACM0`。第 3.7 节的输出若显示别名与实际节点不同，按实际改。
 
-跑法与其它步骤一致，过 `run`：
+把改好的脚本放到 Pi 的 `/tmp/` 属于向 Pi 写文件，需在第 3.9 节的授权记录里写明。
+
+本脚本未在现场执行过（第 4.2 节整体属「新增、未现场执行」，与文档开头说明一致），首跑若输出形态不符，按实际修正并回写本文档。
+
+#### 第一步：在 Mac 上建脚本
+
+只在本地写文件，不涉及 Pi：
 
 ```bash
-run 4.2-gripper-regs ssh "$PI" '<前两项确认好的整条执行命令>'
+cat > "$S4DIR/stdout/4.2-gripper-regs-$STAMP.py" <<'PY'
+# -*- coding: utf-8 -*-
+"""READ-ONLY servo register dump for alohamini left arm (ttyACM0).
+
+This script only reads registers. It issues no servo commands other than the
+read instruction. Torque state is left exactly as found.
+"""
+from __future__ import annotations
+
+import json
+import sys
+import time
+
+from lerobot.motors.feetech import FeetechMotorsBus
+from lerobot.motors.feetech.tables import MODEL_NUMBER_TABLE
+from lerobot.motors.motors_bus import Motor, MotorNormMode
+
+PORT = "/dev/am_arm_follower_left"   # -> ttyACM0 (left arm). ttyACM1 (right) is never opened.
+BAUDRATE = 1_000_000
+WAIT_S = 0.5
+
+MOTORS = {
+    "shoulder_pan": Motor(1, "sts3250", MotorNormMode.RANGE_M100_100),
+    "shoulder_lift": Motor(2, "sts3095", MotorNormMode.RANGE_M100_100),
+    "elbow_flex": Motor(3, "sts3095", MotorNormMode.RANGE_M100_100),
+    "wrist_roll": Motor(6, "sts3250", MotorNormMode.RANGE_M100_100),
+    "gripper": Motor(7, "sts3250", MotorNormMode.RANGE_0_100),  # 新增：左臂夹爪 ID7
+}
+
+REQUIRED_REGS = [
+    "Model_Number", "Firmware_Major_Version", "Firmware_Minor_Version",
+    "Present_Load", "Torque_Limit", "Max_Torque_Limit",
+    "P_Coefficient", "I_Coefficient", "D_Coefficient",
+    "Goal_Position", "Present_Position", "Torque_Enable",
+    "Operating_Mode", "Protection_Current",
+]
+
+EXTRA_REGS = [
+    "Present_Velocity", "Present_Current", "Present_Temperature", "Present_Voltage",
+    "Status", "Moving", "Minimum_Startup_Force", "CW_Dead_Zone", "CCW_Dead_Zone",
+    "Overload_Torque", "Protective_Torque", "Protection_Time", "Unloading_Condition",
+    "Max_Temperature_Limit", "Homing_Offset", "Min_Position_Limit", "Max_Position_Limit",
+    "Goal_Velocity", "Lock", "Velocity_closed_loop_P_proportional_coefficient",
+]
+
+DYNAMIC_REGS = ["Present_Position", "Present_Load", "Present_Velocity", "Moving"]
+
+ALL_REGS = REQUIRED_REGS + EXTRA_REGS
+
+results = {}   # name -> {reg: {"ok": bool, "value": int|None, "err_type":..., "err":...}}
+pass2 = {}
+
+
+def read_one(bus, name, reg):
+    try:
+        v = bus.read(reg, name, normalize=False, num_retry=0)
+        return {"ok": True, "value": v, "err_type": None, "err": None}
+    except Exception as exc:  # noqa: BLE001 - one bad register must not abort the sweep
+        return {"ok": False, "value": None, "err_type": type(exc).__name__, "err": str(exc)}
+
+
+def main():
+    print("READ-ONLY register sweep -- target:", PORT, "baud:", BAUDRATE, flush=True)
+    bus = FeetechMotorsBus(port=PORT, motors=MOTORS, calibration=None)
+    bus.connect(handshake=False)          # openPort() only; no servo packet emitted
+    print("connected:", bus.is_connected, flush=True)
+    bus.set_baudrate(BAUDRATE)            # local UART setting only, no servo packet
+
+    # quick liveness probe on ID1 only
+    probe = read_one(bus, "shoulder_pan", "Model_Number")
+    print("probe shoulder_pan Model_Number ->", probe, flush=True)
+    if not probe["ok"]:
+        for br in (1_000_000, 500_000, 115_200):
+            bus.set_baudrate(br)
+            p2 = read_one(bus, "shoulder_pan", "Model_Number")
+            print(f"retry baud={br} ->", p2, flush=True)
+            if p2["ok"]:
+                break
+
+    for name in MOTORS:
+        results[name] = {}
+        m = MOTORS[name]
+        print(f"--- ID{m.id} {name} (configured model={m.model}) ---", flush=True)
+        for reg in ALL_REGS:
+            r = read_one(bus, name, reg)
+            results[name][reg] = r
+            if r["ok"]:
+                extra = ""
+                if reg == "Model_Number":
+                    extra = "  (MODEL_NUMBER_TABLE sts3215=777 sts3250=2825 sts3095=2569)"
+                print(f"  {reg:52s} = {r['value']}{extra}", flush=True)
+            else:
+                print(f"  {reg:52s} = FAIL  {r['err_type']}: {r['err']}", flush=True)
+
+    print(f"--- wait {WAIT_S}s, sample #2 ---", flush=True)
+    time.sleep(WAIT_S)
+    for name in MOTORS:
+        pass2[name] = {}
+        print(f"--- ID{MOTORS[name].id} {name} ---", flush=True)
+        for reg in DYNAMIC_REGS:
+            r = read_one(bus, name, reg)
+            pass2[name][reg] = r
+            print(f"  {reg:52s} = {r['value'] if r['ok'] else 'FAIL  ' + str(r['err_type']) + ': ' + str(r['err'])}", flush=True)
+
+    # disconnect without touching torque: the keyword below DISABLES the torque-off path
+    bus.disconnect(disable_torque=False)
+    print("after disconnect: bus.is_connected =", bus.is_connected, flush=True)
+
+    print("=== JSON ===", flush=True)
+    print(json.dumps({
+        "port": PORT,
+        "baudrate": BAUDRATE,
+        "wait_s": WAIT_S,
+        "motors": {n: {"id": m.id, "configured_model": m.model} for n, m in MOTORS.items()},
+        "required_regs": REQUIRED_REGS,
+        "extra_regs": EXTRA_REGS,
+        "pass1": results,
+        "pass2": pass2,
+        "model_number_table": MODEL_NUMBER_TABLE,
+        "is_connected_after_disconnect": bus.is_connected,
+    }, indent=2), flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        rc = main()
+    except BaseException as exc:  # noqa: BLE001
+        print("FATAL:", type(exc).__name__, exc, flush=True)
+        rc = 2
+    print("EXIT_CODE:", rc, flush=True)
+    sys.exit(rc)
+
+PY
 ```
+
+#### 第二步：投递到 Pi 的 `/tmp`（**需「向 Pi 写文件」授权**）
+
+```bash
+run 4.2-scp scp "$S4DIR/stdout/4.2-gripper-regs-$STAMP.py" "$PI:/tmp/4.2-gripper-regs-$STAMP.py"
+```
+
+#### 第三步：在 Pi 上跑（与 Host 同环境解释器）
+
+```bash
+run 4.2-gripper-regs ssh "$PI" "~/miniconda3/envs/lerobot_alohamini/bin/python /tmp/4.2-gripper-regs-$STAMP.py"
+```
+
+#### 没有「向 Pi 写文件」授权时的替代（方案需现场确认）
+
+```bash
+run 4.2-gripper-regs ssh "$PI" '~/miniconda3/envs/lerobot_alohamini/bin/python -' < "$S4DIR/stdout/4.2-gripper-regs-$STAMP.py"
+```
+
+脚本经 stdin 送入，不向 Pi 落盘，因此不需要写盘授权；若现场不允许 stdin 送脚本，改为在 Pi 上手工输入同一脚本。
+
+本步只读、不写扭矩寄存器。
 
 判据（二选一，记录里必须写明走了哪一支）：
 
@@ -1014,7 +1199,8 @@ sidecar 写盘失败（`OSError`）也只打一条自己的警告，**退出码�
 每条一个判据，不写「看起来正常」。
 
 - [ ] 第 1 节 P0–P5 逐条有结论；P0 有 `capture` 产物为证
-- [ ] `capture` exit 0，JSON 10 个顶层键齐全，`robot_metadata.schema_version` 为 `2`，且逐个电机的 8 字段覆盖情况有记录
+- [ ] `capture` exit 0，JSON 11 个顶层键齐全，`robot_metadata.schema_version` 为 `2`，且逐个电机的 8 字段覆盖情况有记录
+- [ ] JSON 里 `lerobot_version` 非 `null`，且与第 4.1b-lerobot-version 节日志里的 `$PI_LEROBOT_VERSION` 逐字一致
 - [ ] 第 4.1b 节探测输出在盘；Gate F 按「未触发」记录，理由与原始输出一并落盘，没有为凑记录改动任何文件
 - [ ] 第 4.2 节 ID7 的 `Min_Position_Limit` / `Max_Position_Limit` 原文在盘，并写明是否等于 `2021` / `2072`；`Torque_Enable` 只记录未改动
 - [ ] 第 4.3 节两份 YAML 落盘，字段名与 `config/overlay.py` 一致，`load_settings(check_devices=False)` exit 0

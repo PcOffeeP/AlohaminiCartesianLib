@@ -48,7 +48,7 @@
 | 目标 | 判据 | 影响 | 阻塞 |
 | --- | --- | --- | --- |
 | 决定版本兼容性检查的运行时调用点 | 决定是否在 `connect` / 适配层入口前调用 `assert_lerobot_version_supported()`，结论写进 `docs/ADR.md` 或直接落地并补测试 | D 阶段完成判据（「接口不匹配能暴露」目前只在测试期成立）；ADR D16 已知代价第三条 | 无调用点：`src/` 内没有人 import `adapter/lerobot_version.py`，只有 `tests/test_lerobot_version.py` 直接调用 |
-| 在下次现场采集中记录 lerobot 软件版本 | 下次现场采集把 `importlib.metadata.version("lerobot")` 或源码树 `pyproject.toml` 的 `version` 写进指纹 JSON | D 阶段完成判据（版本结论的可复核性）；ADR D16 依据段与已知代价第一条 | 现有指纹 JSON（`evidence/s4-20261025/capture/fingerprint-final-20261025.json`）无该字段，0.6.1 是从源码树推断的，不是采到的 |
+| 在下次现场采集中记录 lerobot 软件版本（机制已落地） | 4.1 时带 `--lerobot-version "$PI_LEROBOT_VERSION"`（值由手册 `4.1b-lerobot-version` 从 Pi 取），判据不变：JSON 里 `lerobot_version` 非 `null` 且与 4.1b 日志值逐字一致 | D 阶段完成判据（版本结论的可复核性）；ADR D16 依据段与已知代价第一条 | 机制已落地（提交 `00fa714`，`capture_robot_fingerprint.py` 顶层键 `lerobot_version`，取不到记 `null` 不伪造）；剩余动作只在现场：跑手册 4.1b-lerobot-version + 4.1 带参采集。既有指纹 JSON（`evidence/s4-20261025/capture/fingerprint-final-20261025.json`）仍无该字段，0.6.1 仍是源码树推断 |
 
 ## 4 跨阶段的工程债
 
