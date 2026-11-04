@@ -13,7 +13,12 @@ One run collects, into a single JSON payload:
 * ``observation_state`` — one state-only observation of the connected robot;
 * ``samples`` — one row per accepted observation request (remote sequence
   number plus the client-measured request age), useful to sanity-check the link
-  before a latency run.
+  before a latency run;
+* ``lerobot_version`` — the ``lerobot`` version the Pi host runs, either handed
+  over verbatim with ``--lerobot-version`` or read from this machine's installed
+  ``lerobot`` distribution.  A version that cannot be obtained is recorded as an
+  explicit ``null``: the capture runs on the Mac, which need not have ``lerobot``
+  installed at all, and a missing version is never invented.
 
 The script is strictly read-only: it only asks the host for observations, and
 no motion command is ever constructed.  ``--help`` repeats that in the banner.
@@ -54,6 +59,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import importlib.metadata
 import json
 import math
 import sys
@@ -205,6 +211,32 @@ def _prime_state_only_window(client: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
+def resolve_lerobot_version(cli_value: str | None) -> str | None:
+    """Return the lerobot version to record: the CLI value, else the local one.
+
+    ``--lerobot-version`` wins verbatim -- the capture runs on the Mac, which has
+    no ``lerobot`` installed, so the operator's value is the only copy of what the
+    Pi host runs.  Without the flag the version of the locally installed
+    ``lerobot`` distribution is read, and a lookup that finds nothing (or fails
+    for any other reason) yields ``None``: an unobtainable version is recorded as
+    an explicit ``null``, never invented.  The attribute access is kept at the
+    call site (``importlib.metadata.version``) so the lookup stays patchable.
+    """
+    if cli_value is not None:
+        return cli_value
+    try:
+        return importlib.metadata.version("lerobot")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+    except Exception as exc:  # a version lookup must never abort a fingerprint
+        print(
+            f"warning: reading the local lerobot version failed "
+            f"({type(exc).__name__}: {exc}); lerobot_version is recorded as null",
+            file=sys.stderr,
+        )
+        return None
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -243,6 +275,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=_default_out_path(),
         help="Destination JSON path (parent directories are created)",
     )
+    parser.add_argument(
+        "--lerobot-version",
+        default=None,
+        metavar="VERSION",
+        help=(
+            "lerobot version the host runs, stored verbatim (default: this machine's "
+            "installed lerobot, else null)"
+        ),
+    )
     args = parser.parse_args(argv)
     # A nonsense run shape is a usage error (2), not a failed connection (3): the
     # range is checked here so no socket is ever opened for it.
@@ -262,6 +303,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     # froze / too few fresh samples within a *legal* budget).
     if not (math.isfinite(args.timeout_s) and args.timeout_s > 0.0):
         parser.error(f"--timeout-s must be a finite number > 0 (got {args.timeout_s})")
+    # An empty (or blank) version is a usage error (2), not a quiet ``null``:
+    # ``null`` means "the version could not be read", so storing ``""`` under that
+    # key would make the field result unattributable.  No value to give means do
+    # not pass the flag at all -- the locally installed version is used then.
+    if args.lerobot_version is not None and not args.lerobot_version.strip():
+        parser.error(
+            "--lerobot-version must not be empty: an empty string is not a version. "
+            "Omit the flag entirely when you have no version to pass "
+            f"(got {args.lerobot_version!r})"
+        )
     return args
 
 
@@ -361,6 +412,7 @@ def build_payload(
     host: str,
     robot_model: str,
     sample_rows: Sequence[Mapping[str, Any]] | None = None,
+    lerobot_version: str | None = None,
 ) -> dict[str, Any]:
     """Assemble the fingerprint payload; ``robot_metadata`` is copied verbatim."""
     return {
@@ -374,6 +426,9 @@ def build_payload(
         "robot_metadata": metadata,
         "control_status": control_status,
         "observation_state": observation_state,
+        # Always present: ``None`` says "the version could not be obtained", which
+        # is a fact about the run, not a value to fabricate.
+        "lerobot_version": lerobot_version,
     }
 
 
@@ -498,6 +553,7 @@ def main(
     # ``null``.  Falling back to that neighbour would change what the payload
     # means under the same key.
     control_status = getattr(client, "latest_control_status", None)
+    lerobot_version = resolve_lerobot_version(args.lerobot_version)
     payload = build_payload(
         metadata=metadata,
         control_status=control_status,
@@ -506,6 +562,7 @@ def main(
         host=args.host,
         robot_model=args.robot_model,
         sample_rows=samples,
+        lerobot_version=lerobot_version,
     )
 
     try:

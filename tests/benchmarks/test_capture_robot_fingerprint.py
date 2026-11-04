@@ -72,6 +72,7 @@ Round-3 contract (a reviewer round; the test below pins exactly this):
 
 from __future__ import annotations
 
+import importlib.metadata
 import importlib.util
 import inspect
 import json
@@ -745,7 +746,9 @@ class _ClientWithoutTimingFaces(_FakeClient):
         return state
 
 
-# The frozen payload surface: ten top-level keys, no new one for a missing face.
+# The frozen payload surface: eleven top-level keys, no new one for a missing
+# face.  ``lerobot_version`` (round 5) is the only addition since round 4; it is
+# written on every capture, ``None`` included, so the surface stays a fixed set.
 _PAYLOAD_TOP_LEVEL_KEYS = frozenset(
     {
         "schema_version",
@@ -758,6 +761,7 @@ _PAYLOAD_TOP_LEVEL_KEYS = frozenset(
         "robot_metadata",
         "control_status",
         "observation_state",
+        "lerobot_version",
     }
 )
 
@@ -846,10 +850,12 @@ def test_main_should_record_null_timings_when_both_faces_are_absent(
 def test_main_should_keep_the_payload_surface_when_both_faces_are_absent(
     fingerprint, tmp_path
 ) -> None:
-    """R6: the ten top-level keys and ``schema_version == 1`` do not move.
+    """R6: the eleven top-level keys and ``schema_version == 1`` do not move.
 
     A missing capability must not change the format of the fingerprint: a
     consumer that reads the payload of a supported client reads this one too.
+    ``lerobot_version`` (round 5) is part of that fixed set: it is written as an
+    explicit ``null`` when unknown, never omitted.
     """
     client = _ClientWithoutTimingFaces(sequences=[1, 2, 3])
     out = tmp_path / "fingerprint.json"
@@ -907,3 +913,181 @@ def test_main_should_keep_the_measured_timings_when_both_faces_exist(fingerprint
     )
     assert all(sample["sent_monotonic_s"] is not None for sample in payload["samples"])
     assert payload["control_status"] == status
+
+
+# ===========================================================================
+# Round 5: the recorded lerobot version (the host's, not this Mac's)
+# ===========================================================================
+#
+# The capture runs on the Mac, which has no ``lerobot`` installed; what the
+# fingerprint must prove is the version the **Pi host** runs.  So the operator
+# can hand it over with ``--lerobot-version``, and when they do not the script
+# falls back to this machine's ``importlib.metadata.version("lerobot")``.
+#
+# Ruling: the key ``lerobot_version`` is always present, and an unobtainable
+# version is an explicit ``None`` (JSON ``null``) -- never ``0``, never ``""``,
+# never a dropped key.  ``--lerobot-version ""`` is a usage error (2), because
+# "the operator passed nothing usable" and "the version could not be read" are
+# two different facts and must not collapse into the same ``null``.
+
+
+def test_main_should_record_the_explicit_lerobot_version(fingerprint, tmp_path) -> None:
+    """``--lerobot-version`` lands verbatim beside ``robot_metadata``.
+
+    Locks out: an implementation that accepts the flag and then drops it, and one
+    that lets the local ``importlib.metadata`` lookup overwrite the value the
+    operator typed (on the Mac that lookup finds nothing, so a fingerprint of the
+    Pi host would silently lose the only copy of its version).  The
+    ``robot_metadata`` equality also pins that the new key does not disturb the
+    host metadata subtree.
+    """
+    # Arrange: a client that cannot be told anything about the Pi's version.
+    client = _FakeClient(sequences=[1, 2, 3], ages=[0.010, 0.020, 0.030])
+    out = tmp_path / "fingerprint.json"
+
+    # Act
+    code = fingerprint.main(
+        [
+            "--host",
+            "127.0.0.1",
+            "--out",
+            str(out),
+            "--samples",
+            "3",
+            "--timeout-s",
+            "5",
+            "--lerobot-version",
+            "0.6.1",
+        ],
+        client_factory=_Factory(client),
+    )
+
+    # Assert
+    assert code == fingerprint.EXIT_OK == 0
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["lerobot_version"] == "0.6.1", (
+        f"the operator-supplied version was not stored verbatim: {payload.get('lerobot_version')!r}"
+    )
+    assert payload["robot_metadata"] == _fake_metadata(), (
+        f"adding lerobot_version changed the host metadata subtree: {payload['robot_metadata']!r}"
+    )
+
+
+def test_main_should_record_null_lerobot_version_when_lerobot_is_absent(
+    fingerprint, tmp_path, monkeypatch
+) -> None:
+    """No flag and no local ``lerobot``: the key exists and its value is ``None``.
+
+    Locks out: silently writing ``0`` or ``""`` (a fabricated version is worse
+    than a missing one), and omitting the key entirely (a consumer doing
+    ``payload["lerobot_version"]`` would raise ``KeyError``).  Also locks out a
+    capture that fails instead of succeeding with ``null``: a missing version is
+    evidence that is absent, not a broken run.
+    """
+
+    def _package_not_found(name: str) -> str:
+        raise importlib.metadata.PackageNotFoundError(name)
+
+    # Arrange: this machine has no lerobot distribution installed.
+    monkeypatch.setattr(importlib.metadata, "version", _package_not_found)
+    client = _FakeClient(sequences=[1, 2, 3])
+    out = tmp_path / "fingerprint.json"
+
+    # Act
+    code = fingerprint.main(
+        ["--host", "127.0.0.1", "--out", str(out), "--samples", "3", "--timeout-s", "5"],
+        client_factory=_Factory(client),
+    )
+
+    # Assert
+    assert code == fingerprint.EXIT_OK == 0
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert "lerobot_version" in payload, (
+        f"the key is missing instead of null; payload keys: {sorted(payload)}"
+    )
+    assert payload["lerobot_version"] is None, (
+        "an unreadable version was invented instead of recorded as null: "
+        f"{payload['lerobot_version']!r}"
+    )
+
+
+def test_main_should_record_the_locally_installed_lerobot_version(
+    fingerprint, tmp_path, monkeypatch
+) -> None:
+    """No flag but ``lerobot`` resolves locally: that version is recorded.
+
+    Locks out: writing ``None`` unconditionally whenever the flag is absent, i.e.
+    accepting the flag in the parser and never consulting
+    ``importlib.metadata.version`` for the fallback the contract requires.
+    """
+
+    def _installed(name: str) -> str:
+        assert name == "lerobot", f"the fallback asked for {name!r} instead of 'lerobot'"
+        return "0.6.1"
+
+    # Arrange: this machine resolves a lerobot distribution.
+    monkeypatch.setattr(importlib.metadata, "version", _installed)
+    client = _FakeClient(sequences=[1, 2, 3])
+    out = tmp_path / "fingerprint.json"
+
+    # Act
+    code = fingerprint.main(
+        ["--host", "127.0.0.1", "--out", str(out), "--samples", "3", "--timeout-s", "5"],
+        client_factory=_Factory(client),
+    )
+
+    # Assert
+    assert code == fingerprint.EXIT_OK == 0
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["lerobot_version"] == "0.6.1"
+
+
+def test_parse_args_should_reject_an_empty_lerobot_version(fingerprint) -> None:
+    """``--lerobot-version ""`` is a usage error (2), not a quiet ``null``.
+
+    Locks out: accepting the empty string and storing ``""`` or ``None``, which
+    turns a typo into a fingerprint that claims the version could not be read --
+    the same ``null`` a genuinely unreadable version produces, so the field
+    result becomes unattributable.
+    """
+    # Arrange: the option exists and a legal value parses, so the rejection below
+    # is not just "unknown option exits 2".
+    legal = fingerprint.parse_args(["--host", "127.0.0.1", "--lerobot-version", "0.6.1"])
+    assert legal.lerobot_version == "0.6.1", (
+        "--lerobot-version 0.6.1 does not parse, so the empty-string rejection proves nothing"
+    )
+
+    # Act + Assert
+    with pytest.raises(SystemExit) as excinfo:
+        fingerprint.parse_args(["--host", "127.0.0.1", "--lerobot-version", ""])
+
+    assert excinfo.value.code == 2, (
+        f"--lerobot-version '' exited with {excinfo.value.code} instead of the usage error 2"
+    )
+
+
+def test_build_payload_should_always_carry_the_lerobot_version_key(fingerprint) -> None:
+    """``build_payload`` keeps the key whether or not a version is supplied.
+
+    Locks out: making ``lerobot_version`` a required keyword parameter with no
+    default (``main`` would crash on a Mac without lerobot), and the
+    "only add the key when we have a value" shape -- both make
+    ``payload["lerobot_version"]`` raise ``KeyError`` on a real fingerprint.
+    """
+    common = {
+        "metadata": _fake_metadata(),
+        "control_status": None,
+        "observation_state": {"arm_left_shoulder_pan.pos": 1.0},
+        "samples": 3,
+        "host": "127.0.0.1",
+        "robot_model": "alohamini2pro",
+    }
+
+    with_version = fingerprint.build_payload(**common, lerobot_version="0.6.1")
+    without_version = fingerprint.build_payload(**common)
+
+    assert with_version["lerobot_version"] == "0.6.1"
+    assert "lerobot_version" in without_version, (
+        f"build_payload dropped the key when no version was given: {sorted(without_version)}"
+    )
+    assert without_version["lerobot_version"] is None
