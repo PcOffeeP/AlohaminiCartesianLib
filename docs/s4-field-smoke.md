@@ -1200,7 +1200,7 @@ sidecar 写盘失败（`OSError`）也只打一条自己的警告，**退出码�
 
 - [ ] 第 1 节 P0–P5 逐条有结论；P0 有 `capture` 产物为证
 - [ ] `capture` exit 0，JSON 11 个顶层键齐全，`robot_metadata.schema_version` 为 `2`，且逐个电机的 8 字段覆盖情况有记录
-- [ ] JSON 里 `lerobot_version` 非 `null`，且与第 4.1b-lerobot-version 节日志里的 `$PI_LEROBOT_VERSION` 逐字一致
+- [ ] JSON 里 `lerobot_version` 非 `null`，且与第 4.1b-lerobot-version 节的日志里的 `$PI_LEROBOT_VERSION` 逐字一致
 - [ ] 第 4.1b 节探测输出在盘；Gate F 按「未触发」记录，理由与原始输出一并落盘，没有为凑记录改动任何文件
 - [ ] 第 4.2 节 ID7 的 `Min_Position_Limit` / `Max_Position_Limit` 原文在盘，并写明是否等于 `2021` / `2072`；`Torque_Enable` 只记录未改动
 - [ ] 第 4.3 节两份 YAML 落盘，字段名与 `config/overlay.py` 一致，`load_settings(check_devices=False)` exit 0
