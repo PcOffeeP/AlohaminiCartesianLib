@@ -1291,7 +1291,7 @@ run 7.1b-gatec-reverse env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pc
 
 `--robot-model alohamini2` 是故意写的错值：宿主报的是 `alohamini2pro`（`configs/site.yaml:12`）。两个值都是 vendor 的合法 SKU（`model_specs.py:61-79`），且两侧的关节键名集合相同（`model_specs.py:35-44`），所以 Gate B（键在不在）不会先拒。
 
-## 期望与现场最可能的实际结果
+#### 期望与现场最可能的实际结果
 
 | 分支 | 现象 | 结论与记录 |
 | --- | --- | --- |
@@ -1302,7 +1302,7 @@ run 7.1b-gatec-reverse env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pc
 
 Gate C 本身的零命令拒绝由离线测试锁住（现场拿不到就以它们为据）：`tests/benchmarks/test_measure_latency.py::test_main_should_refuse_tracking_when_the_host_reports_another_robot_model`（退出码 `6`、`sent_actions == []`、不写 CSV）、`::test_main_should_refuse_tracking_when_the_host_cannot_name_its_model[empty_metadata|no_robot_model|null_robot_model]`（宿主报不出型号时 fail closed）。
 
-## 取证三件套
+#### 取证三件套
 
 无论落到哪一支，都取这三件：
 
