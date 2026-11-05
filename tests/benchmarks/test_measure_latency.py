@@ -6820,8 +6820,15 @@ def test_parse_args_should_reject_a_non_finite_delta_deg(latency, capsys, value:
     assert "delta-deg" in message, f"the error does not name the option: {message!r}"
 
 
-@pytest.mark.parametrize("value", ["0", "-0.0"], ids=["positive_zero", "negative_zero"])
-def test_parse_args_should_still_reject_a_zero_delta_deg(latency, capsys, value: str) -> None:
+@pytest.mark.parametrize(
+    "argv",
+    [
+        pytest.param(["--delta-deg=0"], id="equals_form_positive_zero"),
+        pytest.param(["--delta-deg=-0.0"], id="equals_form_negative_zero"),
+        pytest.param(["--delta-deg", "-0.0"], id="space_form_negative_zero"),
+    ],
+)
+def test_parse_args_should_still_reject_a_zero_delta_deg(latency, capsys, argv: list[str]) -> None:
     """R31/AA: ``--delta-deg 0`` / ``-0.0`` stay usage errors (2) -- no regression.
 
     This replaced ``test_parse_args_should_reject_a_non_positive_delta_deg``, whose
@@ -6833,19 +6840,36 @@ def test_parse_args_should_still_reject_a_zero_delta_deg(latency, capsys, value:
     refusal (and its own wording) rather than being folded into the cross-check
     that would blame the clamp for a value the operator typed.
 
-    Both zeros are passed as ``--delta-deg=<value>``: ``-0.0`` does match
-    argparse's negative-number pattern, but the ``=`` form keeps the two arms of
-    this test in one shape and pins the value the operator typed.
+    The wording is pinned on purpose, not just the option name.  The ``delta-deg``
+    substring alone does not identify this rule: the settle-tolerance cross-check
+    that runs *after* it prints ``--settle-tolerance-deg must be below the
+    effective --delta-deg magnitude``, which also contains ``delta-deg``.  With
+    only that substring asserted, dropping the ``!= 0.0`` half of the guard left
+    this test green: the run was still refused, but by the cross-check, so the
+    operator was told their *tolerance* was too small for a value they typed
+    wrong.  ``non-zero`` appears in this rule's message and in no other line the
+    parser's ``error:`` prefix can carry, so that is the keyword pinned here.
+
+    Argument forms, deliberately: ``0`` and the ``=`` form of ``-0.0`` are the
+    original arms and pin the value the operator typed; ``--delta-deg -0.0`` is
+    the space form an operator actually types, and it only reaches the guard
+    because argparse's ``_negative_number_matcher`` reclassifies ``-0.0`` as a
+    value (no option string of this parser looks like a negative number).
     """
     with pytest.raises(SystemExit) as excinfo:
-        latency.parse_args(["--host", "127.0.0.1", f"--delta-deg={value}"])
+        latency.parse_args(["--host", "127.0.0.1", *argv])
 
     assert excinfo.value.code == 2, (
-        f"--delta-deg={value} exited with {excinfo.value.code} instead of the usage "
-        "error 2: a zero step commands nothing"
+        f"{argv} exited with {excinfo.value.code} instead of the usage error 2: a "
+        "zero step commands nothing"
     )
     message = _parser_error_text(capsys.readouterr().err)
     assert "delta-deg" in message, f"the error does not name the option: {message!r}"
+    assert "non-zero" in message, (
+        f"{argv} was refused, but not by the zero rule: the error line reads "
+        f"{message!r}.  Without this keyword a dropped '!= 0.0' guard hides behind "
+        "the settle-tolerance cross-check, whose message also names 'delta-deg'."
+    )
 
 
 _QUEUE_TERM_PATTERN = re.compile(
@@ -7183,6 +7207,15 @@ def test_main_should_run_a_negative_step_end_to_end(latency, tmp_path, capsys) -
         f"(baseline {baseline_units!r} on a {_TRACKING_SCALE_DEG!r} deg/unit joint)"
     )
     assert first_goal < baseline_units, "the step goal was not below the baseline"
+    # The report has to carry the sign too, and the report is where the operator
+    # reads the run back: an ``abs()`` on the printed ``delta_deg`` would leave
+    # every assertion above green (they read the wire, the CSV and the exit code)
+    # while the evidence lost the direction of the step.  The header line is
+    # pinned together with ``requested`` so the banner's ``delta_deg=`` alone
+    # cannot satisfy it.
+    assert f"joint={_TRACKING_JOINT} delta_deg=-1.000 (requested -1.000)" in printed.out, (
+        f"the report does not print the signed step: {printed.out!r}"
+    )
 
 
 def test_main_should_judge_the_travel_cap_by_magnitude_for_a_negative_step(
@@ -7340,7 +7373,6 @@ def test_run_tracking_rows_should_report_the_overshoot_of_a_negative_step_as_a_m
     assert row["overshoot_deg"] > 0.0, (
         f"overshoot_deg={row['overshoot_deg']!r}: the measured overshoot was dropped"
     )
-    assert row["overshoot_deg"] >= 0.0
     assert row["error_deg"] == pytest.approx(row["cmd_deg"] - row["measured_deg"], rel=0, abs=1e-12)
     assert row["settled"] is True, (
         f"the negative step did not settle on |residual| <= tolerance: {row!r}"
