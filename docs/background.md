@@ -37,7 +37,7 @@
 | --- | --- |
 | 版本 | `0.7.0`（`src/alohamini_cartesian/__init__.py`） |
 | 测试 | `1453 passed, 2 skipped` |
-| 跳过的两条 | `tests/test_control_api_lerobot_parity.py`、`tests/test_kinematics_lerobot_parity.py`，需要 `lerobot` 做对照；**不等于全部通过** |
+| 跳过的两条 | `tests/test_control_api_lerobot_parity.py`、`tests/test_kinematics_lerobot_parity.py`，需要对 vendor fork（`liyiteng/lerobot_alohamini`）做差分对照；**不等于全部通过** |
 | 核心依赖与 `lerobot` 引用位置 | 核心只依赖 numpy；`lerobot` 只在 `adapter/protocol.py` 被 import，由 `tests/test_capability.py` 的 AST 断言守着 |
 | 决策记录 | `docs/ADR.md` 现有 D1–D19 |
 
