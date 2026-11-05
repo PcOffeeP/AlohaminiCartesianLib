@@ -768,7 +768,7 @@ run 5.2-rtt-net env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pcoffeep/
 
 ### 5.3 跨机 RTT（PC → Pi 真实网段）
 
-背景一句：现有两份 rtt CSV 都是 Pi 本机回环（`host=127.0.0.1`），量不到 PC 到 Pi 这一段。跨机这一次必须换解释器：用仓库内的隔离环境 `.venvs/alohamini-lerobot/bin/python`，因为主环境没有 `lerobot`，且按 `docs/ADR.md` D8 主环境要停在 numpy 2.3.x。
+背景一句：2026-10-25 时的两份 rtt CSV 均为 Pi 本机回环（`host=127.0.0.1`），量不到 PC 到 Pi 这一段；2026-11-05 已补跨机实测（结果见 §9 与 `docs/field-results.md`）。跨机这一次必须换解释器：用仓库内的隔离环境 `.venvs/alohamini-lerobot/bin/python`，因为主环境没有 `lerobot`，且按 `docs/ADR.md` D8 主环境要停在 numpy 2.3.x。
 
 前置条件：第 0 节的网络访问授权；隔离环境已建（环境事实见本节末尾）。
 
@@ -1271,15 +1271,15 @@ sidecar 写盘失败（`OSError`）也只打一条自己的警告，**退出码�
 
 - [ ] 第 1 节 P0–P5 逐条有结论；P0 有 `capture` 产物为证
 - [ ] `capture` exit 0，JSON 11 个顶层键齐全，`robot_metadata.schema_version` 为 `2`，且逐个电机的 8 字段覆盖情况有记录
-- [ ] JSON 里 `lerobot_version` 非 `null`，且与第 4.1b-lerobot-version 节的日志里的 `$PI_LEROBOT_VERSION` 逐字一致
+- [ ] JSON 里 `lerobot_version` 非 `null`，且与第 4.1b-lerobot-version 节的日志里的 `$PI_LEROBOT_VERSION` 逐字一致（2026-11-05 远程会话已满足：`lerobot_version="0.6.1"` 非 `null`，证据 `capture/fingerprint-20261105T063600Z.json`；与 4.1b 日志逐字一致见 `stdout/4.1b-lerobot-version-20261105T063600Z.log`）
 - [ ] 第 4.1b 节探测输出在盘；Gate F 按「未触发」记录，理由与原始输出一并落盘，没有为凑记录改动任何文件
-- [ ] 第 4.2 节 ID7 的 `Min_Position_Limit` / `Max_Position_Limit` 原文在盘，并写明是否等于 `2021` / `2072`；`Torque_Enable` 只记录未改动
+- [ ] 第 4.2 节 ID7 的 `Min_Position_Limit` / `Max_Position_Limit` 原文在盘，并写明是否等于 `2021` / `2072`；`Torque_Enable` 只记录未改动（2026-11-05 远程会话已满足：左臂 ID7 `Min_Position_Limit=2021` / `Max_Position_Limit=2072`，`Torque_Enable` 只记录未改动，证据 `stdout/4.2-gripper-regs-20261105T063600Z.log`、`stdout/4.2-gripper-regs-right-20261105T063600Z.log`）
 - [ ] 第 4.3 节两份 YAML 落盘，字段名与 `config/overlay.py` 一致，`load_settings(check_devices=False)` exit 0
-- [ ] 第 5 节三条 rtt 各 exit 0、各 500 样本、CSV 各有数据行；`achieved_rate_hz` 与请求率的差距有记录；跨机那条给出 `net_rtt_estimate_s` p50 并与 `6.176 ms` 并列
+- [ ] 第 5 节三条 rtt 各 exit 0、各 500 样本、CSV 各有数据行；`achieved_rate_hz` 与请求率的差距有记录；跨机那条给出 `net_rtt_estimate_s` p50 并与 `6.176 ms` 并列（2026-11-05 远程会话已满足跨机那条：`rtt/rtt-net-cross-20261105T063600Z-2.csv`，exit 0、500 样本、`net_rtt_estimate_s` p50 `6.010 ms`）
 - [ ] 第 6 节两段电流读数在盘（主路径 `latest_safety_status["currents_ma"]`，范式见 `stdout/6.1c-obs-idle-$STAMP.py`；`[Currents]` 日志路径当前不可依赖，见 §6.1），并写出结论：臂总线电流可判读，或不能判负载
 - [ ] 第 7.1 节若执行：每步的 `error_deg`、`overshoot_deg`、`settled` 齐全；`rise_90_time_s` 为空时写明原因；收尾 `hold_issued` 在报告里
 - [ ] 第 7.2 节：`target_source` 分布、`requested_target` 与 `accepted_target` 的比较、`current_ma` 走势三项有结论，且落到三类之一；`_joint_hold_goal` 有无写入点的 grep 原文在盘
-- [ ] sidecar 的四个数字有记录：每帧行数、`motor` 空行占比、`current_ma` 分布、`hold_active` 全列取值（safety sidecar 此前只有离线测试覆盖，真机首跑按这四项记）
+- [ ] sidecar 的四个数字有记录：每帧行数、`motor` 空行占比、`current_ma` 分布、`hold_active` 全列取值（safety sidecar 此前只有离线测试覆盖，真机首跑按这四项记）（2026-11-05 远程会话已满足：真机首跑四项数字见 `tracking/tracking-*-20261105T063600Z-safety.csv` 与 `stdout/7.1-wrist-sidecar-try2-*`）
 - [ ] 第 8 节：断电与上电有记录，Host 停启有 PID 与两条命令原文，停机与重启时间都是 UTC
 - [ ] `$S4DIR/stdout/` 里每步都有 `.cmd`、`.log`、`.exit` 三件套
 
