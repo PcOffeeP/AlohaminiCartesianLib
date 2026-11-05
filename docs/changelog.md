@@ -28,6 +28,8 @@ v0.7.0 给两个现场基准脚本加了客户端能力探测：`measure_latency
 
 `777f8e9` 新增一条用例把真机分支的读帧序列钉死：预热与本脚本自身那次取帧都带 `include_cameras=False`，而库内 `LiftHandle.height()`（`control/api.py:494`）与 `_prime_state_machine()`（`control/api.py:845`）的无参 `get_observation()` 落回厂商默认（`lerobot/robots/alohamini/alohamini_client.py:535`），因而真机分支上的相机帧请求**恰好 3 次**——这个数字由用例钉住，改动库侧调用签名会先让它变红。用例数 `tests/test_robot_dry_run_example.py` 37 → 38 条。落点 `pytest tests` 报 `1453 passed, 2 skipped`（`1452 + 1`）；跳过仍是那两个 parity 文件缺 `lerobot`，`2` 不等于全部通过，工作树是绿的。
 
+parity 夹具对齐 vendor `6aee1f81` 的不变式：`tests/test_control_api_lerobot_parity.py` / `tests/test_kinematics_lerobot_parity.py` 在 fork `6aee1f81` 快照上 **61/61 通过**（`aba8428` 修复夹具后）。口径澄清（2026-11-05 实测）：从 PyPI 装的**上游 wheel `lerobot 0.6.1` 不含 `alohamini` 模块**，所以本库的差分对照只能对 **vendor fork（`liyiteng/lerobot_alohamini`）** 成立，正文中「对上游 lerobot 的差分对照」一律按 vendor fork 读。主环境无 `lerobot` 时这两个文件整体跳过（`2 skipped`），跳过不等于差分对照通过。
+
 ## v0.6.0
 
 v0.6.0 修正了失败原因分类：`ArmIK.solve()` 结尾不再把「没到位」一律报 `JOINT_LIMIT`，而是按越限与否分流——解越出注入限位（越限判定仍含 `LIMIT_EPS_DEG` 容差）报 `JOINT_LIMIT`，未越限但位置残差超过 `profile.residual_limit_m` 报 `RESIDUAL`，两者同时成立时 `JOINT_LIMIT` 优先。`FAILURE_REASONS` 不新增枚举值，`IKResult` 字段不变。

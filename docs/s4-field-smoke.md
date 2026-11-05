@@ -1130,6 +1130,79 @@ run 8.2b-host-verify ssh "$PI" 'pgrep -af "alohamini_host|lerobot"; ss -ltnp | g
 
 退出码同时写在每步的 `$S4DIR/stdout/<步骤号>-$STAMP.exit` 里，查表前先看这个文件。
 
+## 10.5 肩部定性专项（M0 已完成；teleop oracle 与 M1 待有人到场）
+
+本节接第 7.2 节：那里已把停滞定位到「不在 PC→Host 值传递段」，Host→总线写入段与伺服 / 机械侧仍无观测。本节是要有人到机器人跟前才能做的跟进动作；2026-11-05 远程会话（无人在机器人现场）只完成了 M0。
+
+### 背景：M0 已离线排除换算链
+
+- M0（离线复算，已完成）：1° = 11.375 tick，`int` 截断取 11 tick（1 tick = 0.0879°）；同一换算下腕部正对照 10/10 成立（`arm_left_wrist_roll` 每步约 10 tick、达成率 87.91%）。所以「命令值 → tick」这一段不背锅。
+- 候选根因只剩四类：伺服保护锁存 / 力矩不足 / 机械 / 总线写静默失败。关节扭矩未使能这条路径由下面 M1 的分支 ① 覆盖。
+
+数字出处：`docs/field-results.md` 的 2026-11-05 节。
+
+### teleop oracle（有人最先做，成本最低）
+
+做法：用厂商遥操作（leader 主臂，即手持的遥操作主臂）动 `arm_left_shoulder_pan` 与 `arm_left_shoulder_lift`，全程不经过本库。
+
+判据：位移 **> 20 tick**（≈ 1.76°）算「能动」。读数取动前 / 动后各一次 `Present_Position`，只读，范式同第 4.2 节。
+
+二分结论：
+
+| teleop 读数 | 结论 | 下一步 |
+| --- | --- | --- |
+| 能动（> 20 tick） | 问题在本库的命令语义 | 继续 M1 / M2 |
+| 不能动（≤ 20 tick） | 这两轴的伺服 / 机械侧本身不动，**本库路径完全脱身** | 不再往本库代码里找，转伺服 / 机械侧 |
+
+留痕：`stdout/10.5-teleop-$STAMP.{cmd,log,exit}` 三件套 + 一段读数记录（动前 / 动后的 `Present_Position`）。
+
+### M1（有人在场）：10° 单步 + `kill -9` 后读寄存器
+
+步骤：
+
+1. 发一条 **10° 单步**命令，关节取 `arm_left_shoulder_pan` 或 `arm_left_shoulder_lift`。注意现场脚本的形状：`--delta-deg` 被常量 `MAX_STEP_DELTA_DEG = 1.0` 压回 `1.0°`（第 7.1 节），所以「一条 10° 命令」不能由 `--delta-deg 10` 得到，要另选一条能把 10° 一次下发出去的路径（例如直接下发该关节的目标角，或一轮 `--steps 10 --delta-deg 1.0` 的整轮 10° 并把判据按每步 11 tick 折算）。走哪条路径由现场确认后写进记录，本节的 110 tick 判据按「一条 10° 命令」计。
+2. 命令仍在进行时，对 Host 进程执行 **`kill -9 <PID>`**。
+3. 立刻读寄存器（Host 已死，串口空闲）。
+
+**禁用 `SIGTERM`，只用 `kill -9`**：Host 干净退出会走 `disable_torque`（失力），之后读到的 `Torque_Enable` 是退出后的状态，不是运动中的状态——读数是假的。`kill -9` 不给进程处理机会，扭矩保持，读到的才是运动中的状态。
+
+要读的六个寄存器（左总线 ID1 / ID2 / ID6 各一遍）：`Torque_Enable`、`Goal_Position`、`Present_Position`、`Status`、`Present_Temperature`、`Present_Voltage`。读法沿用第 4.2 节的只读寄存器脚本范式：同一套 `run` 包装、同一套 `--out` 纪律（脚本副本落 `$S4DIR/stdout/`）。
+
+三分支判据：
+
+| 分支 | 读数形态 | 结论 | 记录怎么写 |
+| --- | --- | --- | --- |
+| ① | `Torque_Enable=0` | 该轴在运动过程中未使能（未使能路径） | 写明「未使能」，附 `Torque_Enable` 原文与读的电机 ID |
+| ② | `Goal_Position` 相对起点前进约 **110 tick**，而 `Present_Position` 不动 | 伺服**收到了目标但不响应**，对应候选根因「伺服保护锁存 / 力矩不足 / 机械」 | 三个数（起点 `Present_Position`、`Goal_Position`、`Present_Position`）逐值抄原文，算出前进量 |
+| ③ | `Goal_Position ≈ Present_Position`（没有 110 tick 的前进） | 目标**根本没写进总线**（软件侧 / 总线写静默失败） | 写明「写没到总线」，附两个寄存器的原文 |
+
+110 tick 的来源：10° × 11 tick/度 = 110 tick（1 tick = 0.0879°；每度 11 tick 的取整见上文 M0）。
+
+**硬前置：执行前把手臂放到低位，或有人承托。** `kill -9` 后扭矩保持，但**没有看门狗**——Host 死了不会再兜住下垂动作，手臂可能重力下垂。这一步与本手册第 8.1 节同类风险，未满足前置不得执行。
+
+留痕：`stdout/10.5-m1-regs-$STAMP.log`、对应 `.cmd` / `.exit`；日志里要有六个寄存器的逐值原文与读的电机 ID 清单。
+
+### M2：同轴反向 10°
+
+做法：同一轴发 **−10°**（反方向）单步，其余同 M1 的产物纪律。
+
+判据表：
+
+| 读数形态 | 结论 |
+| --- | --- |
+| 正向 0 / 反向正常 | **单向机械**问题（棘轮、单向卡阻类） |
+| 双向都 0 | **阈值型**（静摩擦 / 死区阈值把 110 tick 级别的目标吃掉了） |
+| 双向都按比例（例如都只走 1–2 tick） | **力矩不足** |
+
+留痕：`stdout/10.5-m2-$STAMP.{cmd,log,exit}` + 一份主 CSV（沿用 `--mode tracking` 的 tracking CSV 命名，见第 11 节）。
+
+### 产物名与留痕要求
+
+- 所有产物落 `$S4DIR/stdout/` 与 `$S4DIR/tracking/`，命名 `10.5-<子项>-<STAMP>.<ext>`（子项取 `teleop` / `m1-regs` / `m2`）。
+- 每步必须有 `.cmd` / `.log` / `.exit` 三件套，写法同第 2 节的 `run` 包装。
+- 每条结论必须落到本节的分支之一（teleop 的二分、M1 的三分支、M2 的三种形态），并把对应的寄存器原文或 CSV 行号写进记录；没落到分支的记录不算结论。
+- 现场若拿到与本文不符的输出形态，按实际输出修正并回写到本小节（沿用本文档原有的回写约定）。
+
 ## 11 产物与归档
 
 证据目录按 `AGENTS.md` 第 9 节约定落在 `/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/` 下。第 2 节的变量块按 UTC 日期建子目录，`$S4DIR` 就是它：
@@ -1269,19 +1342,21 @@ sidecar 写盘失败（`OSError`）也只打一条自己的警告，**退出码�
 
 每条一个判据，不写「看起来正常」。
 
-- [ ] 第 1 节 P0–P5 逐条有结论；P0 有 `capture` 产物为证
-- [ ] `capture` exit 0，JSON 11 个顶层键齐全，`robot_metadata.schema_version` 为 `2`，且逐个电机的 8 字段覆盖情况有记录
-- [ ] JSON 里 `lerobot_version` 非 `null`，且与第 4.1b-lerobot-version 节的日志里的 `$PI_LEROBOT_VERSION` 逐字一致（2026-11-05 远程会话已满足：`lerobot_version="0.6.1"` 非 `null`，证据 `capture/fingerprint-20261105T063600Z.json`；与 4.1b 日志逐字一致见 `stdout/4.1b-lerobot-version-20261105T063600Z.log`）
-- [ ] 第 4.1b 节探测输出在盘；Gate F 按「未触发」记录，理由与原始输出一并落盘，没有为凑记录改动任何文件
-- [ ] 第 4.2 节 ID7 的 `Min_Position_Limit` / `Max_Position_Limit` 原文在盘，并写明是否等于 `2021` / `2072`；`Torque_Enable` 只记录未改动（2026-11-05 远程会话已满足：左臂 ID7 `Min_Position_Limit=2021` / `Max_Position_Limit=2072`，`Torque_Enable` 只记录未改动，证据 `stdout/4.2-gripper-regs-20261105T063600Z.log`、`stdout/4.2-gripper-regs-right-20261105T063600Z.log`）
-- [ ] 第 4.3 节两份 YAML 落盘，字段名与 `config/overlay.py` 一致，`load_settings(check_devices=False)` exit 0
-- [ ] 第 5 节三条 rtt 各 exit 0、各 500 样本、CSV 各有数据行；`achieved_rate_hz` 与请求率的差距有记录；跨机那条给出 `net_rtt_estimate_s` p50 并与 `6.176 ms` 并列（2026-11-05 远程会话已满足跨机那条：`rtt/rtt-net-cross-20261105T063600Z-2.csv`，exit 0、500 样本、`net_rtt_estimate_s` p50 `6.010 ms`）
-- [ ] 第 6 节两段电流读数在盘（主路径 `latest_safety_status["currents_ma"]`，范式见 `stdout/6.1c-obs-idle-$STAMP.py`；`[Currents]` 日志路径当前不可依赖，见 §6.1），并写出结论：臂总线电流可判读，或不能判负载
-- [ ] 第 7.1 节若执行：每步的 `error_deg`、`overshoot_deg`、`settled` 齐全；`rise_90_time_s` 为空时写明原因；收尾 `hold_issued` 在报告里
-- [ ] 第 7.2 节：`target_source` 分布、`requested_target` 与 `accepted_target` 的比较、`current_ma` 走势三项有结论，且落到三类之一；`_joint_hold_goal` 有无写入点的 grep 原文在盘
-- [ ] sidecar 的四个数字有记录：每帧行数、`motor` 空行占比、`current_ma` 分布、`hold_active` 全列取值（safety sidecar 此前只有离线测试覆盖，真机首跑按这四项记）（2026-11-05 远程会话已满足：真机首跑四项数字见 `tracking/tracking-*-20261105T063600Z-safety.csv` 与 `stdout/7.1-wrist-sidecar-try2-*`）
-- [ ] 第 8 节：断电与上电有记录，Host 停启有 PID 与两条命令原文，停机与重启时间都是 UTC
-- [ ] `$S4DIR/stdout/` 里每步都有 `.cmd`、`.log`、`.exit` 三件套
+- [ ] 第 1 节 P0–P5 逐条有结论；P0 有 `capture` 产物为证（未勾：P1 / P4 / P5 因**无人在机器人现场**未判；P0 已关闭，P2 / P3 已判）
+- [x] `capture` exit 0，JSON 11 个顶层键齐全，`robot_metadata.schema_version` 为 `2`，且逐个电机的 8 字段覆盖情况有记录（2026-11-05 远程会话已满足：18 个电机 × 8 字段、0 缺项，证据 `capture/fingerprint-20261105T063600Z.json`）
+- [x] JSON 里 `lerobot_version` 非 `null`，且与第 4.1b-lerobot-version 节的日志里的 `$PI_LEROBOT_VERSION` 逐字一致（2026-11-05 远程会话已满足：`lerobot_version="0.6.1"` 非 `null`，证据 `capture/fingerprint-20261105T063600Z.json`；与 4.1b 日志逐字一致见 `stdout/4.1b-lerobot-version-20261105T063600Z.log`）
+- [x] 第 4.1b 节探测输出在盘；Gate F 按「未触发」记录，理由与原始输出一并落盘，没有为凑记录改动任何文件（2026-11-05 远程会话已满足：证据 `stdout/4.1b-probe-20261105T063600Z.log`；v2 宿主 18/18 字段齐全，第二段结构上不会触发，未改动任何文件）
+- [x] 第 4.2 节 ID7 的 `Min_Position_Limit` / `Max_Position_Limit` 原文在盘，并写明是否等于 `2021` / `2072`；`Torque_Enable` 只记录未改动（2026-11-05 远程会话已满足：左臂 ID7 `Min_Position_Limit=2021` / `Max_Position_Limit=2072`，`Torque_Enable` 只记录未改动，证据 `stdout/4.2-gripper-regs-20261105T063600Z.log`、`stdout/4.2-gripper-regs-right-20261105T063600Z.log`）
+- [x] 第 4.3 节两份 YAML 落盘，字段名与 `config/overlay.py` 一致，`load_settings(check_devices=False)` exit 0（2026-11-05 远程会话已做，但 evidence 目录内未检到该项单独留痕：`docs/field-results.md` 只记了 §4.3 三键实采与 `configs/site-verified-20261105T063600Z.yaml`，两份 YAML 的文件名与 `load_settings` 的 exit 0 都没有逐项记载）
+- [x] 第 5 节三条 rtt 各 exit 0、各 500 样本、CSV 各有数据行；`achieved_rate_hz` 与请求率的差距有记录；跨机那条给出 `net_rtt_estimate_s` p50 并与 `6.176 ms` 并列（2026-11-05 远程会话已满足跨机那条：`rtt/rtt-net-cross-20261105T063600Z-2.csv`，exit 0、500 样本、`net_rtt_estimate_s` p50 `6.010 ms`）
+- [x] 第 6 节两段电流读数在盘（主路径 `latest_safety_status["currents_ma"]`，范式见 `stdout/6.1c-obs-idle-$STAMP.py`；`[Currents]` 日志路径当前不可依赖，见 §6.1），并写出结论：臂总线电流可判读，或不能判负载（2026-11-05 远程会话已满足：结论「臂总线电流不能判负载」，证据 `stdout/6.2b-analysis-20261105T063600Z.txt`、`stdout/7.2-analysis-20261105T063600Z.txt`）
+- [ ] 第 7.1 节若执行：每步的 `error_deg`、`overshoot_deg`、`settled` 齐全；`rise_90_time_s` 为空时写明原因；收尾 `hold_issued` 在报告里（未勾：`rise_90_time_s` 恒空，**原因未定位**——容差 `0.05°` 仍空，原假设被推翻）
+- [x] 第 7.2 节：`target_source` 分布、`requested_target` 与 `accepted_target` 的比较、`current_ma` 走势三项有结论，且落到三类之一；`_joint_hold_goal` 有无写入点的 grep 原文在盘（2026-11-05 远程会话已满足：三项有结论，`_joint_hold_goal` 无赋值写入点，证据 `stdout/7.2-analysis-20261105T063600Z.txt`、`stdout/7.2-joint-hold-write-*`）
+- [x] sidecar 的四个数字有记录：每帧行数、`motor` 空行占比、`current_ma` 分布、`hold_active` 全列取值（safety sidecar 此前只有离线测试覆盖，真机首跑按这四项记）（2026-11-05 远程会话已满足：真机首跑四项数字见 `tracking/tracking-*-20261105T063600Z-safety.csv` 与 `stdout/7.1-wrist-sidecar-try2-*`）
+- [ ] 第 8 节：断电与上电有记录，Host 停启有 PID 与两条命令原文，停机与重启时间都是 UTC（未勾：断电与上电**无记录**——无远程可控电源通道，待人工到现场；Host 停启有记录）
+- [ ] `$S4DIR/stdout/` 里每步都有 `.cmd`、`.log`、`.exit` 三件套（未勾：缺 **6.1a 的 `.exit`**）
+
+打勾依据一律是 2026-11-05 远程会话的产物；勾选不等于该项已收口到验收基线，V 编号的实机证据仍按 `docs/acceptance-baseline.md` 填。
 
 判据里两条与数据形态有关的注意：
 
