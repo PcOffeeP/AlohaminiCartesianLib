@@ -16,10 +16,11 @@
   ``except`` 分支体、``else``、``finally``）、``if``（含 ``if TYPE_CHECKING:``）、
   ``with``、``match`` 各分支体与**类体**，只在 ``def`` / ``async def`` 的函数定义处停手。
   函数体内的惰性 import 是合法的：``examples/robot_dry_run.py`` 就是这样把厂商 client
-  藏在最内层工厂里，以便无 lerobot 的主环境也能加载脚本并打印跳过文案。本库自身只有
-  ``src/alohamini_cartesian/adapter/protocol.py`` 是运行时接触面。守卫带自测：顶层、
-  ``try:``、``if TYPE_CHECKING:``、``except`` 分支体、类体各有一例必须判出违规，函数体内
-  （含嵌在 ``try:`` / ``if TYPE_CHECKING:`` 里的函数）必须放行。
+  藏在最内层工厂里，以便无 lerobot 的主环境也能加载脚本并打印跳过文案。但函数体并不因此
+  无限制放开：``robot_dry_run.py`` 是白名单里**唯一**允许在函数体内 import ``lerobot`` 的
+  示例（其余示例一律离线、不碰 lerobot），白名单外的示例一旦在函数体内惰性导入就会变红。
+  守卫带自测：顶层、``try:``、``if TYPE_CHECKING:``、``except`` 分支体、类体各有一例必须
+  判出违规，函数体内（含嵌在 ``try:`` / ``if TYPE_CHECKING:`` 里的函数）必须放行。
 - D：契约 A 的「0 次发送」不能是靠硬编码打印出来的假绿。源码级用 **AST 级**守卫要求
   示例里存在一个 ``ast.Assert`` 节点，被测表达式形如 ``<x>.send_action_calls == 0``
   （注释、docstring、``if False:`` 分支、``or True`` 都不算数），且源码 AST 里
@@ -72,6 +73,11 @@ SUBPROCESS_TIMEOUT_S = 60
 
 # 子进程只在这个白名单之外裁环境：这三个变量能让示例误以为自己在 vendor 环境里。
 STRIPPED_ENV_VARS = ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV")
+
+# 允许在**函数体内**惰性 import lerobot 的示例白名单。
+# 目前只有真 client 注入示例需要：它把厂商 import 藏在最内层工厂里，主环境才能加载脚本
+# 并打印跳过文案。其余示例一律离线，不得借「函数体内允许」这条口径惰性导入 vendor 运行时。
+FUNCTION_SCOPE_LEROBOT_IMPORT_ALLOWLIST = frozenset({"robot_dry_run.py"})
 
 # 冻结值：这两份字典就是 coder 必须写进 YAML 的内容，逐字段断言。
 TEMPLATE_VALUES: dict[str, Any] = {
@@ -505,6 +511,114 @@ def test_module_scope_lerobot_guard_allows_import_inside_function(source: str) -
     offenders = _module_scope_lerobot_imports(ast.parse(source))
 
     assert offenders == [], f"函数体内的惰性 lerobot 导入被误判为违例: {offenders}"
+
+
+def _function_scope_import_nodes(tree: ast.Module) -> list[ast.Import | ast.ImportFrom]:
+    """收集**函数体内**的 import 语句节点（惰性导入所在的执行域）。
+
+    口径与 :func:`_module_scope_import_nodes` 互补：那边在函数定义处停手，这里只看
+    ``FunctionDef`` / ``AsyncFunctionDef`` 的子孙节点（嵌在分支里的函数体也算）。模块顶层
+    的 import 不在结果里。
+
+    Args:
+        tree: 待检查的 AST 模块根节点。
+
+    Returns:
+        函数体内的 ``ast.Import`` / ``ast.ImportFrom`` 节点列表。
+    """
+    found: list[ast.Import | ast.ImportFrom] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        found.extend(
+            inner for inner in ast.walk(node) if isinstance(inner, ast.Import | ast.ImportFrom)
+        )
+
+    return found
+
+
+def _function_scope_lerobot_imports(tree: ast.Module) -> list[str]:
+    """收集函数体内 import 到的 lerobot 模块名。
+
+    返回值去重且排序，便于白名单断言直接比对。
+
+    Args:
+        tree: 待检查的 AST 模块根节点。
+
+    Returns:
+        函数体内 import 到的 lerobot 模块名列表；没有时为空列表。
+    """
+    names: set[str] = set()
+    for node in _function_scope_import_nodes(tree):
+        names.update(_imported_lerobot_names(node))
+
+    return sorted(names)
+
+
+def test_only_allowlisted_examples_import_lerobot_inside_functions() -> None:
+    """契约 C：只有白名单里的示例可以在函数体内惰性 import ``lerobot``。
+
+    为什么需要这一条：契约 C 把作用域口径从「文本扫描」放宽到「模块 import 期作用域」后，
+    函数体内的惰性导入一律合法，等于给了每个示例一个「随时 import 厂商运行时」的口子。
+    真实需求只有一处——``examples/robot_dry_run.py`` 把厂商 client 藏在最内层工厂里，让无
+    ``lerobot`` 的主环境也能加载脚本并打印跳过文案。所以这里只放行这一份，白名单外的示例
+    一旦在函数体内导入 lerobot 就变红。
+
+    怎么从白名单里增一份：同时确认该示例在主环境（无 lerobot）下仍能加载并跑通，再把文件名
+    加进 ``FUNCTION_SCOPE_LEROBOT_IMPORT_ALLOWLIST``。
+    """
+    sources = sorted(EXAMPLES_DIR.glob("*.py"))
+    assert sources, f"examples 下没有任何 *.py: {EXAMPLES_DIR}"
+
+    offenders = {
+        path.name: imports
+        for path in sources
+        if (imports := _function_scope_lerobot_imports(_parse_module(path)))
+        and path.name not in FUNCTION_SCOPE_LEROBOT_IMPORT_ALLOWLIST
+    }
+
+    assert not offenders, (
+        "这些示例在函数体内惰性 import 了 lerobot，但它们不在白名单里"
+        f"（允许: {sorted(FUNCTION_SCOPE_LEROBOT_IMPORT_ALLOWLIST)}）: {offenders}；"
+        "其余示例一律离线跑，不碰厂商运行时。确有必要请加白名单并给出主环境可加载的证据"
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        # 白名单里那份的写法：工厂函数体内的厂商 import。
+        (
+            "def build_factory():\n"
+            "    from lerobot.robots.alohamini.alohamini_client import AlohaMiniClient\n"
+            "    return AlohaMiniClient\n",
+            ["lerobot.robots.alohamini.alohamini_client"],
+        ),
+        # 嵌在分支里的函数体也算函数体内。
+        (
+            "def build_factory(flag):\n"
+            "    if flag:\n"
+            "        import lerobot\n"
+            "        return lerobot\n",
+            ["lerobot"],
+        ),
+        # 函数体里只有普通 import：不该报 lerobot。
+        (
+            "import numpy as np\n\ndef f():\n    import json\n    return json, np\n",
+            [],
+        ),
+        # 模块作用域上的 lerobot 导入不归这条守卫管（那条由模块作用域守卫判违规）。
+        ("import lerobot\n", []),
+    ],
+)
+def test_function_scope_lerobot_collector_is_not_vacuous(source: str, expected: list[str]) -> None:
+    """自测：函数体内 lerobot 导入的采集器不是恒空，也不会把模块作用域算进来。
+
+    Args:
+        source: 一段源码文本。
+        expected: 该段源码在「函数体内 lerobot 导入」口径下的应报模块名。
+    """
+    assert _function_scope_lerobot_imports(ast.parse(source)) == expected
 
 
 # ---------------------------------------------------------------------------

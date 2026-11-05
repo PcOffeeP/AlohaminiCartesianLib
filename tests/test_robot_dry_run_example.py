@@ -14,7 +14,10 @@
   ``需要 vendor 环境`` 且该文案给出跑法（含 ``PYTHONPATH``），stderr 不含 ``Traceback``。
   主环境必须优雅跳过，不是崩。子进程带一份剥掉 ``PYTHONPATH`` / ``PYTHONHOME`` /
   ``VIRTUAL_ENV`` 的环境：否则调用方环境里指向 vendor ``src`` 的 ``PYTHONPATH`` 会让
-  示例走真机分支去 ``client.connect()``，测试就不再离线。
+  示例走真机分支去 ``client.connect()``，测试就不再离线。这条隔离守卫读的是
+  ``subprocess.run`` **实收**的 ``env`` 关键字参数，不是 ``_isolated_env()`` 自己的
+  返回值——夹具漏传 ``env=`` 时立刻变红。另有一条 ``python -O`` 子进程用例：优化模式下
+  跳过分支照样退码 0 并打出跳过文案。
 - B：AST 级守卫。模块**import 期作用域**不得 import ``lerobot``——递归下探 ``try:`` /
   ``if TYPE_CHECKING:`` / ``with`` / ``match`` 的分支体与类体，只在函数定义处停手；
   函数体内的厂商 import 必须存在（惰性导入，构造器本身在无 lerobot 的主环境里也能
@@ -36,6 +39,10 @@
      ``断言失败`` 收场（``实际调用 1 次``），证明这个数字来自真计数；
   3. AST 级守卫——结尾那条 ``print`` 的 f-string 插值里必须有 ``send_action_calls``
      属性访问（``FormattedValue`` 里能找到），防止有人把插值换成硬编码字面量。
+  4. AST 级可达断言守卫——**只展开在常量意义上可能执行的节点**（``if False:`` /
+     ``if 1 == 0:`` 这类死分支不展开）之后，可达节点里必须有
+     ``assert <x>.send_action_calls == 0`` 形态的真断言；另有显式 ``SystemExit`` 兜底的
+     AST 守卫，因为 ``python -O`` 会把 ``assert`` 整条删掉。
 - E：协议守卫。计数代理 ``isinstance(proxy, RobotTransport)`` 为真，并同时钉住三个关键
   方法的**实际行为**（``send_action`` 自增、``get_observation`` 返回 Mapping、
   ``prime_observation_request_window`` 转发到 client）。``runtime_checkable`` 协议只查
@@ -53,6 +60,7 @@ import contextlib
 import dataclasses
 import importlib.util
 import io
+import operator
 import os
 import re
 import subprocess
@@ -76,7 +84,6 @@ SKIP_NOTICE_LITERAL = "需要 vendor 环境"
 HOWTO_RUN_LITERAL = "PYTHONPATH"
 
 # 真机路径读数行的形态；契约 D 用正则取数，不做子串匹配。
-ZERO_SEND_LITERAL = "0 次发送"
 READOUT_RE = re.compile(r"send_action 调用次数: (\d+) 次发送")
 OBSERVATION_SEQUENCE_RE = re.compile(r"样本序号 observation_sequence=(\d+)")
 OBSERVATION_KEY_COUNT_RE = re.compile(r"读一帧观测，键 (\d+) 个")
@@ -355,6 +362,23 @@ def _readout_print_statement(tree: ast.Module) -> ast.Expr:
     )
 
 
+def _is_int_zero_constant(node: ast.AST) -> bool:
+    """判断节点是否为整数常量 ``0``（``False`` 这类 ``bool`` 常量被排除）。
+
+    Args:
+        node: 待判定的 AST 节点。
+
+    Returns:
+        是整数 0 时为 ``True``；``bool`` 恒为 ``False``。
+    """
+    if not isinstance(node, ast.Constant):
+        return False
+    if isinstance(node.value, bool):
+        return False
+
+    return isinstance(node.value, int) and node.value == 0
+
+
 def _is_send_action_zero_assert(node: ast.AST) -> bool:
     """判断节点是否为 ``assert <x>.send_action_calls == 0`` 形态的真断言。
 
@@ -380,12 +404,155 @@ def _is_send_action_zero_assert(node: ast.AST) -> bool:
     if not any(isinstance(op, ast.Eq) for op in test.ops):
         return False
 
-    return any(
-        isinstance(comparator, ast.Constant)
-        and not isinstance(comparator.value, bool)
-        and isinstance(comparator.value, int)
-        and comparator.value == 0
-        for comparator in test.comparators
+    return any(_is_int_zero_constant(comparator) for comparator in test.comparators)
+
+
+# 用于静态判定常量比较（``if 1 == 0:`` 也算死分支）的比较运算表。
+_COMPARE_OPERATORS: dict[type[ast.cmpop], Any] = {
+    ast.Eq: operator.eq,
+    ast.NotEq: operator.ne,
+    ast.Lt: operator.lt,
+    ast.LtE: operator.le,
+    ast.Gt: operator.gt,
+    ast.GtE: operator.ge,
+}
+
+
+def _static_truth(node: ast.AST) -> bool | None:
+    """静态判定一个测试表达式是否恒真 / 恒假，判不出时返回 ``None``。
+
+    只认 ``ast.Constant``、两侧都是常量的简单比较、以及对它们取 ``not``，足以覆盖
+    ``if False:`` / ``if 1 == 0:`` / ``while False:`` 这类死分支。
+
+    Args:
+        node: 测试表达式节点。
+
+    Returns:
+        ``True`` 恒真、``False`` 恒假、``None`` 判不出（按「两支都可能走到」处理）。
+    """
+    if isinstance(node, ast.Constant):
+        return bool(node.value)
+
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        inner = _static_truth(node.operand)
+
+        return None if inner is None else not inner
+
+    if (
+        isinstance(node, ast.Compare)
+        and len(node.ops) == 1
+        and len(node.comparators) == 1
+        and isinstance(node.left, ast.Constant)
+        and isinstance(node.comparators[0], ast.Constant)
+    ):
+        func = _COMPARE_OPERATORS.get(type(node.ops[0]))
+        if func is None:
+            return None
+        try:
+            return bool(func(node.left.value, node.comparators[0].value))
+        except TypeError:
+            return None
+
+    return None
+
+
+def _reachable_children(node: ast.AST) -> list[ast.AST]:
+    """给出一个节点的直接子节点，跳过常量判定下的死分支。
+
+    Args:
+        node: 当前节点。
+
+    Returns:
+        仍可能被执行的直接子节点（含测试表达式本身）。
+    """
+    if isinstance(node, ast.If):
+        truth = _static_truth(node.test)
+        if truth is True:
+            return [node.test, *node.body]
+        if truth is False:
+            return [node.test, *node.orelse]
+
+        return [node.test, *node.body, *node.orelse]
+
+    if isinstance(node, ast.While):
+        truth = _static_truth(node.test)
+        if truth is False:
+            return [node.test, *node.orelse]
+
+        return [node.test, *node.body, *node.orelse]
+
+    return list(ast.iter_child_nodes(node))
+
+
+def _reachable_nodes(tree: ast.AST) -> list[ast.AST]:
+    """展开 AST，只收「在常量意义上可能被执行」的节点。
+
+    死分支（``if False:`` / ``while False:`` / ``if 1 == 0:``）里的语句不会出现在结果里，
+    而注释与 docstring 本来就不是 ``ast.Assert``，因此两种伪写法都骗不过依赖本函数的守卫。
+    这是 ``tests/test_examples_and_configs.py`` 里同名实现的同款口径（两份测试文件各自持有一
+    份，避免 test 模块之间互相 import）。
+
+    Args:
+        tree: 待展开的 AST 根节点。
+
+    Returns:
+        可达节点列表。
+    """
+    collected: list[ast.AST] = []
+    stack: list[ast.AST] = [tree]
+    while stack:
+        node = stack.pop()
+        collected.append(node)
+        stack.extend(_reachable_children(node))
+
+    return collected
+
+
+def _is_zero_send_system_exit_guard(node: ast.AST) -> bool:
+    """判断节点是否为 ``if <x>.send_action_calls != 0: raise SystemExit(...)`` 形态。
+
+    ``assert`` 在 ``python -O`` 下会被整条删掉，所以示例另有一道不依赖 ``assert`` 存在的
+    显式判定。这里只认「比较 ``!=`` 整数 ``0`` + 分支体里 ``raise SystemExit(...)``」这一
+    种形态：``if not <x>.send_action_calls:``、``sys.exit(...)``、只 ``print`` 不抛都不算。
+
+    Args:
+        node: 待判定的 AST 节点。
+
+    Returns:
+        命中该显式门禁形态时为 ``True``。
+    """
+    if not isinstance(node, ast.If):
+        return False
+
+    test = node.test
+    if not isinstance(test, ast.Compare):
+        return False
+    if not _is_counter_ref(test.left):
+        return False
+    if not any(isinstance(op, ast.NotEq) for op in test.ops):
+        return False
+    if not any(_is_int_zero_constant(comparator) for comparator in test.comparators):
+        return False
+
+    return any(_raises_system_exit(statement) for statement in node.body)
+
+
+def _raises_system_exit(node: ast.stmt) -> bool:
+    """判断语句是否为 ``raise SystemExit(...)`` 形态。
+
+    Args:
+        node: 待判定的语句节点。
+
+    Returns:
+        是 ``raise SystemExit(...)`` 时为 ``True``。
+    """
+    if not isinstance(node, ast.Raise):
+        return False
+
+    exc = node.exc
+
+    return (
+        isinstance(exc, ast.Call) and isinstance(exc.func, ast.Name) and exc.func.id == "SystemExit"
     )
 
 
@@ -676,27 +843,92 @@ class _RealBranchRun:
 # ---------------------------------------------------------------------------
 
 
+@dataclasses.dataclass(frozen=True)
+class _ExampleSubprocessRun:
+    """一次示例子进程运行的结果，以及 ``subprocess.run`` **实收**的关键字参数。
+
+    ``run_kwargs`` 是隔离守卫的取证对象：夹具到底有没有把剥过环境变量的字典传下去，
+    只能从这里看出来，看 ``_isolated_env()`` 的返回值是看不出来的。
+
+    Attributes:
+        proc: 子进程运行结果（完成态）。
+        run_kwargs: 那次 ``subprocess.run(...)`` 收到的关键字参数（含 ``env``）。
+    """
+
+    proc: subprocess.CompletedProcess[str]
+    run_kwargs: dict[str, Any]
+
+
+def _run_example_script() -> _ExampleSubprocessRun:
+    """在仓库根下用当前解释器跑一次示例脚本，并记下 ``subprocess.run`` 实收的关键字参数。
+
+    记录方式是给 ``subprocess.run`` 套一层 wrapper：先记下 kwargs，再转调真实的
+    ``subprocess.run``，所以被测路径一行不改，拿到的就是夹具真正传下去的东西。
+
+    Returns:
+        子进程运行结果与实收关键字参数。
+    """
+    assert EXAMPLE_PATH.is_file(), f"示例脚本尚未创建: {EXAMPLE_PATH}"
+
+    recorded: dict[str, Any] = {}
+    real_run = subprocess.run
+
+    def _recording_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        """先记下调用参数，再把调用原样交给 ``subprocess.run``。
+
+        Args:
+            *args: 原样透传。
+            **kwargs: 记录后原样透传。
+
+        Returns:
+            真实 ``subprocess.run`` 的返回值。
+        """
+        recorded.clear()
+        recorded.update(kwargs)
+
+        return real_run(*args, **kwargs)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(subprocess, "run", _recording_run)
+        proc = subprocess.run(
+            [sys.executable, str(EXAMPLE_PATH)],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=SUBPROCESS_TIMEOUT_S,
+            check=False,
+            env=_isolated_env(),
+        )
+
+    return _ExampleSubprocessRun(proc=proc, run_kwargs=recorded)
+
+
 @pytest.fixture(scope="module")
-def example_run() -> subprocess.CompletedProcess[str]:
-    """在仓库根下用当前解释器跑一次示例脚本，A 组断言复用同一份输出。
+def example_subprocess_run() -> _ExampleSubprocessRun:
+    """在仓库根下用当前解释器跑一次示例脚本，A 组断言复用同一份输出与实收参数。
 
     主环境没有 ``lerobot``，因此走的是示例的跳过分支。子进程带 :func:`_isolated_env`
     剥过环境变量，保证「主环境」这个前提不被调用方 ``PYTHONPATH`` 改写。
 
     Returns:
+        子进程运行结果与 ``subprocess.run`` 实收的关键字参数。
+    """
+    return _run_example_script()
+
+
+@pytest.fixture(scope="module")
+def example_run(
+    example_subprocess_run: _ExampleSubprocessRun,
+) -> subprocess.CompletedProcess[str]:
+    """同一份子进程运行结果的便捷视图（只取 CompletedProcess）。
+
+    Args:
+        example_subprocess_run: 已经跑过的子进程记录。
+
+    Returns:
         子进程运行结果。
     """
-    assert EXAMPLE_PATH.is_file(), f"示例脚本尚未创建: {EXAMPLE_PATH}"
-
-    return subprocess.run(
-        [sys.executable, str(EXAMPLE_PATH)],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        timeout=SUBPROCESS_TIMEOUT_S,
-        check=False,
-        env=_isolated_env(),
-    )
+    return example_subprocess_run.proc
 
 
 @pytest.fixture(scope="module")
@@ -815,17 +1047,58 @@ def test_example_script_stderr_has_no_traceback(
     )
 
 
-def test_example_subprocess_runs_with_isolated_environment() -> None:
-    """契约 A：子进程的环境确实剥掉了能让它误走真机分支的三个变量。
+def test_example_subprocess_runs_with_isolated_environment(
+    example_subprocess_run: _ExampleSubprocessRun,
+) -> None:
+    """契约 A：子进程**实收**的环境确实剥掉了能让它误走真机分支的三个变量。
 
-    这条守卫钉的是「离线」前提本身：夹具若把 ``env=_isolated_env()`` 去掉（回退成继承
-    父进程环境），本用例会在 ``PYTHONPATH`` 指向 vendor ``src`` 的机器上先红。
+    这条守卫钉的是「离线」前提本身，取证对象是 ``subprocess.run`` 实收的 ``env`` 关键字
+    参数（见 :func:`_run_example_script` 的 wrapper），而不是 ``_isolated_env()`` 自己的
+    返回值：夹具若把 ``env=_isolated_env()`` 去掉（回退成继承父进程环境），这里连
+    ``env`` 都收不到，用例立刻变红。``_isolated_env()`` 自身的口径也一并复检。
     """
-    env = _isolated_env()
+    run_kwargs = example_subprocess_run.run_kwargs
 
+    assert "env" in run_kwargs, (
+        "拉示例子进程时必须显式传 env=_isolated_env()：否则子进程继承父环境，调用方 "
+        "PYTHONPATH 指向 vendor 的 src 时示例会走真机分支去连设备，测试不再离线。"
+        f"subprocess.run 实收的关键字参数: {sorted(run_kwargs)}\n"
+        f"{_describe(example_subprocess_run.proc)}"
+    )
+
+    env = run_kwargs["env"]
     leaked = [name for name in STRIPPED_ENV_VARS if name in env]
+    assert leaked == [], (
+        f"子进程实收的环境里仍然留着这些变量: {leaked}\n{_describe(example_subprocess_run.proc)}"
+    )
 
-    assert leaked == [], f"隔离后的子进程环境里仍然留着这些变量: {leaked}"
+    helper_leaked = [name for name in STRIPPED_ENV_VARS if name in _isolated_env()]
+    assert helper_leaked == [], f"_isolated_env() 自己漏了这些变量: {helper_leaked}"
+
+
+def test_example_script_runs_under_optimized_interpreter() -> None:
+    """契约 A：``python -O`` 下主环境跳过分支仍能跑通——优化模式不把脚本弄崩。
+
+    为什么要这条：``-O`` 会把 ``assert`` 整条删掉，而示例的零发送门禁不能只剩 assert。
+    这里只重主环境的跳过分支（退码 0 且跳过文案照旧），不连设备、不连网；计数不为 0 时
+    的显式 ``SystemExit`` 兜底由 AST 守卫
+    :func:`test_example_has_explicit_system_exit_zero_send_guard` 钉住。
+    """
+    proc = subprocess.run(
+        [sys.executable, "-O", str(EXAMPLE_PATH)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=SUBPROCESS_TIMEOUT_S,
+        check=False,
+        env=_isolated_env(),
+    )
+
+    assert proc.returncode == 0, f"``python -O`` 下示例退出码非 0\n{_describe(proc)}"
+    assert SKIP_NOTICE_LITERAL in proc.stdout, (
+        f"``python -O`` 下 stdout 缺少跳过文案「{SKIP_NOTICE_LITERAL}」"
+        f"（优化模式下脚本仍应认得出主环境没 lerobot）\n{_describe(proc)}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1008,6 +1281,113 @@ def test_example_real_branch_client_received_no_send_action(
 # ---------------------------------------------------------------------------
 
 
+def test_example_has_reachable_send_action_zero_assert(example_tree: ast.Module) -> None:
+    """契约 D：可达 AST 里必须存在 ``assert <x>.send_action_calls == 0`` 形态的真断言。
+
+    先把 AST 按「在常量意义上可能被执行」展开（:func:`_reachable_nodes`：``if False:`` /
+    ``if 1 == 0:`` / ``while False:`` 这些死分支不展开），再要求可达节点里有命中
+    :func:`_is_send_action_zero_assert` 的断言。所以注释、docstring、死分支里的同款文字都
+    冒充不了；``hits = t.send_action_calls; assert hits == 0``、
+    ``assert 0 == t.send_action_calls``、``assert not t.send_action_calls`` 也不被接受——
+    这三种形态的反例由下面两条自测钉住。
+    """
+    nodes = _reachable_nodes(example_tree)
+    hits = [ast.unparse(node) for node in nodes if _is_send_action_zero_assert(node)]
+
+    assert hits, (
+        "示例必须真的断言 send_action_calls == 0（AST 级检查，且只算可达节点）："
+        "注释、docstring、if False: 死分支里的同款文字都不算数，"
+        "`hits = t.send_action_calls; assert hits == 0`、`assert 0 == t.send_action_calls`、"
+        "`assert not t.send_action_calls` 也不被接受。"
+        f"请在 {EXAMPLE_PATH} 里保留形如 `assert transport.send_action_calls == 0` 的语句"
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        # 最直接的一例：函数体里的裸断言。
+        "def f(t):\n    assert t.send_action_calls == 0\n",
+        # 包在判不出的分支里：两支都可能执行，所以照算可达。
+        (
+            "def f(t, flag):\n"
+            "    if flag:\n"
+            "        assert t.send_action_calls == 0\n"
+            "    else:\n"
+            "        assert t.send_action_calls == 0\n"
+        ),
+        # 恒真分支里的断言：本身就能执行到。
+        "def f(t):\n    if True:\n        assert t.send_action_calls == 0\n",
+    ],
+)
+def test_reachable_zero_send_assert_guard_accepts_reachable_forms(source: str) -> None:
+    """自测：可达位置上的 ``assert <x>.send_action_calls == 0`` 必须被守卫认下。
+
+    Args:
+        source: 一段把该形态断言放在可达位置的源码文本。
+    """
+    nodes = _reachable_nodes(ast.parse(source))
+
+    assert any(_is_send_action_zero_assert(node) for node in nodes), (
+        f"守卫漏掉了可达位置上的零发送断言（退化成空检查）: {source!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        # 死分支伪装：if False
+        "def f(t):\n    if False:\n        assert t.send_action_calls == 0\n",
+        # 死分支伪装：常量比较
+        "def f(t):\n    if 1 == 0:\n        assert t.send_action_calls == 0\n",
+        # 死循环体伪装
+        "def f(t):\n    while False:\n        assert t.send_action_calls == 0\n",
+        # 先读到变量再比 0：不认这种「读到变量就叫断言」的写法。
+        "def f(t):\n    hits = t.send_action_calls\n    assert hits == 0\n",
+        # 反序比较：被比较的左侧不是计数器属性访问。
+        "def f(t):\n    assert 0 == t.send_action_calls\n",
+        # 真值判断形态：没有显式 ``== 0``。
+        "def f(t):\n    assert not t.send_action_calls\n",
+        # 只写在注释/字符串里。
+        (
+            "def f(t):\n"
+            "    # assert t.send_action_calls == 0\n"
+            "    return 'assert t.send_action_calls == 0'\n"
+        ),
+        # 比较对象是 False（bool 常量）而不是整数 0。
+        "def f(t):\n    assert t.send_action_calls == False  # noqa: E712\n",
+    ],
+)
+def test_reachable_zero_send_assert_guard_rejects_dead_or_indirect_forms(source: str) -> None:
+    """自测：死分支或间接形态的「零发送断言」一律不算数。
+
+    Args:
+        source: 一段带着伪零发送断言（死分支 / 读变量 / 反序 / 真值 / 注释 / bool）的源码。
+    """
+    nodes = _reachable_nodes(ast.parse(source))
+
+    assert not any(_is_send_action_zero_assert(node) for node in nodes), (
+        f"守卫把伪零发送断言当成了真断言: {source!r}"
+    )
+
+
+def test_example_has_explicit_system_exit_zero_send_guard(example_tree: ast.Module) -> None:
+    """契约 D：可达 AST 里有 ``if <x>.send_action_calls != 0: raise SystemExit(...)`` 门禁。
+
+    ``assert`` 在 ``python -O`` 下会被整条删掉，所以零发送不能只靠 assert。这条看守卫的是
+    「不依赖 assert 存在」的那道显式判定：把示例里的显式 ``SystemExit`` 分支删掉、只留下
+    ``assert``，它就会变红（而 ``assert`` 那里的守卫看不出来）。
+    """
+    nodes = _reachable_nodes(example_tree)
+    hits = [ast.unparse(node) for node in nodes if _is_zero_send_system_exit_guard(node)]
+
+    assert hits, (
+        "示例必须有显式 ``SystemExit`` 兜底（形如 `if transport.send_action_calls != 0: "
+        "raise SystemExit(...)`）：``python -O`` 会把 assert 整条删掉，零发送门禁不能只剩 "
+        f"assert。 {EXAMPLE_PATH}"
+    )
+
+
 def test_example_readout_print_interpolates_send_action_counter(example_tree: ast.Module) -> None:
     """契约 D：读数行的 f-string 插值里必须有 ``send_action_calls``（防硬编码字面量）。
 
@@ -1033,11 +1413,11 @@ def test_example_readout_reports_one_when_proxy_really_sends_once(
 ) -> None:
     """契约 D 反例自证：计数代理真被下发一次后，同一条读数行必须变成 ``1 次发送``。
 
-    为什么单独执行那条 ``print`` 语句：``main()`` 里的 ``assert ... == 0`` 是硬门禁，
-    计数不为 0 时它在打印之前就抛错（下一条用例正是钉这个行为），所以「计数为 1 的读数行」
-    只能由被钉住的那条源码语句本身跑出来。这里取的是示例源码的原文语句（``ast.unparse``
-    后执行），参数是**被测代码自己的**计数代理实例，计数由一次真实 ``send_action`` 调用
-    产生——不是在这里拼一个假字符串，因此能证明数字来自真计数。
+    为什么单独执行那条 ``print`` 语句：HEAD 的结尾顺序是「打印读数行 → ``assert`` → 显式
+    ``SystemExit`` 兜底」（见 ``examples/robot_dry_run.py`` 末尾），本用例不去依赖那个顺序，
+    而是取出示例源码原文的读数语句（``ast.unparse`` 后执行）、参数用**被测代码自己的**计数
+    代理实例，计数由一次真实 ``send_action`` 调用产生——不是在这里拼一个假字符串，所以能
+    证明数字来自真计数。``main()`` 全流程侧的门禁由下一条用例钉住。
     """
     proxy, client = _make_counting_transport(example_module)
 
@@ -1069,9 +1449,11 @@ def test_example_main_fails_closed_when_the_proxy_sends_once(
 ) -> None:
     """契约 D 反例自证：计数为 1 时 ``main()`` 以断言失败收场，且消息里报的是具体数字 1。
 
-    把命令步换成「通过计数代理真的下发一次」，跑完整 ``main()``：读数前的
-    ``assert transport.send_action_calls == 0`` 必须拦下来，消息里报 ``实际调用 1 次``。
-    这条用例钉两件事：计数确实来自真下发；零发送是硬门禁，不是仅靠打印。
+    把命令步换成「通过计数代理真的下发一次」，跑完整 ``main()``：HEAD 先打印读数行
+    （``1 次发送``），紧接着 ``assert transport.send_action_calls == 0`` 拦下来，消息里报
+    ``实际调用 1 次``。这条用例钉两件事：计数确实来自真下发；零发送是硬门禁，不是仅靠打印。
+    ``python -O`` 下这条 assert 会被删掉，示例另有一道显式 ``SystemExit``，由
+    :func:`test_example_has_explicit_system_exit_zero_send_guard` 钉住。
     """
 
     def _send_one_lift_action(session: Any) -> None:
