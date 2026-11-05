@@ -1130,7 +1130,7 @@ run 8.2b-host-verify ssh "$PI" 'pgrep -af "alohamini_host|lerobot"; ss -ltnp | g
 
 退出码同时写在每步的 `$S4DIR/stdout/<步骤号>-$STAMP.exit` 里，查表前先看这个文件。
 
-## 10.5 肩部定性专项（M0 已完成；teleop oracle 与 M1 待有人到场）
+## 10.5 肩部定性专项（M0 已离线复算（未立台账）；teleop oracle 与 M1 待有人到场）
 
 本节接第 7.2 节：那里已把停滞定位到「不在 PC→Host 值传递段」，Host→总线写入段与伺服 / 机械侧仍无观测。本节是要有人到机器人跟前才能做的跟进动作；2026-11-05 远程会话（无人在机器人现场）只完成了 M0。
 
