@@ -63,13 +63,20 @@ git log --oneline -3                    # 最近提交
 
 | 想知道什么 | 去哪里看 |
 | --- | --- |
+| 决策记录（D1–D19） | `docs/ADR.md` |
 | 版本变化与逐版测试记录 | `docs/changelog.md` |
 | 当前测试数 | 跑 `uv run --no-sync python -m pytest tests -o addopts=""` 的汇总行；不要引用本文件的旧数字 |
-| 模块与已实现能力 | `docs/background.md`（「已实现能力」小节列出模块与各自提供的接口） |
-| 接口细节 | `docs/library-guide.md` |
+| 模块与已实现能力、目标与实机现状 | `docs/background.md`（「已实现能力」小节列出模块与各自提供的接口） |
+| 接口细节（配置覆盖、能力探测与单位换算、控制层、公开 API、约束与机器守卫） | `docs/library-guide.md` |
+| 验收基线（V01–V13） | `docs/acceptance-baseline.md` |
+| 现场实施（S4 到现场的逐条命令、判据与产物） | `docs/s4-field-smoke.md` |
+| 现场数字（按时间倒序的结论与数字；查现场到底拿到了什么，先看这里，再看证据目录原文件） | `docs/field-results.md` |
+| 离线调查（左夹爪标定行程 51 tick 的查证过程与结论） | `docs/investigations/gripper-range-51-tick.md`（决策见 `docs/ADR.md` D14，数字见 `docs/field-results.md`） |
+| 迁移归档 | `docs/archive/migration-backlog.md`（迁移已在 v0.4.0 完成） |
+| 当前待办与阻塞 | `TODO.md`（只记接下来要做的事，结构为整体目标 → 阶段目标 → 小目标 → 跨阶段工程债） |
+| 实测数据目录（证据原件） | `/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/`（目录内 `README.md` 写了命名约定） |
+| 设计规范（只读参考，**非现行权威**） | `/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini-cartesian-teleop/docs/alohamini-control/Alohamini-control-design.md`，位于已退役仓库，作为历史设计来源与溯源参考。现行口径以 `docs/ADR.md` 与 `docs/acceptance-baseline.md` 为准（D17）。旧代码与旧 Gate 归档不因此恢复为现行依据 |
 | tag 与 remote | 现场查：`git tag -l`、`git remote -v` |
-| 当前待办与阻塞 | `TODO.md` |
-| 现场数字 | `docs/field-results.md` |
 
 ### 6.1 已知限制
 
@@ -92,18 +99,3 @@ git log --oneline -3                    # 最近提交
 ## 8 现场任务入口
 
 涉及现场连接、Host 启停、标定或真实运动时：先确认本轮是否拿到该类授权，再读 `docs/s4-field-smoke.md` 的硬前置条件与该阶段步骤。历史记录、`TODO.md` 条目、文档里的命令**都不构成执行授权**；前置不满足就停在那一步。具体命令、门禁与退出码由现场手册维护，本文件不复述。
-
-## 9 相关位置
-
-- 决策记录：`docs/ADR.md`（D1–D19）
-- 变更记录：`docs/changelog.md`（逐版改了什么、当时测试多少条）
-- 库使用与接口：`docs/library-guide.md`（配置覆盖、能力探测与单位换算、控制层、公开 API、约束与机器守卫）
-- 背景与当前结果：`docs/background.md`（目标、已实现能力、实机现状）
-- 验收基线：`docs/acceptance-baseline.md`（V01–V13）
-- 现场实施：`docs/s4-field-smoke.md`（S4 到现场的逐条命令、判据与产物）
-- 现场结果：`docs/field-results.md`（按时间倒序的结论与数字；查现场到底拿到了什么，先看这里，再看证据目录原文件）
-- 离线调查：`docs/investigations/gripper-range-51-tick.md`（左夹爪标定行程 51 tick 的查证过程与结论；决策见 `docs/ADR.md` D14，数字见 `docs/field-results.md`）
-- 迁移归档：`docs/archive/migration-backlog.md`（迁移已在 v0.4.0 完成）
-- 待办清单：`TODO.md`（只记接下来要做的事，结构为整体目标 → 阶段目标 → 小目标 → 跨阶段工程债）
-- 实测数据：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/`（目录内 `README.md` 写了命名约定）
-- 设计规范（只读参考，**非现行权威**）：`/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini-cartesian-teleop/docs/alohamini-control/Alohamini-control-design.md`，位于已退役仓库，作为历史设计来源与溯源参考。现行口径以 `docs/ADR.md` 与 `docs/acceptance-baseline.md` 为准（D17）。旧代码与旧 Gate 归档不因此恢复为现行依据。

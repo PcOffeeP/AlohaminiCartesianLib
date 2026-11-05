@@ -16,77 +16,26 @@ AlohaMini 笛卡尔控制的产品侧库：对机器人运行时的适配协议�
 
 ## 安装
 
-核心只依赖 numpy：
-
-```bash
-pip install -e .
-```
-
-读 YAML 配置加 `yaml` extra：
-
-```bash
-pip install -e ".[yaml]"
-```
-
-跑数值 IK 用例与离线 IK 基准加 `kinematics` extra：
-
-```bash
-pip install -e ".[kinematics]"
-```
-
-该 extra 会把 numpy 带到 2.3.x，原因见 [docs/ADR.md](docs/ADR.md) D8。
-
-接触真实运行时再加 `runtime` extra：
-
-```bash
-pip install -e ".[runtime]"
-```
-
-`lerobot` 当前不在 PyPI 上发布：用 `runtime` extra 之前，先按 `lerobot` 上游 README 把 `lerobot` 装进同一环境（例如从上游仓库以 editable 方式安装）。`pyproject.toml` 里的 `runtime = ["lerobot>=0.6.1,<0.7"]` 只限定支持的版本范围，不指向可解析的分发地址，区间依据见 [docs/ADR.md](docs/ADR.md) D16。
-
-开发依赖在 PEP 735 的 `[dependency-groups] dev` 里（`pytest>=8.0`、`ruff>=0.6`、`PyYAML>=6.0`），不进包的元数据；`uv sync` 会自动装上，不用 uv 时按这三个名字手动装。
+`pip install -e .` 即可，核心只依赖 numpy。
+optional extras 有三个：`yaml`（读 YAML 配置）、`kinematics`（数值 IK 用例与离线 IK 基准）、`runtime`（接触真实运行时）；用 `runtime` 之前，先按 vendor fork（`lerobot_alohamini`）的方式把 `lerobot` 装进同一环境。
+细节见 [docs/library-guide.md](docs/library-guide.md) 与 [docs/ADR.md](docs/ADR.md)（D1 / D8 / D16）。
 
 ## 快速开始
 
-完整可跑的最小脚本是 `examples/minimal_dry_run.py`：内存里的假 transport、假 IK、假时钟跑一次 dry-run 全链路，不连设备、不联网，结尾断言 `send_action` 调用 0 次。
-
-```bash
-uv run --no-sync python examples/minimal_dry_run.py
-```
-
-读配置：
-
-```python
-from pathlib import Path
-
-from alohamini_cartesian.config.overlay import load_settings
-
-settings = load_settings(template=Path("configs/template.yaml"), site=Path("configs/site.yaml"))
-```
-
-开会话并发一次相对位移（会话部分取自 `examples/minimal_dry_run.py`）：
-
-以下片段是 `examples/minimal_dry_run.py` 的节选，`_HOST`、`transport`、`clock`、`sleeper`、`_FakeArmIK`、`_make_adapter()` 都在该文件里定义。
+完整可跑的最小脚本是 `examples/minimal_dry_run.py`（`uv run --no-sync python examples/minimal_dry_run.py`）：内存里的假对象跑一次 dry-run 全链路，不连设备、不联网，结尾按实测计数断言 `send_action` 调用 0 次。
 
 ```python
 from alohamini_cartesian.control.api import connect
 
-session = connect(
-    _HOST,
-    dry_run=True,
-    client_factory=lambda host, **_kwargs: transport,
-    clock=clock,
-    sleeper=sleeper,
-    ik_factory=_FakeArmIK,
-    adapter=_make_adapter(),
-)
+session = connect(host, dry_run=True, client_factory=make_client)
 try:
     report = session.left.move_by(dx=0.004)  # 绝对目标改用 move_to(x, y, z)，单位米
 finally:
     session.disconnect()
+# 完整 API 见 docs/library-guide.md
 ```
 
-真机上把 `client_factory` 换成返回厂商 `AlohaMiniClient` 的工厂。未注入时 `connect` 抛 `RuntimeUnavailable`。配置覆盖规则、能力探测、完整公开 API 见 [docs/library-guide.md](docs/library-guide.md)。
+`dry_run` 默认 `True`；真机运行时把 `client_factory` 换成返回厂商 `AlohaMiniClient` 的工厂；未注入 `client_factory` 时 `connect` 抛 `RuntimeUnavailable`。要让运动命令真正跑起来还要注入 kinematic adapter 与 IK 工厂（缺 adapter 时命令抛 `MotionNotEnabled`），见 [docs/library-guide.md](docs/library-guide.md) §3。
 
 ## 文档导航
 
@@ -104,15 +53,4 @@ finally:
 
 ## 开发与测试
 
-```bash
-uv run --no-sync ruff check .             # 代码风格
-uv run --no-sync ruff format --check .    # 格式
-uv run --no-sync python -m pytest tests   # 自动测试
-```
-
-两个坑：
-
-- 必须带 `--no-sync`。本仓库没有 `uv.lock`，不带它的 `uv run` 会自行解析依赖并新写一个 `uv.lock`。
-- pytest 不要再追加 `-q`。`addopts = "-q"` 已生效，再加会变成 `-qq` 并隐藏 `N passed, M skipped` 汇总行；要看汇总行用 `-o addopts=""`。
-
-本包已以 editable 方式装进 `.venv`，`uv run --no-sync` 直接复用，不必先 `pip install -e .`。当前测试状态见 `docs/changelog.md`；跳过项是两个 parity 文件缺 `lerobot`，构成见 [AGENTS.md](AGENTS.md) 第 6 节的已知限制。测试不依赖真实设备，不联网。
+开发与测试约定（自检命令与两个必须注意的坑）见 [AGENTS.md](AGENTS.md) §5。

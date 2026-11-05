@@ -1,6 +1,6 @@
 # 变更记录（v0.2.0 → v0.7.0）
 
-## v0.7.0
+## Unreleased（v0.7.0 候选，发版时合并收口）
 
 v0.7.0 给两个现场基准脚本加了客户端能力探测：`measure_latency.py --mode rtt` 在 `connect()` 返回后探测 `latest_request_timing`，缺该属性时打印说明并以新退出码 `9`（`EXIT_CLIENT_UNSUPPORTED`）结束，不写 CSV（连表头都不写）；`capture_robot_fingerprint.py` 缺该属性时继续采集，把 `age_s`、`sent_monotonic_s`、`received_monotonic_s` 记为 `null`，缺 `latest_control_status` 时 `control_status` 记 `null`。不用 `getattr` 静默回退，也不拿 `latest_safety_status` 顶替 `latest_control_status`。版本号从 `0.6.0` 升到 `0.7.0`。取舍与代价见 [ADR.md](ADR.md) D12。
 

@@ -109,9 +109,11 @@ deg_per_unit = conversion.deg_per_unit
 
 `control/arm_ik.py` 做 FK 与数值 IK。`placo` 是可选 extra `kinematics` 的依赖，函数内惰性 import，见 `docs/ADR.md` D8。
 
+控制层每帧有安全门禁：关节步长门禁（默认 `2.0°`/周期）与领先夹紧（lead clamp，限制解相对反馈的超前量），两者属安全门禁与截断，不是帧序列平滑，也不按 metadata 版本切换。
+
 `control/api.py` 不含默认运行时：`connect` 未注入 `client_factory` 时抛 `RuntimeUnavailable`。真实连接由调用方自己构造运行时 client 传进来；参考实现见 `examples/robot_dry_run.py` 的 `build_client_factory()`——它返回一个 `(host, **kwargs) -> client` 的工厂，厂商 `AlohaMiniClient` 与 `AlohaMiniClientConfig` 的 import 落在最内层工厂函数体内（惰性导入，主环境没有 `lerobot` 也能 import 本模块），工厂再经 `connect(..., client_factory=...)` 注入。
 
-那份示例走的是 `dry_run=True`：读一次真观测、对升降轴下一条命令、断开，`send_action` 一次都不会被调用。示例**不注入 `JointKinematicAdapter`（也不建 `placo` IK）**，所以命令在 priming 阶段的 adapter 门禁就被拒：`control/api.py:860-862` 在 `session._prime_state_machine()` 里抛 `MotionNotEnabled("motion requires a kinematic adapter; ...")`，而该调用位于 `control/api.py:513`，先于 `state.handle()`——命令读完第一帧反馈就被拒，根本没有进入状态机。另两处生效的门禁是 `control/api.py:674-675`（`connect(dry_run=True)` 连初始保持都不发）与 `control/api.py:913-914`（`disconnect()` 的底座零速只在非 dry-run 下发）。`control/api.py:519-520`（升降轴到位后的下发门禁）与 `control/controller.py:169-172`（臂控制器 `_send()` 的 dry-run 早退）在本示例里**不可达 / 不适用**——前者位于 `state.handle()` 之后，无 adapter 时前面已经抛错走不到；后者属于臂控制器，而臂控制器在 `adapter`、`ik_factory`、`clock`、`sleeper` 四者齐备时才构造（构造条件见 `control/api.py:653-672`），本示例不建控制器。结尾先打印计数代理的实测调用次数，再做显式零发送门禁（`assert` 之外另有一道 `SystemExit`，`python -O` 下不会消失），不是硬编码的 0。
+那份示例走的是 `dry_run=True`：读一次真观测、对升降轴下一条命令、断开，`send_action` 一次都不会被调用。无 adapter 的会话下运动命令按设计被拒——缺 kinematic adapter 时抛 `MotionNotEnabled("motion requires a kinematic adapter; ...")`，命令未进状态机；升降轴 dry-run 可以跑通（`dry_run=True` 下不下发）。结尾的零发送结论不是硬编码的 0，计数来自实测（`assert` 之外另有一道 `SystemExit`，`python -O` 下不会消失）。行级细节（哪几处 dry-run 分支生效、哪些门禁不可达）见示例文件头注释与 [examples/robot_dry_run.py](../examples/robot_dry_run.py)。
 
 真机跑法（两条命令，`--host` 是机器人 Pi 的 IP/主机名；在 Pi 本机上跑可省，默认 `127.0.0.1`）：
 

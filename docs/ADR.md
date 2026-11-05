@@ -1,6 +1,6 @@
 # 架构决策记录（ADR）
 
-本文记录 `alohamini-cartesian` 自 v0.1.0 起沿用的决策，编号 D1–D19。每条按背景、决定、后果三段记录，后果同时写正面收益与已知代价。状态写作「已接受（自 vX.Y.Z 起）」；已落地但尚未发版的条目写作「已接受（未发版：…）」并写明当前 `pyproject.toml` 版本与 `docs/changelog.md` 缺行，不记具体日期。新的重大取舍按顺序追加编号，已接受的条目不回改。
+本文记录 `alohamini-cartesian` 自 v0.1.0 起沿用的设计取舍与流程红线，编号 D1–D19。本文件收设计取舍；纯流程条目仅收 D19 一类发版纪律，不再追加。每条按背景、决定、后果三段记录，后果同时写正面收益与已知代价。状态写作「已接受（自 vX.Y.Z 起）」；已落地但尚未发版的条目写作「已接受（未发版：…）」并写明当前 `pyproject.toml` 版本与 `docs/changelog.md` 缺行，不记具体日期。新的重大取舍按顺序追加编号，已接受的条目不回改。
 
 ## 索引
 
@@ -104,7 +104,7 @@
 
 ### 背景
 
-S3 要把旧仓库的 `control/` 与运动学搬进本库。旧代码在 `controller.py` 里 import `lerobot.robots.alohamini.*`，`api.py` 的默认 client 工厂又 import `AlohaMiniClient`。而 D1 定的接触面与 `tests/test_capability.py` 的守卫要求：`src/` 内除 `adapter/protocol.py` 外不得 import `lerobot`。照旧代码原样搬，核心导入会连带 vendor 运行时。
+S3 要把旧仓库的 `control/` 与运动学搬进本库。旧代码在 `controller.py` 里 import `lerobot.robots.alohamini.*`，`api.py` 的默认 client 工厂又 import `AlohaMiniClient`。而 D1 定的接触面与 `tests/test_capability.py` 的守卫要求：`src/` 内任何文件都禁止 import `lerobot`（含 `adapter/protocol.py` 自身）（2026-11-05 口径收紧，现行见 AGENTS §4）。照旧代码原样搬，核心导入会连带 vendor 运行时。
 
 ### 决定
 
@@ -167,7 +167,7 @@ S3 要把旧仓库的 `control/` 与运动学搬进本库。旧代码在 `contro
 
 ### 后果
 
-正面：本库的测试集只覆盖本库拥有的代码。测试失败必然指向本库的改动，不被厂商侧变更干扰。`src/` 内「除 `adapter/protocol.py` 外禁止 import `lerobot`」这条守卫，也不会被这些测试拉破。
+正面：本库的测试集只覆盖本库拥有的代码。测试失败必然指向本库的改动，不被厂商侧变更干扰。`src/` 内「任何文件都禁止 import `lerobot`（含 `adapter/protocol.py` 自身）」这条守卫（2026-11-05 口径收紧，现行见 AGENTS §4），也不会被这些测试拉破。
 
 已知代价：厂商侧协议在本库没有回归网。厂商仓库若改了协议行为，只能回到旧仓库跑那 49 条，本库无法提前发现。本库与厂商协议的兼容性，只能靠 `adapter/protocol.py` 的窄接口约定和 S4 现场 smoke 兜。
 
@@ -215,7 +215,7 @@ S3 要把旧仓库的 `control/` 与运动学搬进本库。旧代码在 `contro
 
 正面：130 个测试函数（静态计数，20 + 110）进入本库测试集，参数化展开后是 176 条用例。`pytest tests` 从 `823 passed, 2 skipped` 变为 `999 passed, 2 skipped`，跳过的仍是两个 parity 文件（缺 `lerobot`）。`tests/benchmarks` 子集 190 条通过 = 14（`test_benchmark_arm_ik.py`）+ 23 + 153。这套采集与测量逻辑此后由本库回归网守着，不再依赖旧仓库。
 
-已知代价：迁入时的状态是「有测试、无实测」。2026-10-25 已在真机上补上三项证据：`schema_version = 2` 的指纹（18 个电机、换算字段齐全）、Mode B 受控试动五次（腕部达成 87.9%，肩部两轴未跟随）、Gate F 第一段真实拒绝（退出码 6、零命令）。仍未取到的：Gate F 第二段、跨机 RTT、右臂试动、相机非空帧。汇总见 `docs/field-results.md`。per-file-ignores 让这四份文件在 docstring、类型注解与行宽三条规则上不受本库标准约束，长期看是风格例外。
+已知代价：迁入时的状态是「有测试、无实测」，此后的现场窗口补上了部分实机证据，仍有未取项；取到什么、还缺什么，逐条见 `docs/field-results.md`。per-file-ignores 让这四份文件在 docstring、类型注解与行宽三条规则上不受本库标准约束，长期看是风格例外。
 
 ## D10 关节限位取值在 `ArmIK.solve()` 入口校验：违规抛 `ValueError`，多余键忽略
 
@@ -621,7 +621,7 @@ D1 把 `lerobot` 放在 optional extra `runtime` 里，并且有意只写名字�
 
 V01 是本阶段唯一挡住「能不能说不接 leader 就算通」的条目（leader 指遥操作主臂，V01 要求脱离主臂、纯 PC 侧控制）。现状是实机侧只有腕部一个关节拿到跟随证据（2026-10-25 `arm_left_wrist_roll` 达成 `87.9%`、两步 `settled=True`；2026-11-05 同一关节 `87.91%`，与上次逐字相同），肩部两轴不跟随（2026-11-05 `arm_left_shoulder_pan` `4.40%`、`arm_left_shoulder_lift` `0.00%`，三轴 `settled=False`），原因未定性。数字出处：`docs/field-results.md` 的 2026-11-05 节「达成率三轴只有腕部接近指令」一行。
 
-没有红线时容易把「离线全绿」当成发版依据：本机 `pytest tests` 报 `1453 passed, 2 skipped`，那是软件侧快照；跳过的 2 条是 vendor fork 的 parity 对照，跳过不等于差分对照通过；实机侧 13 条里 9 条仍是「未取」。测试数增长不构成「能力可用」的证据。
+没有红线时容易把「离线全绿」当成发版依据：离线测试全绿只是软件侧快照，不等于发版依据；跳过的 2 条是 vendor fork 的 parity 对照（`tests/test_control_api_lerobot_parity.py`、`tests/test_kinematics_lerobot_parity.py`），跳过不等于差分对照通过；实机侧 13 条里 9 条仍是「未取」。测试数增长不构成「能力可用」的证据。当前测试条数与跳过构成见 `docs/changelog.md`，本文不复写。
 
 ### 决定
 
