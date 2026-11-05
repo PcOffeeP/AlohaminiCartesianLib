@@ -1,6 +1,6 @@
 # 架构决策记录（ADR）
 
-本文记录 `alohamini-cartesian` 自 v0.1.0 起沿用的决策，编号 D1–D18。每条按背景、决定、后果三段记录，后果同时写正面收益与已知代价。状态写作「已接受（自 vX.Y.Z 起）」；已落地但尚未发版的条目写作「已接受（未发版：…）」并写明当前 `pyproject.toml` 版本与 `docs/changelog.md` 缺行，不记具体日期。新的重大取舍按顺序追加编号，已接受的条目不回改。
+本文记录 `alohamini-cartesian` 自 v0.1.0 起沿用的决策，编号 D1–D19。每条按背景、决定、后果三段记录，后果同时写正面收益与已知代价。状态写作「已接受（自 vX.Y.Z 起）」；已落地但尚未发版的条目写作「已接受（未发版：…）」并写明当前 `pyproject.toml` 版本与 `docs/changelog.md` 缺行，不记具体日期。新的重大取舍按顺序追加编号，已接受的条目不回改。
 
 ## 索引
 
@@ -23,7 +23,8 @@
 | D15 | V11 的「帧平滑回退」不做：v1 兼容范围界定为「能解析 + 能换算可落」 | 已接受（自 v0.7.0 起） |
 | D16 | lerobot 依赖声明加版本区间：只支持 `lerobot>=0.6.1,<0.7` | 已接受（自 v0.7.0 起） |
 | D17 | 设计规范定为历史设计来源，本库权威以 ADR 与验收基线为准 | 已接受（自 v0.7.0 起） |
-| D18 | tracking 模式的 safety 快照单独成 sidecar（9 列长表），不进 14 列主表 | 已接受（未发版：`pyproject.toml` 仍为 `0.7.0`；`docs/changelog.md` 尚未记本条，留待发版时补） |
+| D18 | tracking 模式的 safety 快照单独成 sidecar（9 列长表），不进 14 列主表 | 已接受（未发版：`pyproject.toml` 仍为 `0.7.0`；`docs/changelog.md` 已补记（v0.7.0 段）） |
+| D19 | 证据红线：V01 不收口不发 minor 版，每个发版留一格实机证据 | 已接受（未发版：`pyproject.toml` 仍为 `0.7.0`、`git tag -l` 只到 `v0.6.0`；`docs/changelog.md` 尚未记本条，留待发版时补） |
 
 ## D1 依赖形态：独立包，lerobot 作为可选 extra
 
@@ -454,13 +455,15 @@ v1 帧真正拿到的兼容是两件事。一是 schema 1 的 metadata 能被收
 
 ### 背景
 
-D1 把 `lerobot` 放在 optional extra `runtime` 里，并且有意只写名字、不写版本：上游不在 PyPI 发布，`pip install .[runtime]` 本来也解析不到分发地址。这条决定留下一个缺口——「只声明名字」等于「装哪一版都算合法」。接口不匹配要到运行时才暴露；两个 parity 文件（`tests/test_control_api_lerobot_parity.py`、`tests/test_kinematics_lerobot_parity.py`）需要 `lerobot` 才能跑，在当前环境里始终跳过，也起不到约束作用。
+**订正（2026-11-05 实测）**：本段原写「上游不在 PyPI 发布、`pip install .[runtime]` 解析不到分发地址」，与实测不符，按实测改写；后文「依据」里下限 `0.6.1` 取自厂商 fork `pyproject.toml` 的论证不变。
+
+D1 把 `lerobot` 放在 optional extra `runtime` 里，并且有意只写名字、不写版本。2026-11-05 实测：从 PyPI **能**解析到 `lerobot 0.6.1` 并装成功、零报错；但它拉 `numpy>=2.0,<2.3`，把环境里已装的 `numpy 2.5.4` **静默降级到 2.2.6**，两边共存、没有任何告警；该上游 wheel **不含 `alohamini` 模块**，所以它能装、但不能当运行时用——**能装 ≠ 能用**，运行时必须是 vendor fork（`liyiteng/lerobot_alohamini`）。这条决定留下一个缺口——「只声明名字」等于「装哪一版都算合法」。接口不匹配要到运行时才暴露；两个 parity 文件（`tests/test_control_api_lerobot_parity.py`、`tests/test_kinematics_lerobot_parity.py`）需要 vendor fork 才能跑，在当前环境里始终跳过，也起不到约束作用。
 
 依据：下限 `0.6.1` 取自厂商 fork 的 `pyproject.toml` 里 `version = "0.6.1"`（由上游提交 `8a74e0ac`「chore(dependencies): Bump lerobot to 0.6.1 (#3957)」引入），并且这正是 Pi 现场运行的版本线（`/home/pi5/lerobot_alohamini` HEAD `ec65318f`）。上限 `<0.7` 取自上游没有「不破坏兼容」的承诺：项目 classifier 仍为 `Development Status :: 3 - Alpha`，历史上 0.3→0.6 出现过接口重构，跨 minor 一律未验证。
 
 ### 决定
 
-`pyproject.toml` 的 `runtime` extra 从 `["lerobot"]` 改成 `["lerobot>=0.6.1,<0.7"]`，约束落在 extra 上；核心 `dependencies` 仍不含 `lerobot`，D1 的「核心零第三方包可导入」不变。原句「`lerobot` 不在 PyPI 发布、需按上游 README 自行安装」保留，版本区间只额外限定范围、不改变安装方式。
+`pyproject.toml` 的 `runtime` extra 从 `["lerobot"]` 改成 `["lerobot>=0.6.1,<0.7"]`，约束落在 extra 上；核心 `dependencies` 仍不含 `lerobot`，D1 的「核心零第三方包可导入」不变。**订正（2026-11-05 实测）**：原文写「`lerobot` 不在 PyPI 发布、需按上游 README 自行安装」。按实改写后保留的是「运行时要 vendor fork」这条依据，不是「PyPI 上没有」这条已被实测推翻的描述——PyPI 上的 `lerobot 0.6.1` 能装、但缺 `alohamini` 模块，运行时仍必须按 fork README 安装 vendor fork。版本区间只额外限定范围、不改变安装方式。
 
 新增模块 `src/alohamini_cartesian/adapter/lerobot_version.py`，提供三个公开函数与四个常量，只用标准库（其中 `check_lerobot_version` 是纯函数，`installed_lerobot_version` 读包元数据、有 I/O，`assert_lerobot_version_supported` 是入口）：
 
@@ -478,14 +481,14 @@ D1 把 `lerobot` 放在 optional extra `runtime` 里，并且有意只写名字�
 
 ### 后果
 
-正面：接口依赖从「只有名字」变成「有区间、有判据」。`tests/test_lerobot_version.py` 同时钉住常量取值、`pyproject.toml` 的 `runtime` extra 与 ADR 里那条 requirement：前两处是结构化断言，改写与删除都会红；ADR 那条只是子串存在性检查（`lerobot>=0.6.1,<0.7` 是否出现），能挡改写与删除，挡不住「D16 之外另加一条相反表述」，防漂移的最后一环仍靠人读。检查全程离线、不需要装 `lerobot`，也不会因为检查而把机器人运行时载入进程。三条失败路径都是显式异常，调用方不会拿到一个假版本号继续往下跑。
+正面：接口依赖从「只有名字」变成「有区间、有判据」。`tests/test_lerobot_version.py` 同时钉住常量取值、`pyproject.toml` 的 `runtime` extra 与 ADR 里那条 requirement：前两处是结构化断言，改写与删除都会红；ADR 那条只是子串存在性检查（`lerobot>=0.6.1,<0.7` 是否出现），能挡改写与删除，挡不住「D16 之外另加一条相反表述」，防漂移的最后一环仍靠人读。检查全程离线、不需要装 `lerobot`，也不会因为检查而把机器人运行时载入进程。三条失败路径都是显式异常，调用方不会拿到一个假版本号继续往下跑。另（2026-11-05 实测）：parity 对照只对 vendor fork 成立——fork `6aee1f81` 快照上两个 parity 文件 **61/61 通过**（`aba8428` 修复 parity 夹具后）；从 PyPI 装的上游 wheel `lerobot 0.6.1` 不含 `alohamini` 模块，装上也跑不了这两条对照。
 
 已知代价：
 
 1. 现场指纹 JSON（`evidence/s4-20261025/capture/fingerprint-final-20261025.json`）里没有软件版本字段。所以「Pi 上跑的是 0.6.1」是从源码树 `pyproject.toml` 推出来的结论，**不是采集到的字段**，也没有现场校验记录。
 2. 区间内的未来 patch（如 0.6.9）仍可能改接口，区间约束挡不住 patch 级的不兼容。
 3. 检查函数目前没有被任何运行时入口调用：`connect` 之前没有自动校验，只有测试直接调用它，所以「装了不兼容版本」现在不会在装配期被拦下。
-4. 本库声明的 `numpy>=1.26` 与 `lerobot` 要求的 `numpy>=2.0,<2.3` 不同，开发环境因此不装 `lerobot`，端到端只有 mock 层证据：`importlib.metadata.version` 被打桩，真实 vendor 环境的版本串形态未验证。
+4. 本库声明的 `numpy>=1.26` 与 `lerobot` 要求的 `numpy>=2.0,<2.3` 不同。**订正（2026-11-05 实测）**：原写「开发环境因此不装 `lerobot`」是一刀切说法——实测不是装不上，而是**装得上、但会把已装的 numpy 静默降到 2.2.6**（环境里原为 2.5.4，两边共存、无任何告警），版本漂移无声，本机因此仍选择不装；端到端只有 mock 层证据：`importlib.metadata.version` 被打桩，真实 vendor 环境的版本串形态未验证。
 
 触发重新评估的条件（达成任一条即重新评估）：① Pi 现场换到 0.7 及以上，或厂商 fork 的 `version` 越过 0.6.x；② 出现需要跨 minor 的接口变化并有现场需求；③ 现场采集到真实的 `lerobot` 软件版本字段，与本文推断不符。
 
@@ -519,7 +522,7 @@ D1 把 `lerobot` 放在 optional extra `runtime` 里，并且有意只写名字�
 
 **（A）继承清单**
 
-设计规范 D001–D018 中仍指导本库行为的条目共 16 条，全部照旧生效。下表编号是设计规范的编号，与本文件 D1–D17 不是一套；落点列引用本文件条目时写作「本库 D10」这类形式以示区分。
+设计规范 D001–D018 中仍指导本库行为的条目共 16 条，全部照旧生效。下表编号是设计规范的编号，与本文件 D1–D19 不是一套；落点列引用本文件条目时写作「本库 D10」这类形式以示区分。
 
 | 来源编号 | 内容 | 落点（本库对应位置/条目） |
 | --- | --- | --- |
@@ -553,7 +556,7 @@ D1 把 `lerobot` 放在 optional extra `runtime` 里，并且有意只写名字�
 
 ## D18 tracking 模式的 safety 快照单独成 sidecar：9 列长表，不进 14 列主表
 
-状态：已接受（未发版：`pyproject.toml` 仍为 `0.7.0`、`git tag -l` 只到 `v0.6.0`，本条随本轮改动落地但不升版；`docs/changelog.md` 尚未记本条，留待发版时补）
+状态：已接受（未发版：`pyproject.toml` 仍为 `0.7.0`、`git tag -l` 只到 `v0.6.0`，本条随本轮改动落地但不升版；`docs/changelog.md` 已补记（v0.7.0 段））
 
 ### 背景
 
@@ -607,3 +610,41 @@ D1 把 `lerobot` 放在 optional extra `runtime` 里，并且有意只写名字�
 触发重新评估的条件（达成任一条即重新评估）：① 现场首跑后 `current_ma`、目标列或 `target_source` 的形态与本文描述不符；② 厂商换到有 `_joint_hold_goal` 写入点的版本，`hold_active` 重新具备判读价值。
 
 相关提交：随本次 `feat:` 提交同批落地（提交哈希见 `git log -- docs/ADR.md`）。代码改动在 `benchmarks/alohamini_io/measure_latency.py`，与本条文档同批提交。
+
+## D19 证据红线：V01 不收口不发 minor 版，每个发版留一格实机证据
+
+状态：已接受（未发版：`pyproject.toml` 仍为 `0.7.0`、`git tag -l` 只到 `v0.6.0`；`docs/changelog.md` 尚未记本条，留待发版时补）
+
+### 背景
+
+2026-11-05 定下这条红线。为什么现在定：本阶段的发版依据一直缺一条硬约束。
+
+V01 是本阶段唯一挡住「能不能说不接 leader 就算通」的条目（leader 指遥操作主臂，V01 要求脱离主臂、纯 PC 侧控制）。现状是实机侧只有腕部一个关节拿到跟随证据（2026-10-25 `arm_left_wrist_roll` 达成 `87.9%`、两步 `settled=True`；2026-11-05 同一关节 `87.91%`，与上次逐字相同），肩部两轴不跟随（2026-11-05 `arm_left_shoulder_pan` `4.40%`、`arm_left_shoulder_lift` `0.00%`，三轴 `settled=False`），原因未定性。数字出处：`docs/field-results.md` 的 2026-11-05 节「达成率三轴只有腕部接近指令」一行。
+
+没有红线时容易把「离线全绿」当成发版依据：本机 `pytest tests` 报 `1453 passed, 2 skipped`，那是软件侧快照；跳过的 2 条是 vendor fork 的 parity 对照，跳过不等于差分对照通过；实机侧 13 条里 9 条仍是「未取」。测试数增长不构成「能力可用」的证据。
+
+### 决定
+
+四条红线，按本文字面执行，不放宽。
+
+1. **V01 不收口不发 minor 版**：`0.7.x → 0.8` 需要 V01 有实机证据才能发版。
+2. **每个发版至少新增一格实机证据**，并写明条件（供电 / 温度 / 容差）。**例外**：纯文档 / 测试修复的发版可豁免，豁免必须在 changelog 里写明理由。
+3. **V01 收口前新增测试只允许走追因路径**（诊断 / 证据链），**不允许 polish 路径**（打磨体验、补覆盖广度、美观化断言）。
+4. **配套 A 阶段「受阻」口径**：肩部若定性为硬件不可修，A 阶段记「受阻」而非「完成」，V01 保持未取，按臂 / 关节资格档案降级推进 B（与 `docs/acceptance-baseline.md` §2.1 互相引用）。
+
+口径衔接：红线 4 替代 `docs/acceptance-baseline.md` §2.1 旧写法里的逃逸口——旧写法允许把「在手册里写明结构性原因」当作 A 阶段的交差方式；新口径要求先定性到硬件不可修才记「受阻」，且明确「受阻 ≠ 完成」，V01 不因降级而算通过。
+
+### 后果
+
+正面：发版判断有了可核对的落点，不再靠「测试数涨了多少」推断能力；每条实机证据都带条件（供电 / 温度 / 容差），下次现场不必重新推当时的口径；「受阻」这条出口让肩部卡住时仍能推进 B 阶段，同时不把未达成的验收条目记成完成。
+
+**已知代价**
+
+1. 红线 3 会限制 V01 收口前的测试增补类型：只允许追因（诊断与证据链）的用例，正常润色型改动（补覆盖广度、改断言可读性、补边界美观度）要推迟到 V01 收口之后。代价是这期间测试集质量提升被冻结，个别读起来不顺的断言要带着走。
+2. 红线 2 的豁免依赖 changelog 里那句理由：写了理由才算豁免，缺理由等于违规自行判断——这条红线拦得住「什么都不写就发版」，拦不住「理由写得很宽松」，防漂移的最后一环仍靠人读 changelog。
+3. 红线 1 把版本节奏绑在实机窗口上：现场窗口不可得时（例如远程会话无可控断电通道、无人在机器人现场），minor 发版就被挡住，只能留在 `0.7.x`。这是有意取舍——离线改动照旧可以走 patch 与文档，只是不换 minor。
+4. 红线 4 的降级不是免费出口：记「受阻」要求先定性到硬件不可修，定性本身需要现场动作（M1 / teleop 观测）；没有定性结论前既不记「完成」也不记「受阻」，A 阶段维持进行中。
+
+触发重新评估的条件（达成任一条即重新评估）：① V01 拿到实机证据并收口，届时重新判断红线 2 / 3 是否还要维持现有强度；② 发版节奏与现场窗口长期冲突，且冲突原因是外部不可控（断电通道、人手），需要把「每版一格实机证据」改为按阶段结算；③ 厂商给出过流事件接口或外接测量方案到位，V06 的取数方法从「未定」变成可执行，红线 2 里「实机证据」的范围需要重新划定。
+
+相关提交：本轮文档提交（无代码提交）。同批改动：`docs/acceptance-baseline.md` 的 V01 判据、V06 / V13 实机证据格、§2.1 降级出口、§2.3 快照与 parity 措辞、新增 §2.4；`pyproject.toml` 的依赖注释订正。

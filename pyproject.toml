@@ -12,9 +12,10 @@ license = { text = "MIT" }
 dependencies = ["numpy>=1.26"]
 
 [project.optional-dependencies]
-# lerobot 目前不在 PyPI 上发布（上游只提供 git 仓库安装方式）。
-# 使用 runtime extra 之前，请先按 lerobot 上游 README 把 lerobot 装进同一个环境，
-# 例如从上游仓库以 editable 方式安装；本文件不声明可解析的 lerobot 分发地址。
+# PyPI 上的 `lerobot` 能装，但上游 wheel 不含 `alohamini` 模块，运行时仍需 vendor fork
+# （liyiteng/lerobot_alohamini）。使用 runtime extra 之前，请先按 fork 的 README 把
+# vendor fork 装进同一个环境，例如从 fork 仓库以 editable 方式安装（2026-11-05 实测：
+# 装 PyPI 版会拉 `numpy<2.3`，并把现有 numpy 静默降级，2.5.4 → 2.2.6、无告警）。
 #
 # 版本区间的依据（取舍见 docs/ADR.md D16）：下限 0.6.1 取自厂商 fork pyproject.toml 的
 # `version = "0.6.1"`（上游提交 8a74e0ac「chore(dependencies): Bump lerobot to 0.6.1
