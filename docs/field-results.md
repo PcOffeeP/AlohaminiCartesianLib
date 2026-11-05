@@ -24,15 +24,27 @@
 | 停滞不在 PC→Host 值传递段；Host→总线写入段未观测；候选根因含关节扭矩未使能（`alohamini.py:545` `enable_torque()` 被注释、`:520` 先 `disable_torque()`）、目标编码取整、伺服保护锁存、力矩不足、机械，未定性（分析脚本机械判为 ②，判读链见下） | 两轴（`pan`、`lift`）步内 `requested_target == accepted_target` 零例外（`requested!=accepted rows=0`）；`accepted_target` 变化点与主 CSV 的 `cmd_units` 逐位字符相同（`req==cmd True`、`acc==cmd True`）；运动帧 `target_source` 全为 `command`。`requested_targets` / `accepted_targets` 在本版 vendor 上分别是 `_arm_goal_positions` 与 `_arm_sent_positions`（`alohamini.py:987-988`），后者在 `sync_write` 调用之后无回读即 `update`（`:919`），故「零例外」只说明 `_limit_*_by_current` 未钳制值，不构成总线写入证据 | `hold_active` 在 Pi `6aee1f81` 上结构上恒 False：`grep _joint_hold_goal[` 共命中 7 行，全部是定义 / 导出 / 读用法，无赋值写入点——初始化 `:298`、导出 `:335` / `:1018`、get 与 in 判断 `:1109` / `:1121`、下标读 `:1161`、pop `:1164`，故不作判据 | `stdout/7.2-analysis-20261105T063600Z.txt`、`stdout/7.2-joint-hold-write-*`、`stdout/7.2-joint-hold-writes-20261105T063600Z.log`、`stdout/7.2b-host-tracking-*`、`stdout/host-log-20261105T063600Z.log`、`tracking/tracking-pan-20261105T063600Z-safety.csv`、`tracking/tracking-lift-20261105T063600Z-safety.csv` |
 | 日志里没有 `[Currents]` 与 `[HOST TRACKING]` 的原因是厂商日志级别，不是代码没走到 | 整份 Host 日志 `[Currents]` 行 `lines 0` / `elements 0`；`[HOST TRACKING]` 计数 `0`；厂商 client 里 `logging.basicConfig(...)` 的 `level=logging.INFO` 那一行被注释掉（`lerobot/robots/alohamini/alohamini_client.py:39`），Host 的 root logger 停在 WARNING | 只读核对源码；未拿到改 vendor 的授权，改 vendor 无解；已有一条不依赖它的取数路径（见「静止电流基线」一行） | `stdout/6.1d-currents-src-*`、`stdout/6.1d-host-loglevel-*`、`stdout/6.1b-currents-dist-20261105T063600Z.log`、`stdout/7.2b-host-tracking-count-20261105T063600Z.log` |
 | 手册 §13 的一条补救假设被推翻 | 三轴 `rise_90_ms count=0 p50=nan`，三份 tracking CSV 的 `rise_90_time_s` 列全空；容差取到 `0.05°`（小于 `0.1°`）仍然空 | 报告自带说明：要 90% 交叉需残余 ≤ `0.1 × delta` 且发生在 settle 循环结束之前，实际没发生；原因未定位（见「未取到 / 未验证」） | 三次 `stdout/7.1-*.log` 的 `rise_90_ms count=0 p50=nan` 行与 `note:` 行、三份 `tracking/*.csv` |
+| M0 离线复算：1° 在总线上是 11 tick，换算链清白 | 1° ÷ 0.0879°/tick（= 360/(4096-1)）= 11.3766 tick，M0 记 11.375 tick，vendor `motors_bus.py:895` 的 `int()` 向零截断得 11 tick；每步取整损失 0.375 tick（< 1 tick 上界），命令是绝对量故不累加；腕部正对照 10/10 成立（期望 11.375 tick/步、实测 10 tick/步，`meas-goal` 恒 −1 tick 而非累积） | **离线复算，非现场采集**：不连机器人、不新增测量；输入是指纹 `capture/fingerprint-20261105T063600Z.json` 与 `tracking/` 六份 CSV 的复算，加本库 `src/` 与 vendor fork `6aee1f81` 的静态核对 | `stdout/M0-tick-recompute-20261105.txt`（含 `.py`） |
 | 收尾 Host 已停，机器人断电未执行 | `kill 2096`、`kill_exit=0`、停机时刻 `2026-11-05T07:08:54Z`；排除自匹配后 `pgrep` 无输出、`ss_grep_exit=1`（5555 / 5556 无监听） | 无远程可控电源通道；手册 §8.1 要求断电前先把手臂放到低位，机器人仍带电、位置环通电，差人工一步 | `stdout/8.2a-host-stop-20261105T063600Z.{cmd,log}`、`stdout/8.2b-host-verify-*`、`stdout/8.3c-power-state-*`、`stdout/8.1-host-stop-20261105T063600Z.md`、`stdout/scope-20261104T023000Z.md` 的「收尾记录」段 |
 
-§7.2 判读链（`pan` / `lift` 两轮）：
+§7.2 判读链（`pan` / `lift` 两轮）：分析脚本机械判为 ②（目标被底层接管），前导帧（`sample_sequence=2`，早于第一条命令帧 `sample_sequence=3`）已排除；实质结论 ①：停滞不在 PC→Host 值传递段。判读细节与证据行号见 `stdout/7.2-analysis-20261105T063600Z.txt`。腕部那一轮同一位置的前导帧是 `none` 而非 `watchdog`。
 
-| 步骤 | 内容 |
-| --- | --- |
-| 脚本机械判为 ② | 规则 2 要求「存在 `target_source` 为 `watchdog` / `protection` 的帧」，且这些帧早于第一条命令帧。两轴各命中 1 帧（`sample_sequence=2`），脚本输出 `VERDICT: ② 目标被底层接管` |
-| 排除理由 | 该帧是第一帧，早于第一条命令帧（`sample_sequence=3`），早于任何命令发出，不属运动阶段，已裁决排除；腕部那一轮同一位置的前导帧是 `none` 而不是 `watchdog` |
-| 实质结论 ① | 两轴步内 `requested!=accepted rows=0`，`accepted_target` 变化点与主 CSV `cmd_units` 逐位相同，运动帧 `target_source` 全为 `command`：停滞不在 PC→Host 值传递段。`requested_targets` / `accepted_targets` 是 `alohamini.py:987-988` 的两个 dict，后者在 `sync_write` 后无回读即 `update`（`:919`），故本表判定不了总线写入，也不判定伺服 / 机械侧 |
+### 肩部停滞：排除法结论
+
+| 编号 | 根因 | 状态 | 一句依据 |
+| --- | --- | --- | --- |
+| A | 目标编码取整（归一化→tick 往返取整把 1° 命令吃掉） | 已排除 | M0 离线复算：期望步长 11.375 tick→`int()` 后 11 tick，实测步长 0–1 tick，取整损失 0.375 tick < 1 tick 且命令是绝对量不累加（`stdout/M0-tick-recompute-20261105.txt` 的 (c)、(e7)） |
+| B | PC→Host 值传递段（目标在 Host 端被改写或钳制） | 已排除 | 两轴步内 `requested_target == accepted_target` 零例外，`accepted_target` 变化点与主 CSV 的 `cmd_units` 逐位字符相同，运动帧 `target_source` 全为 `command`；sidecar 旁证 req/acc/cmd 逐字符相同（wrist 177/178、pan 116/119、lift 175/176 条非空样本） |
+| C | 伺服寄存器配置与限流钳制 | 已排除 | 2026-10-25 停 Host 后只读：`Torque_Limit` 1000、`Max_Torque_Limit` 1000、`P`/`I`/`D` = 16/0/32、`Operating_Mode` 0，四台逐项相同（`stdout/reg_read_1792923639.log`，152 次读零失败）；且「`requested == accepted` 零例外」只说明 `_limit_*_by_current` 未钳制值 |
+| D | 关节扭矩未使能 | **未排除（被弱化，不作定论）** | 源码依据：`configure()` 在 `alohamini.py:520` 调 `left_bus.disable_torque()`、`:545` 的 `enable_torque()` 被注释、`disconnect` 默认 `disable_torque_on_disconnect=True`（`config_alohamini.py:68`）；但不是「全包无调用点」，且与「腕部同总线达成 87.91% 且两轮逐字相同」不相容；由 `docs/s4-field-smoke.md` §10.5 的 M1 分支 ① 覆盖 |
+| E | 伺服保护锁存 | 未排除 | 无本窗口的寄存器侧观测；`Status` 全 0 只在 2026-10-25 停 Host 后读到 |
+| F | 力矩不足 | 无证据（降级为「无电流证据」） | 臂总线电流不能判负载：运动窗口最大 `19.5 mA`，低于 `20 mA`（3 个 raw 刻度）门槛 |
+| G | 机械 | 未排除 | 未到现场，无齿隙 / 死区 / 连杆测量 |
+| — | 总线写静默失败 | 未排除（零观测） | `sync_write` 无 ACK；`requested_targets` / `accepted_targets` 在本版 vendor 上分别是 `_arm_goal_positions` 与 `_arm_sent_positions`（`alohamini.py:987-988`），后者在 `:919` 于 `sync_write` 调用之后、无回读即 `update`，故不携带总线写入信息 |
+
+弱证据一条：实测组合 `{Torque_Enable=1, Lock=0}` 与 vendor 两条写路径都不相容——`feetech.py:293` 写 `{0, 0}`、`:304` 写 `{1, 1}`，本库 `src/` 不写这两个寄存器；该组合与「`Lock` 写静默失败」相容，但这是**未验证的假说**，不是结论。
+
+未排除者合计：D / E / G + 总线写静默失败；F 无证据。定性动作（teleop oracle → M1 → M2）见 `docs/s4-field-smoke.md` §10.5，均需有人到场。
 
 ### 未取到 / 未验证
 
@@ -50,106 +62,18 @@
 
 | 口径 | 怎么算 |
 | --- | --- |
-| STAMP 双标签映射 | 本窗口目录有两套时间戳。`20261104T023000Z` 是第 1 步按会话初始化时写下的**约定值**，只出现在 `stdout/0.9-probe-*`、`stdout/3.*`、`stdout/scope-20261104T023000Z.md` 这一批第 1 步产物上；`20261105T063600Z` 是从第 2 步起的**实测值**（`date -u` 实测 UTC 为 `2026-11-05T06:32Z`，与约定值相差约 28 小时），绝大多数产物用它。两者的映射与顺序偏离记在 `stdout/scope-20261104T023000Z.md` 的「执行中补记」段，读文件名时不要当成两次会话 |
+| STAMP 双标签映射 | 第 1 步产物用 STAMP `20261104T023000Z`（会话初始化时写下的约定值，与实测 `date -u` 相差约 28 小时），第 2 步起用实测 STAMP `20261105T063600Z`；映射与顺序偏离见 `stdout/scope-20261104T023000Z.md` 的「执行中补记」段，读文件名时不要当成两次会话 |
 | 达成率 | 沿用 2026-10-25 节同一口径（净行程 ÷ 指令行程），本文不重复推导 |
-| 电流 | 落盘值已是 mA（`raw × 6.5` 截断）：`6.5` = 1 个 raw 刻度，`20 mA` = 3 个刻度即判读门槛。本窗口运动窗口最大 `19.5 mA`，仍不足 3 个刻度，所以「不能判负载」。量级对照：同总线（`lift_axis` 属 `left_bus_motors`，`alohamini.py:215`）的升降轴单电机 `read` 曾读到 `2639.0 mA`（2026-10-25，`evidence/s4-20261025/stdout/v2verify-host-20261025.log` 的 `[lift_axis.home]` 行），比本窗口 `19.5 mA` 大两个数量级；但那走单电机 `read` 路径，11 电机 `sync_read` 路径没有大电流正对照，电流读取链路的大电流可信性仍未验证。早前按 `[Currents]` 日志统计的口径在本窗口用不上：该日志一行都没打印（见「结论一览」的机理一行） |
+| 电流 | 落盘值已是 mA（`raw × 6.5` 截断）：`6.5` = 1 个 raw 刻度，`20 mA` = 3 个刻度即判读门槛。本窗口运动窗口最大 `19.5 mA`，仍不足 3 个刻度，所以「不能判负载」；早前按 `[Currents]` 日志统计的口径在本窗口用不上（该日志一行都没打印，见「结论一览」的机理一行）。量级对照：同总线（`lift_axis` 属 `left_bus_motors`，`alohamini.py:215`）的升降轴单电机 `read` 曾读到 `2639.0 mA`（2026-10-25，`evidence/s4-20261025/stdout/v2verify-host-20261025.log` 的 `[lift_axis.home]` 行），比本窗口大两个数量级；但那走单电机 `read` 路径，11 电机 `sync_read` 路径没有大电流正对照，电流读取链路的大电流可信性仍未验证。**若将来要判负载，需外接电流表**（臂总线读数不足以承担）。 |
 | `target_source` 前导帧 | 每轮第一帧出现在第一条命令帧之前，那一帧的 `target_source`（`none` 或 `watchdog`）不属运动阶段，判三类结论时要排除 |
 | `settled` 跨轮不可比 | 2026-10-25 容差 `0.15°`、本窗口 `0.05°`，同一关节 `settled=False` 的成因不同，比 `settled` 要同时比容差 |
-| 执行顺序 | 手册 §4 原假定 Host 常驻；本窗口 Host 未运行，顺序改为 §4.2 →（起 Host）→ §4.1b → §4.1 → §4.3 → §5 → §6 → §7 → §8，全程只起停 Host 一次（出处：`stdout/scope-20261104T023000Z.md` 的「执行中补记」） |
 | 时间基准 | 全部 UTC（`date -u`）；本机时为 UTC+8，钟点比日志数字大 8 小时 |
 
 ## 离线核对（无新采集）· 左右夹爪行程差异
 
-**这一节不是现场采集**：没有连机器人，没有新增任何测量。数字来自两份既有证据文件的复算，加两端源码的静态核对（本库 `src/` 与厂商 fork `lerobot_alohamini` 只读）。
-
-数据源：
-
-- 标定文件 `/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/calibration-AlohaMiniRobot.json`（18 个电机）
-- 真机指纹 `/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261025/capture/fingerprint-final-20261025.json`（`robot_metadata.motors` 与 `observation_state`）
-- 寄存器只读转储 `/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261025/stdout/reg_read_1792923639.log`（左臂 ID 1/2/3/6，**不含夹爪 ID7**）
-
-### 结论
-
-左夹爪 `arm_left_gripper` 的 `range` 只有 51 tick（`range_0_100` 下 4.48° 行程），判为**异常**；根因**未确认**。
-
-- 配置口径已排除：两侧夹爪同为 `sts3250`、`drive_mode` 同为 0、`normalization` 同为 `range_0_100`、`resolution` 同为 4096。
-- 数据传递已排除：标定文件与指纹 metadata 在 18 个电机 × 5 个字段（`id`/`drive_mode`/`homing_offset`/`range_min`/`range_max`）上逐项比对，0 差异。
-- 数值位置指向标定时刻：左夹爪 `range` 中心 2046.5，等于半圈归零的目标位 2047（`feetech.py:287`，`half_turn_homings = pos - int(4095/2)`）。即标定采集窗口内该夹爪只在归零位上下 ±26 tick 内抖动。
-
-### 左右夹爪逐项对照
-
-| 字段 | 左 `arm_left_gripper` | 右 `arm_right_gripper` | 判读 |
-| --- | --- | --- | --- |
-| `id` | 7 | 7 | 相同 |
-| `model` | `sts3250` | `sts3250` | 相同 |
-| `drive_mode` | 0 | 0 | 相同 |
-| `normalization` | `range_0_100` | `range_0_100` | 相同 |
-| `resolution` | 4096 | 4096 | 相同 |
-| `homing_offset` | 1571 | -1964 | 不同，但只决定「哪一处物理位置读成 2047」，不解释行程差 |
-| `range_min` | 2021 | 2010 | 相差 11 tick |
-| `range_max` | 2072 | 3479 | 相差 1407 tick |
-| `range` 宽度 | **51 tick** | **1469 tick** | 右是左的 28.8 倍 |
-| `deg_per_unit`（`detect.py:298`） | 0.04484 | 1.29143 | 换算公式 `((range_max-range_min)/span)*360/(resolution-1)`，`span` 取 100（`capability/detect.py:16-18`） |
-| 满 `0..100` 对应的角度行程 | **4.48°** | **129.14°** | 同型电机差 28.8 倍 |
-| `range` 中心 | 2046.5 | 2744.5 | 左夹爪整段落在归零位 2047 附近 |
-| 采集时观测值 `observation_state` | `arm_left_gripper.pos` = 45.098 | `arm_right_gripper.pos` = 2.859 | 均落在各自 `[range_min, range_max]` 内，归一化本身无异常 |
-
-### 18 个电机 `range` 宽度全表（按宽度升序）
-
-| 电机 | id | 型号 | `range_min`-`range_max` | 宽度 | `normalization` | 满量程对应角度 | 判读 |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `arm_left_gripper` | 7 | sts3250 | 2021-2072 | **51** | `range_0_100` | 4.48° | **唯一离群** |
-| `arm_right_gripper` | 7 | sts3250 | 2010-3479 | 1469 | `range_0_100` | 129.14° | 同型参照 |
-| `arm_right_wrist_yaw` | 5 | sts3250 | 1053-2879 | 1826 | `range_m100_100` | 160.53° | 正常 |
-| `arm_left_wrist_yaw` | 5 | sts3250 | 1114-3070 | 1956 | `range_m100_100` | 171.96° | 正常 |
-| `arm_left_wrist_flex` | 4 | sts3250 | 934-3049 | 2115 | `range_m100_100` | 185.93° | 正常 |
-| `arm_right_wrist_flex` | 4 | sts3250 | 969-3091 | 2122 | `range_m100_100` | 186.55° | 正常 |
-| `arm_right_elbow_flex` | 3 | sts3095 | 965-3105 | 2140 | `range_m100_100` | 188.13° | 正常 |
-| `arm_left_elbow_flex` | 3 | sts3095 | 947-3109 | 2162 | `range_m100_100` | 190.07° | 正常 |
-| `arm_left_shoulder_lift` | 2 | sts3095 | 930-3229 | 2299 | `range_m100_100` | 202.11° | 正常 |
-| `arm_right_shoulder_lift` | 2 | sts3095 | 939-3258 | 2319 | `range_m100_100` | 203.87° | 正常 |
-| `arm_right_shoulder_pan` | 1 | sts3250 | 1247-3743 | 2496 | `range_m100_100` | 219.43° | 正常 |
-| `arm_left_shoulder_pan` | 1 | sts3250 | 627-3327 | 2700 | `range_m100_100` | 237.36° | 正常 |
-| `arm_left_wrist_roll` | 6 | sts3250 | 0-4095 | 4095 | `range_m100_100` | 360° | 未采真实行程，硬写默认值 |
-| `arm_right_wrist_roll` | 6 | sts3250 | 0-4095 | 4095 | `range_m100_100` | 360° | 同上 |
-| `base_left_wheel` | 8 | sts3250 | 0-4095 | 4095 | `range_m100_100` | 360° | 按设计硬写默认值 |
-| `base_back_wheel` | 9 | sts3250 | 0-4095 | 4095 | `range_m100_100` | 360° | 同上 |
-| `base_right_wheel` | 10 | sts3250 | 0-4095 | 4095 | `range_m100_100` | 360° | 同上 |
-| `lift_axis` | 11 | sts3095 | 0-4095 | 4095 | `degrees` | 360°（`degrees` 下 `deg_per_unit` 恒为 1.0，角度列只是刻度等价） | 同上 |
-
-读法：「真实行程」一栏只看宽度落在 1469–2700 之间的 11 台电机。宽度 4095 的 6 台不是采到的行程，是厂商标定里直接写死的 `0..4095`（`alohamini.py:441-453` 三只底盘轮 + `arm_left_wrist_roll`，`alohamini.py:466-479` 对 `arm_right_wrist_roll`）。在这 11 台真实行程里，左夹爪 51 tick 比第二窄的（右夹爪 1469）小 28.8 倍，比最窄的非夹爪关节（`arm_right_wrist_yaw` 1826）小 35.8 倍。离群的是这一台夹爪，不是夹爪这一类。
-
-### 逐条查证
-
-| 问题 | 结论 | 依据 |
-| --- | --- | --- |
-| 夹爪在标定协议里的行程预期是多少 | 代码里**没有**给夹爪设过角度预期，只给了一个归一化区间 `[0, 100]`；区间宽度由 `range` 反推，因此「预期行程」就是「标定采到的 `range`」本身，没有独立校验 | 本库 `control/commands.py:103-104` 只校验 `0 <= position <= 100`；`control/api.py:130-136` 把开映射到 `100.0`、合映射到 `0.0`；`capability/detect.py:16-18` 定义 `range_0_100 → span 100`、`range_m100_100 → span 200`、`degrees → 1.0` |
-| `normalization` 分类各意味着什么 | `range_0_100` 表示线上值 = `(raw - range_min)/(range_max - range_min) * 100`，即 0 对应 `range_min`、100 对应 `range_max`；`range_m100_100` 同理但映射到 -100..100 | 厂商 `motors_bus.py` 的 `_normalize`（`range_0_100` 分支）与 `capability/detect.py:195-197` 的表 |
-| 4.48° 对两指夹爪说得通吗 | 说不通。同型电机的右夹爪同一机构、同一 `drive_mode`，标定采到 129.14°；左夹爪只有它的 3.5%。具体开口毫米数**未采集**（缺连杆长度/丝杆导程参数），这里不给毫米估算 | 对照表；无毫米数据的部分标为未采集 |
-| `drive_mode` 两侧是否相同 | 相同，都是 0。不同的话会在 `_normalize`/`_unnormalize` 里对 0..100 做 `100 - norm` 的镜像，表现为开合方向相反，与行程宽度无关 | 对照表；厂商 `motors_bus.py:872-874`（`range_0_100` 分支的 `100 - norm if drive_mode`） |
-| 「标定时夹爪处于几乎闭合位」是否合理解释 | 是当前最合理解释，且与数值吻合：vendor 标定把夹爪放进 `unknown_left` / `unknown_right`，靠人工开合、边采边记 min/max；采到的左夹爪只在归零位 ±26 tick 内，说明采集窗口内它基本没离开过标定起始姿态。至于「没开」是因为人没去开、还是机械不允许开，**未确认** | `alohamini.py:444`（`unknown_left` 含 `arm_left_gripper`、排除项只有三只底盘轮与 `arm_left_wrist_roll`）、`:450`（`record_ranges_of_motion`）、`:476`（右臂同流程）；`motors_bus.py:802-861` 采样实现 |
-| 采样不足能否解释 51 tick | 不成立。`record_ranges_of_motion` 是紧凑 `while` 循环里反复 `sync_read("Present_Position")`（`motors_bus.py:825-843`），中间没有 sleep；人工开合一次至少跨数百个采样周期。该循环的**真实采样周期未在真机总线上实测**，这一句标为未确认，但方向上不支持「采样漏点」解释 | `motors_bus.py:802-861` |
-| 标定流程本身有没有兜底 | 有一条：`min == max` 会抛 `ValueError`（`motors_bus.py:857-860`）。本次 `51 ≠ 0` 所以没触发。也就是说，一个「动了几 tick」的夹爪能顺利通过标定校验并写盘，流程只能拦住完全没动的情形 | `motors_bus.py:857-860` |
-| 这个 `range` 会落到硬件上吗 | 会。`write_calibration` 把 `range_min`/`range_max` 写进伺服的 `Min_Position_Limit`/`Max_Position_Limit`（位置寄存器 9 / 11）。左臂 ID 1/2/3/6 的实测寄存器值与标定文件逐项相同，说明这条写入链在本机上确实生效。**ID7 未读**，所以「左夹爪寄存器也是 2021/2072」是推断，未直接观测 | 厂商 `feetech.py:268-273`（写）、`:247-251`（读）、`tables.py:50-51`（寄存器地址）；`reg_read_1792923639.log` 中 ID1 的 `Min_Position_Limit=627`、`Max_Position_Limit=3327` 与标定文件一致 |
-| 指令超出行程会怎样 | 两端都会静默截断，不报错。本库把夹爪位置钳在 `[0, 100]`；厂商 `_normalize` 把读数钳在 `[range_min, range_max]`；`_unnormalize` 把指令钳在区间内。若 ID7 的固件限位真是 2021/2072，伺服本身也拒绝走出这个窗口 | 本库 `control/commands.py:103-104`；厂商 `motors_bus.py:864-870`（`bounded_val`）与 `_unnormalize` |
-
-### 可能原因排序（都不算已确认）
-
-| 排序 | 可能原因 | 支持点 | 缺口 / 反证 |
-| --- | --- | --- | --- |
-| 1 | 标定流程／操作层：标定窗口内左夹爪没被开合 | 采到的 `range` 中心等于归零位 2047、宽度只有 51 tick；厂商流程靠人工开合采集，`51 ≠ 0` 所以过了校验 | 没有标定会话的输出记录或录屏；ID7 寄存器未读 |
-| 2 | 机械层：左夹爪被结构／线束／绑带限住，物理上张不开 | 同样能解释「±26 tick 抖动」；若真被限住，标定时人工开合也不会有读数变化 | 无任何机械侧证据；未到现场 |
-| 3 | 数据层：标定值写进 ID7 失败或写错 | 理论上可能，但 18 电机 × 5 字段 0 差异，且同总线上 ID1/2/3/6 寄存器与文件完全一致 | **ID7 在本次转储里没被读**，无法排除；需要现场只读补测 |
-| 4 | 机构差异：左夹爪减速比／传动与右不同 | 无 | 两侧同为 `sts3250`、`drive_mode` 同为 0，无支持证据 |
-
-### 影响与控制侧要注意的
-
-- 左夹爪在本库侧只有 4.48° 可用行程：`open()`（100）与 `close()`（0）命令物理上分不开夹爪，而链路不会报错（见上「指令超出行程会怎样」）。这是**静默失效**，比报错更需要记住。
-- 若将来改成按角度下发夹爪：要让左夹爪张开 100°，按 `deg_per_unit = 0.04484` 需 2231 个归一化单位，远超 `[0, 100]`，必然被钳到端点。夹爪下发继续用 0..100，不要换角度。
-- 不影响 A 阶段：夹爪不是运动学关节（`kinematics/joint_adapter.py:54-55`、`:64-65` 明确 gripper 不进关节向量）。
-- 不影响 Gate F：`range_max > range_min`、换算字段齐全，第二段不会因这件事拒绝。既有测试对这一条没有预期变化。
-
-现场只读确认步骤见 `docs/s4-field-smoke.md` 第 4.2 节「左夹爪 ID7 只读确认」。
+- 左夹爪 `arm_left_gripper` 标定 `range` 只有 **51 tick**（`range_0_100` 下 **4.48°** 行程），判为异常；右夹爪同型对照 **1469 tick**（129.14°），右是左的 28.8 倍。
+- 固件限位已实测确认（2026-11-05，只读）：左 ID7 `Min_Position_Limit=2021` / `Max_Position_Limit=2072`，右 ID7 对照 `2010` / `3479`，与标定文件逐项一致，故 51 tick 的成因在标定值，不在写盘链路。仍开放的是「标定时为什么只采到 51 tick」（人工开合是否发生 / 机械是否被限住），未排查。
+- 完整查证过程（18 电机 `range` 全表、9 条逐条查证、可能原因排序、影响分析）见 `docs/investigations/gripper-range-51-tick.md`。**这一节不是现场采集**。
 
 ## 2026-10-25 · S4 现场窗口
 

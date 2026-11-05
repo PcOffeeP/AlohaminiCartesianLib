@@ -139,10 +139,10 @@ export PYTHONPATH=<vendor fork>/src:src
 
 两条硬约束，改代码时先看这里。
 
-1. `adapter/protocol.py` 之外禁止 import `lerobot`。`lerobot` 只能通过 `RobotTransport` 与 `RobotSpec` 两个 `Protocol` 接触，其余模块不碰 `lerobot.motors`、`lerobot.robots.alohamini` 这类深层模块。
+1. `src/` 内**任何**文件都禁止 import `lerobot`，含 `adapter/protocol.py` 自身。`lerobot` 只能通过 `RobotTransport` 与 `RobotSpec` 两个 `Protocol` 接触，其余模块不碰 `lerobot.motors`、`lerobot.robots.alohamini` 这类深层模块。
 2. 能力探测不得把版本号当兼容判据。判据是这项能力是否存在，`schema_version` 只用来决定字段怎么解析。
 
 两条机器守卫，不靠人工 review 维持。
 
-- `tests/test_capability.py` 用 AST 遍历断言 `src/` 内除 `adapter/protocol.py` 之外没有任何模块 import `lerobot`，并用 `sys.modules` 前后快照断言导入 `capability.detect`、`config.overlay` 这两个动作本身不会引入 `lerobot`。
+- `tests/test_capability.py` 用 AST 遍历断言 `src/` 内**任何**模块（含 `adapter/protocol.py`）都不 import `lerobot`（守卫 `tests/test_capability.py::test_no_module_outside_adapter_imports_lerobot`），并用 `sys.modules` 前后快照断言导入 `capability.detect`、`config.overlay` 这两个动作本身不会引入 `lerobot`。
 - `tests/test_control_commands.py` 断言 `control/` 下除 `api.py` 之外没有模块 import 设备适配层、客户端或主机模块。它带正反两条控制用例：一条证明守卫能命中相对 import 的适配层，一条证明合法 import 不会被误判。

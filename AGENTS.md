@@ -39,7 +39,7 @@
   - `TODO.md` 的状态不能替代验收证据：说完成仍要给数字、提交哈希或命令原文。
   - 做完的事项从 `TODO.md` 移除，去向照旧：设计取舍 → `docs/ADR.md`，现场数字 → `docs/field-results.md`，提交哈希 → 提交信息。
 
-`lerobot` 导入边界与「能力判据不看版本号」这两条，完整表述与机器守卫见 `docs/library-guide.md` 的「约束与机器守卫」小节；**该小节对导入边界的措辞仍是旧的（写成"除 `protocol.py` 之外不得导入"），以本文件为准，待同步。**
+`lerobot` 导入边界与「能力判据不看版本号」这两条，完整表述与机器守卫见 `docs/library-guide.md` 的「约束与机器守卫」小节。`src/` 内任何文件（含 `adapter/protocol.py`）都不得 import `lerobot`；对端只由 `RobotTransport` 与 `RobotSpec` 两个 `Protocol` 描述，真实客户端由调用方经 `connect(..., client_factory=...)` 注入。
 
 ## 5 怎么自检
 
@@ -102,6 +102,7 @@ git log --oneline -3                    # 最近提交
 - 验收基线：`docs/acceptance-baseline.md`（V01–V13）
 - 现场实施：`docs/s4-field-smoke.md`（S4 到现场的逐条命令、判据与产物）
 - 现场结果：`docs/field-results.md`（按时间倒序的结论与数字；查现场到底拿到了什么，先看这里，再看证据目录原文件）
+- 离线调查：`docs/investigations/gripper-range-51-tick.md`（左夹爪标定行程 51 tick 的查证过程与结论；决策见 `docs/ADR.md` D14，数字见 `docs/field-results.md`）
 - 迁移归档：`docs/archive/migration-backlog.md`（迁移已在 v0.4.0 完成）
 - 待办清单：`TODO.md`（只记接下来要做的事，结构为整体目标 → 阶段目标 → 小目标 → 跨阶段工程债）
 - 实测数据：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/`（目录内 `README.md` 写了命名约定）

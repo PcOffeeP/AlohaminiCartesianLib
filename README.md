@@ -115,4 +115,4 @@ uv run --no-sync python -m pytest tests   # 自动测试
 - 必须带 `--no-sync`。本仓库没有 `uv.lock`，不带它的 `uv run` 会自行解析依赖并新写一个 `uv.lock`。
 - pytest 不要再追加 `-q`。`addopts = "-q"` 已生效，再加会变成 `-qq` 并隐藏 `N passed, M skipped` 汇总行；要看汇总行用 `-o addopts=""`。
 
-本包已以 editable 方式装进 `.venv`，`uv run --no-sync` 直接复用，不必先 `pip install -e .`。当前 `pytest tests` 报 `1275 passed, 2 skipped`；跳过项是两个 parity 文件缺 `lerobot`，构成见 [AGENTS.md](AGENTS.md) 第 6 节的已知限制。测试不依赖真实设备，不联网。
+本包已以 editable 方式装进 `.venv`，`uv run --no-sync` 直接复用，不必先 `pip install -e .`。当前测试状态见 `docs/changelog.md`；跳过项是两个 parity 文件缺 `lerobot`，构成见 [AGENTS.md](AGENTS.md) 第 6 节的已知限制。测试不依赖真实设备，不联网。
