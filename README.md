@@ -12,7 +12,7 @@ AlohaMini 笛卡尔控制的产品侧库：对机器人运行时的适配协议�
 
 ## 关键决策
 
-本库的关键取舍（依赖形态、配置格式、入库范围、numpy 与 `placo`、`lerobot` 版本区间、限位校验、能力拒绝形态等）逐条记在 [docs/ADR.md](docs/ADR.md)（D1–D17），每条给出背景、决定与代价。
+本库的关键取舍（依赖形态、配置格式、入库范围、numpy 与 `placo`、`lerobot` 版本区间、限位校验、能力拒绝形态等）逐条记在 [docs/ADR.md](docs/ADR.md)（D1–D19），每条给出背景、决定与代价。
 
 ## 安装
 
@@ -93,7 +93,7 @@ finally:
 | 想知道什么 | 去哪看 |
 | --- | --- |
 | 为什么做这件事、形态怎么变、边界在哪、各模块已提供什么 | [docs/background.md](docs/background.md) |
-| 某个设计为什么这么定、代价是什么（D1–D17） | [docs/ADR.md](docs/ADR.md) |
+| 某个设计为什么这么定、代价是什么（D1–D19） | [docs/ADR.md](docs/ADR.md) |
 | 配置怎么覆盖、`deg_per_unit` 怎么算、公开 API 有哪些、代码约束与机器守卫 | [docs/library-guide.md](docs/library-guide.md) |
 | 验收要满足哪些条目（V01–V13） | [docs/acceptance-baseline.md](docs/acceptance-baseline.md) |
 | 现场到底取到了什么数字 | [docs/field-results.md](docs/field-results.md) |

@@ -95,7 +95,7 @@ git log --oneline -3                    # 最近提交
 
 ## 9 相关位置
 
-- 决策记录：`docs/ADR.md`（D1–D17）
+- 决策记录：`docs/ADR.md`（D1–D19）
 - 变更记录：`docs/changelog.md`（逐版改了什么、当时测试多少条）
 - 库使用与接口：`docs/library-guide.md`（配置覆盖、能力探测与单位换算、控制层、公开 API、约束与机器守卫）
 - 背景与当前结果：`docs/background.md`（目标、已实现能力、实机现状）
