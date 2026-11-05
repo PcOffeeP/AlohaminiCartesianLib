@@ -1,13 +1,14 @@
 """真机 dry-run 示例：把厂商 ``AlohaMiniClient`` 注入本库 ``connect(dry_run=True)``。
 
-这是「真 client 注入」的参考实现：用真实的厂商客户端打开本库会话，**零发送、只读观测**。
+这是「真 client 注入」的参考实现：用真实的厂商客户端打开本库会话，**零发送、只读观测**
+（「只读」指不发动作，不等于不请求图像——相机帧缺口见第 1 节末段）。
 
 1. 这是什么。``examples/minimal_dry_run.py`` 用内存里的假 transport 演示调用形状；这份脚本
    换成真的 ``AlohaMiniClient``（厂商 ``lerobot_alohamini`` 的客户端），经
    ``connect(..., client_factory=...)`` 注入本库。脚本做三件事：读一次观测、对升降轴下一条
    dry-run 命令、断开。命令在 priming 阶段的 adapter 门禁就被拒（第 3 节），本会话
-   ``send_action`` 一次都不会被调用；结尾把包在真 client 外面的计数代理断言出来（不是硬编码
-   的 0）。
+   ``send_action`` 一次都不会被调用；结尾把包在真 client 外面的计数代理的实测调用次数打印
+   出来，随后做显式零发送门禁（不是硬编码的 0）。
 2. 真机怎么跑。厂商 client 只存在于装了 ``lerobot`` 的环境里，本库主环境（只有 numpy）没有
    它。两条命令：第一条把 vendor 快照与本库的 ``src`` 一起放进 ``PYTHONPATH``（本库没装进
    vendor 环境，所以要带 ``:src``），第二条用 vendor 环境的解释器跑本脚本；``--host`` 就是
@@ -37,8 +38,8 @@
    另外两处常被当成「零发送门禁」的代码在本脚本里**不可达 / 不适用**，不要按它们解释：
    ``api.py:519-520``（升降轴到位后的下发门禁）位于 ``state.handle()`` 之后，无 adapter 时
    前面已经抛错，走不到；``controller.py:169-172``（臂 ``CartesianController._send()`` 的
-   dry-run 早退）属于臂控制器，而控制器只在 ``adapter is not None and ik_factory is not
-   None`` 时才构造（构造条件见 ``api.py:653-672``），本脚本不建控制器。
+   dry-run 早退）属于臂控制器，而控制器在 ``adapter``、``ik_factory``、``clock``、``sleeper``
+   四者齐备时才构造（构造条件见 ``api.py:653-672``），本脚本不建控制器。
 
    为什么命令的是升降轴而不是臂：臂的 ``move_by``/``move_to`` 需要 ``adapter`` 与
    ``ik_factory``（``placo``，可选 extra ``kinematics``），库内唯一的 adapter
@@ -46,11 +47,22 @@
    伪造这些值与 ``AGENTS.md`` 第 3 节的证据纪律冲突，因此不在真机路径上指挥臂。升降轴同样要
    过 adapter 门禁，只是不需要 IK，所以在真机上的预期结果是**命令被拒**，而不是真的走到下发
    门禁。
+
+   「只读」只约束下发，不约束观测请求：本脚本自身的两次取帧都走
+   ``include_cameras=False``（先 ``prime_observation_request_window(include_cameras=False)``，
+   再 ``get_observation(include_cameras=False)``），而库内 ``LiftHandle.height()``
+   （``src/alohamini_cartesian/control/api.py:494``）与 ``_prime_state_machine()`` 的首帧
+   （``control/api.py:845``）调的是**无参** ``get_observation()``，落回厂商默认
+   ``include_cameras=True``（``lerobot/robots/alohamini/alohamini_client.py:535``）。所以真机
+   分支仍会多发 3 次相机帧请求（``height_before``、``move_by`` 内部的 ``height()``、priming
+   首帧），正是厂商 docstring（``alohamini_client.py:279-285``）警告的「unintended image
+   burst」。要做到真正 state-only，需改库侧 ``get_observation`` 的调用签名，本轮不做。
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import time
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
@@ -253,25 +265,25 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _is_lerobot_import_error(exc: ImportError) -> bool:
-    """判断导入异常是否确属 ``lerobot`` 缺件（而不是被顺带包住的真故障）。
+def _lerobot_is_missing() -> bool:
+    """判定当前环境是否**确实**没有 ``lerobot``——只对解释器环境作答，不猜异常文本。
 
-    ``ModuleNotFoundError``（``ImportError`` 子类）带 ``.name``；纯 ``ImportError`` 的
-    ``.name`` 可能为 ``None``，此时按 ``str(exc)`` 里是否出现 ``lerobot`` 判断。两者都不命中
-    就返回 ``False``，由调用方原样 ``raise``——不能把「厂商包缺失」之外的任何导入错误都当成
-    「需要 vendor 环境」而退 0。
+    为什么要这个决定性判定：按 ``ImportError.name`` / ``str(exc)`` 猜，会把「``lerobot``
+    装了，但里面的符号改名或缺失」也判成「主环境缺 vendor」而退 ``0``，把真故障伪装成预期
+    跳过。下个远程窗口最现实的失败形态恰好是 vendor 快照比本脚本假设旧（符号改名），所以这
+    里只看环境：``importlib.util.find_spec("lerobot")`` 返回 ``None`` 才是缺件。
 
-    Args:
-        exc: 在 ``connect(...)`` 调用链里捕到的导入异常。
+    ``find_spec`` 在 ``sys.modules`` 里有半初始化模块（``__spec__`` 为 ``None``）时会抛
+    ``ValueError``，此时环境状态不可判，按「不可判」返回 ``False``——由调用方原样
+    ``raise`` 原始导入异常，不静默退 ``0``。
 
     Returns:
-        确实是 ``lerobot``（或其子模块）缺件时为 ``True``。
+        ``lerobot`` 确实未安装时为 ``True``。
     """
-    name = getattr(exc, "name", None)
-    if name is not None:
-        return name == "lerobot" or name.startswith("lerobot.")
-
-    return "lerobot" in str(exc)
+    try:
+        return importlib.util.find_spec("lerobot") is None
+    except ValueError:
+        return False
 
 
 def _print_vendor_skip(args: argparse.Namespace, exc: ImportError) -> None:
@@ -328,6 +340,11 @@ def _run_dry_run_lift_command(session: AlohaMiniControl) -> None:
     门禁。命令被控制层拒绝时只打印原因、不打印 Traceback：拒绝本身也是「零发送」的一种结果，
     不该让读数消失。
 
+    归因按异常类型分开：只有 ``MotionNotEnabled`` 才是 priming 阶段的 adapter 门禁拒绝。
+    ``height_before = session.lift.height()`` 在命令之前执行，首帧未到时抛 ``FeedbackLost``
+    （``observation missing 'lift_axis.height_mm'``）——那时命令还没下发，说成「门禁拒绝」是
+    错的（远程窗口首发帧丢包很常见）。其余三类只报类型与消息、不做归因。
+
     Args:
         session: ``connect(dry_run=True)`` 打开的会话。
     """
@@ -339,11 +356,14 @@ def _run_dry_run_lift_command(session: AlohaMiniControl) -> None:
         height_before = session.lift.height()
         session.lift.move_by(delta_mm=_LIFT_STEP_MM)
         height_after = session.lift.height()
-    except (FeedbackLost, MotionBlocked, MotionNotEnabled, MotionTimeout) as exc:
+    except MotionNotEnabled as exc:
         print(
             f"升降轴命令被控制层拒绝：{type(exc).__name__}: {exc}"
             "（命令在 priming 阶段被拒、未进入状态机，零发送不变）"
         )
+        return
+    except (FeedbackLost, MotionBlocked, MotionTimeout) as exc:
+        print(f"升降轴命令中止：{type(exc).__name__}: {exc}（零发送不变，未做门禁归因）")
         return
 
     print(
@@ -373,9 +393,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     # 厂商 import 与 client 构造都发生在 connect 调用注入工厂的那一刻；主环境在这里抛
-    # ImportError。只有它确属 lerobot 缺件时才走跳过分支（不打印 Traceback、退 0），
-    # 其余导入错误原样往上抛。若异常发生在 client.connect() 之后，厂商 _connect() 自己会关
-    # 两条 zmq socket 并销毁 context 再抛出（alohamini_client.py:160-167），本脚本不兜。
+    # ImportError。只有解释器环境确实找不到 lerobot（find_spec 为 None）时才走跳过分支
+    # （不打印 Traceback、退 0），其余导入错误——包括 lerobot 装了但符号改名或缺失——原样
+    # 往上抛。若异常发生在 client.connect() 之后，厂商 _connect() 自己会关两条 zmq socket
+    # 并销毁 context 再抛出（alohamini_client.py:160-169），本脚本不兜。
     try:
         session = connect(
             args.host,
@@ -385,7 +406,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             sleeper=time.sleep,
         )
     except ImportError as exc:
-        if not _is_lerobot_import_error(exc):
+        if not _lerobot_is_missing():
             raise
         _print_vendor_skip(args, exc)
         return 0
@@ -406,10 +427,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     finally:
         session.disconnect()
 
+    # 读数行先打：硬门禁触发时也要能看到实测读数，而不是只剩一句异常。
+    print(f"send_action 调用次数: {transport.send_action_calls} 次发送（dry_run=True，期望 0）")
+    # 两道口径一致的门禁。先 assert（``python -O`` 下会被整条删掉，所以不能只有它），
+    # 再显式判定——显式那道不依赖 assert 存在。
     assert transport.send_action_calls == 0, (
         f"dry_run=True 下不应下发动作，实际调用 {transport.send_action_calls} 次"
     )
-    print(f"send_action 调用次数: {transport.send_action_calls} 次发送（dry_run=True，期望 0）")
+    if transport.send_action_calls != 0:
+        raise SystemExit(f"dry_run=True 下不应下发动作，实际调用 {transport.send_action_calls} 次")
     return 0
 
 
