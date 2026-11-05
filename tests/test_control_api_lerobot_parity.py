@@ -12,9 +12,15 @@
 了变绿删减断言。搬运来源：lerobot 仓库
 ``tests/robots/test_alohamini_control_api.py``（``test_char_1_*`` / ``test_char_2_*``）。
 控制层自身的用例在 ``tests/test_control_api.py``。
+
+两个夹具补齐的 client 状态属性清单依据 vendor 快照 ``6aee1f81`` 的 ``__init__``
+（如 ``alohamini_client.py:74`` 的 ``_request_times``、``:89`` 的
+``latest_safety_status``）；vendor 快照升级时要逐条复核该清单是否仍与 ``__init__``
+及读取这些属性的方法一致。
 """
 
 import json
+import time
 from collections import deque
 from typing import Any
 
@@ -24,6 +30,7 @@ import pytest
 pytest.importorskip("lerobot", reason="lerobot 差分对照用例只在装有 runtime extra 的环境运行")
 
 from lerobot.robots.alohamini.alohamini_client import AlohaMiniClient
+from lerobot.robots.alohamini.config_alohamini import AlohaMiniConfig
 from lerobot.utils.constants import ACTION, OBS_STATE
 
 from alohamini_cartesian.kinematics.model_specs import arm_state_keys_for_robot_model
@@ -46,7 +53,7 @@ class _RecordingCmdSocket:
     def __init__(self) -> None:
         self.sent_strings: list[str] = []
 
-    def send_string(self, message: str) -> int:
+    def send_string(self, message: str, flags: Any = 0) -> int:
         self.sent_strings.append(message)
         return len(message)
 
@@ -70,6 +77,13 @@ def _make_command_client() -> AlohaMiniClient:
         client._right_arm_state_keys,
     ) = arm_state_keys_for_robot_model("alohamini2pro")
     client._is_connected = True
+    client._client_id = "test-client-id"
+    client.latest_safety_status = {}
+    # ``send_action`` early-returns ``{}`` unless the feedback window is fresh
+    # (``control_feedback_valid``, vendor ``:890``); this client never sends an
+    # observation request, so the stamp is set directly.
+    client._feedback_requested_at = time.monotonic()
+    client._zmq = _StubZmq()
     client.zmq_cmd_socket = _RecordingCmdSocket()
     return client
 
@@ -86,6 +100,10 @@ def _make_observation_client() -> AlohaMiniClient:
         client._right_arm_state_keys,
     ) = arm_state_keys_for_robot_model("alohamini2pro")
     client._cameras_ft = {}
+    # ``_remote_state_from_obs`` compares the Host's ``robot_model`` against
+    # ``self.config.robot_model`` and rejects the frame on mismatch (vendor
+    # ``:458``), so the fixture config must name the same model as the frames.
+    client.config = AlohaMiniConfig(robot_model="alohamini2pro")
     client.logs = {}
     client.last_frames = {}
     client.last_remote_state = {}
@@ -95,6 +113,13 @@ def _make_observation_client() -> AlohaMiniClient:
     client._observation_sequence = 0
     client._observation_request_tokens = deque()
     client._observation_request_id = 0
+    client._request_times = {}
+    # Normally set by ``_receive_observation_response`` when the token-matched
+    # response is consumed (vendor ``:277``); this harness swaps that method out,
+    # so the stamp is stood in here. ``None`` would make ``_get_data`` return the
+    # cached ``last_frames`` without parsing the frame (vendor ``:589``).
+    client._response_requested_at = time.monotonic()
+    client._response_includes_cameras = False
     client._observation_request_sent_stamps = {}
     client._last_request_token = None
     client._last_request_received_monotonic_s = None
