@@ -12,6 +12,12 @@ v0.7.0 给两个现场基准脚本加了客户端能力探测：`measure_latency
 
 准入基线改为 V01–V13，逐条给出软件证据与实机证据，见 [acceptance-baseline.md](acceptance-baseline.md)。它替代旧仓库按臂归档的 Gate A–E。
 
+新增 `examples/robot_dry_run.py`：真厂商 client 注入 `connect(dry_run=True)` 的参考实现。`build_client_factory()` 返回签名 `(host, **kwargs) -> client` 的工厂，厂商 `AlohaMiniClient` 与 `AlohaMiniClientConfig` 的 import 落在最内层工厂函数体内；脚本读一次真观测、对升降轴下一条 dry-run 命令、断开，`send_action` 零调用。配套 `tests/test_robot_dry_run_example.py` 14 条用例：AST 守卫钉住三件事——模块顶层无 `lerobot` import、`connect(...)` 必带 `dry_run=True` 且无 `dry_run=False` 的 `connect`、源码里保留 `assert <x>.send_action_calls == 0` 形态的真断言；子进程契约也钉住三件事——主环境（无 `lerobot`）退 `0`、stdout 含「需要 vendor 环境」与 `PYTHONPATH` 跑法、stderr 无 `Traceback`。同一轮把 `tests/test_examples_and_configs.py` 契约 C 从文本级子串扫描改成 AST 作用域检查（顶层禁、函数体内允许惰性导入），并补 5 条守卫自测（4 条参数化顶层违规 + 1 条函数体内放行），守卫不再可能退化成空检查。本轮 `pytest tests` 报 `1416 passed, 2 skipped`，较本轮开工前的 `1397 passed, 2 skipped` 多 `19` 条 = `tests/test_robot_dry_run_example.py` 14 条 + 契约 C 新增守卫自测 5 条。跳过仍是那两个 parity 文件缺 `lerobot`；`2` 不等于全部通过。
+
+`00fa714` 给指纹 JSON 加 `lerobot_version` 字段：取值优先 `--lerobot-version` 原样传入，未传时读本机 `importlib.metadata.version("lerobot")`，两处都取不到记显式 `null`；`--lerobot-version` 传空串按用法错误退 `2`（空串不是版本，而 `null` 的语义是「取不到」，两者不得混读）。要这一列是因为采集在 Mac 侧、Pi 上跑的是 vendor 快照，缺了它这份 JSON 说不清对应哪个 `lerobot`。现场首次实采值 `lerobot_version="0.6.1"`，与手册 4.1b 读到的 Pi 侧版本逐字一致，产物 `capture/fingerprint-20261105T063600Z.json`（`docs/field-results.md` 2026-11-05 节）。
+
+补记 tracking 模式的旁挂文件（取舍见 [ADR.md](ADR.md) D18）：`--mode tracking` 除 14 列主 CSV 之外，在同目录写一份 `<主CSV>-safety.csv`——9 列长表，一帧一电机一行，列序固定为 `step_index`、`sample_sequence`、`t_monotonic_s`、`motor`、`current_ma`、`requested_target`、`accepted_target`、`hold_active`、`target_source`。降级口径：客户端缺 `latest_safety_status`（能力缺失）或该面内容不可用（整轮计数，点名坏帧数）时，退出码不变、sidecar 照写，缺值写 `None`（空单元格），不补 `0`——`0 mA` 读起来像测到的零电流，是伪观测。`--mode rtt` 不产生 sidecar。
+
 ## v0.6.0
 
 v0.6.0 修正了失败原因分类：`ArmIK.solve()` 结尾不再把「没到位」一律报 `JOINT_LIMIT`，而是按越限与否分流——解越出注入限位（越限判定仍含 `LIMIT_EPS_DEG` 容差）报 `JOINT_LIMIT`，未越限但位置残差超过 `profile.residual_limit_m` 报 `RESIDUAL`，两者同时成立时 `JOINT_LIMIT` 优先。`FAILURE_REASONS` 不新增枚举值，`IKResult` 字段不变。

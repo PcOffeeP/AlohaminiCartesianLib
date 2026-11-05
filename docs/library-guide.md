@@ -109,7 +109,18 @@ deg_per_unit = conversion.deg_per_unit
 
 `control/arm_ik.py` 做 FK 与数值 IK。`placo` 是可选 extra `kinematics` 的依赖，函数内惰性 import，见 `docs/ADR.md` D8。
 
-`control/api.py` 不含默认运行时：`connect` 未注入 `client_factory` 时抛 `RuntimeUnavailable`。真实连接由调用方自己构造运行时 client 传进来。
+`control/api.py` 不含默认运行时：`connect` 未注入 `client_factory` 时抛 `RuntimeUnavailable`。真实连接由调用方自己构造运行时 client 传进来；参考实现见 `examples/robot_dry_run.py` 的 `build_client_factory()`——它返回一个 `(host, **kwargs) -> client` 的工厂，厂商 `AlohaMiniClient` 与 `AlohaMiniClientConfig` 的 import 落在最内层工厂函数体内（惰性导入，主环境没有 `lerobot` 也能 import 本模块），工厂再经 `connect(..., client_factory=...)` 注入。
+
+那份示例走的是 `dry_run=True`：读一次真观测、对升降轴下一条命令、断开，`send_action` 一次都不会被调用。零发送来自三处门禁——`control/controller.py:169-172` 的 `_send()` 在 dry-run 直接 `return`、`control/api.py:674-675` 连初始保持都不发、`control/api.py:913-914` 的 `disconnect()` 底座零速也不发；结尾把包在真 client 外面的计数代理断言成 `send_action_calls == 0`，不是硬编码的 0。
+
+真机跑法（两条命令，`--host` 是机器人 Pi 的 IP/主机名；在 Pi 本机上跑可省，默认 `127.0.0.1`）：
+
+```bash
+export PYTHONPATH=<vendor fork>/src:src
+.venvs/alohamini-lerobot/bin/python examples/robot_dry_run.py --host 192.168.1.50
+```
+
+第一行末尾的 `:src` 不能省：`alohamini_cartesian` 没装进 vendor 环境，靠 `PYTHONPATH` 带上本仓库的 `src`。没有 vendor 环境时直接跑本示例，它会打印「需要 vendor 环境」的跳过文案并以退出码 `0` 结束，不连设备、不联网。
 
 ## 4 公开 API
 

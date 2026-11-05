@@ -9,8 +9,10 @@
   一次都没被调用）、``steps`` 与 ``residual``。
 - B：``configs/template.yaml`` 与 ``configs/site.yaml`` 的键集合等于
   ``overlay.SETTINGS_FIELDS``，取值等于冻结值，且 site 覆盖 template。
-- C：``examples/`` 下任何 ``*.py`` 都不引用 ``lerobot``（本库只有
-  ``src/alohamini_cartesian/adapter/protocol.py`` 可以引用它）。
+- C：``examples/`` 下任何 ``*.py`` 的**模块顶层**都不 import ``lerobot``（函数体内的惰性
+  import 是合法的：``examples/robot_dry_run.py`` 就是这样把厂商 client 藏在最内层工厂里，
+  以便无 lerobot 的主环境也能加载脚本并打印跳过文案）。本库自身只有
+  ``src/alohamini_cartesian/adapter/protocol.py`` 是运行时接触面。
 - D：契约 A 的「0 次发送」不能是靠硬编码打印出来的假绿。源码级用 **AST 级**守卫要求
   示例里存在一个 ``ast.Assert`` 节点，被测表达式形如 ``<x>.send_action_calls == 0``
   （注释、docstring、``if False:`` 分支、``or True`` 都不算数），且源码 AST 里
@@ -274,25 +276,118 @@ def test_loaded_window_satisfies_hard_validation() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _parse_module(path: Path) -> ast.Module:
+    """把一份 Python 源文件解析成 AST，供作用域级 import 检查使用。
+
+    Args:
+        path: 源文件路径。
+
+    Returns:
+        AST 模块根节点。
+    """
+    return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+
+def _module_scope_lerobot_imports(tree: ast.Module) -> list[str]:
+    """收集 AST 模块**顶层**语句里 import 到的 lerobot 模块名。
+
+    只看 ``tree.body`` 的直接子节点（模块作用域上的语句）；函数体内的 import 不在统计
+    范围，那是用 ``connect(..., client_factory=...)`` 注入真 client 时的惰性导入写法，
+    合法。返回值去重且排序。
+
+    Args:
+        tree: 待检查的 AST 模块根节点。
+
+    Returns:
+        顶层 import 到的 lerobot 模块名列表；没有违规时为空列表。
+    """
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            names.update(
+                alias.name
+                for alias in node.names
+                if alias.name == "lerobot" or alias.name.startswith("lerobot.")
+            )
+        elif (
+            isinstance(node, ast.ImportFrom)
+            and node.level == 0
+            and node.module is not None
+            and (node.module == "lerobot" or node.module.startswith("lerobot."))
+        ):
+            names.add(node.module)
+
+    return sorted(names)
+
+
 def test_examples_directory_contains_python_sources() -> None:
     """契约 C：``examples/`` 下至少有一个 ``*.py`` 源文件可供静态扫描。"""
     assert EXAMPLES_DIR.is_dir(), f"examples 目录尚未创建: {EXAMPLES_DIR}"
     assert sorted(EXAMPLES_DIR.glob("*.py")), f"examples 下没有任何 *.py: {EXAMPLES_DIR}"
 
 
-def test_examples_do_not_import_lerobot() -> None:
-    """契约 C：``examples/`` 下所有 ``*.py`` 都不含 ``import lerobot`` / ``from lerobot``。"""
+def test_examples_do_not_import_lerobot_at_module_scope() -> None:
+    """契约 C：``examples/`` 下所有 ``*.py`` 的模块顶层都不 import ``lerobot``。
+
+    检查改用 **AST 级作用域**判定，不再是文本级子串扫描：
+
+    - **顶层不得**：``tree.body`` 上的 ``import lerobot...`` / ``from lerobot...`` 一律违例——
+      示例脚本在无 lerobot 的主环境里必须能被加载与运行（主环境跑的是跳过分支）。
+    - **函数体内允许**：``def factory(...): from lerobot... import AlohaMiniClient`` 这种惰性
+      导入合法，也正是 ``examples/robot_dry_run.py`` 注入真 client 的写法。
+
+    所以本用例拦的是「把 lerobot 拉到模块作用域」这件事，不是「文件里出现 lerobot 字样」。
+    下面的 ``_module_scope_lerobot_imports`` 另有自测用例，保证这条守卫没有退化成空检查。
+    """
     sources = sorted(EXAMPLES_DIR.glob("*.py"))
     assert sources, f"examples 下没有任何 *.py: {EXAMPLES_DIR}"
 
-    forbidden = ("import lerobot", "from lerobot")
-    offenders = [
-        path.name
+    offenders = {
+        path.name: imports
         for path in sources
-        if any(marker in path.read_text(encoding="utf-8") for marker in forbidden)
-    ]
+        if (imports := _module_scope_lerobot_imports(_parse_module(path)))
+    }
 
-    assert not offenders, f"这些示例引用了 lerobot（仅 adapter/protocol.py 允许）: {offenders}"
+    assert not offenders, (
+        "这些示例在模块顶层 import 了 lerobot（顶层不得、函数体内的惰性导入允许）: "
+        f"{offenders}；请把厂商 import 移到最内层工厂函数体内"
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import lerobot\n",
+        "import lerobot.robots.alohamini.alohamini_client\n",
+        "from lerobot import isaac\n",
+        "from lerobot.robots.alohamini.alohamini_client import AlohaMiniClient\n",
+    ],
+)
+def test_module_scope_lerobot_guard_catches_top_level_import(source: str) -> None:
+    """契约 C 自测：顶层导入 lerobot 的源码会被守卫判出违规（守卫保有拦截能力）。
+
+    Args:
+        source: 一段含顶层 lerobot 导入的源码文本。
+    """
+    offenders = _module_scope_lerobot_imports(ast.parse(source))
+
+    assert offenders, f"守卫漏掉了顶层 lerobot 导入（退化成空检查）: {source!r}"
+    assert all(name == "lerobot" or name.startswith("lerobot.") for name in offenders), (
+        f"守卫报出的模块名不是 lerobot 体系: {offenders}"
+    )
+
+
+def test_module_scope_lerobot_guard_allows_import_inside_function() -> None:
+    """契约 C 自测：函数体内的 lerobot 导入不算违例（惰性导入正是被允许的写法）。"""
+    source = (
+        "def build_factory():\n"
+        "    from lerobot.robots.alohamini.alohamini_client import AlohaMiniClient\n"
+        "    return AlohaMiniClient\n"
+    )
+
+    offenders = _module_scope_lerobot_imports(ast.parse(source))
+
+    assert offenders == [], f"函数体内的惰性 lerobot 导入被误判为违例: {offenders}"
 
 
 # ---------------------------------------------------------------------------
