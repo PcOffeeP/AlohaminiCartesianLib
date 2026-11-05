@@ -1,18 +1,25 @@
-"""``examples/minimal_dry_run.py`` 与 ``configs/*.yaml`` 的验收契约（TDD 红阶段）。
+"""``examples/minimal_dry_run.py`` 与 ``configs/*.yaml`` 的验收契约。
 
-本文件在 ``coder`` 动手之前先落下契约：示例脚本与两份配置都还不存在，因此本文件预期
-全红（子进程拉不到脚本、读文件抛 ``FileNotFoundError``）。
+示例脚本与两份配置都已存在，本文件锁的是它们当前必须成立的行为，不再有「预期全红」的
+红阶段语义。
 
 契约要点：
 
 - A：示例脚本能离线跑通，退出码 0；stdout 里出现 ``0 次发送``（证明 ``send_action``
-  一次都没被调用）、``steps`` 与 ``residual``。
+  一次都没被调用）、``steps`` 与 ``residual``。子进程带一份剥掉 ``PYTHONPATH`` /
+  ``PYTHONHOME`` / ``VIRTUAL_ENV`` 的环境：调用方若把 ``PYTHONPATH`` 指向 vendor 的
+  ``src``（装了 ``lerobot`` 的那份），「主环境」前提就变了，示例可能去连设备。
 - B：``configs/template.yaml`` 与 ``configs/site.yaml`` 的键集合等于
   ``overlay.SETTINGS_FIELDS``，取值等于冻结值，且 site 覆盖 template。
-- C：``examples/`` 下任何 ``*.py`` 的**模块顶层**都不 import ``lerobot``（函数体内的惰性
-  import 是合法的：``examples/robot_dry_run.py`` 就是这样把厂商 client 藏在最内层工厂里，
-  以便无 lerobot 的主环境也能加载脚本并打印跳过文案）。本库自身只有
-  ``src/alohamini_cartesian/adapter/protocol.py`` 是运行时接触面。
+- C：``examples/`` 下任何 ``*.py`` 的**模块 import 期作用域**都不 import ``lerobot``。
+  作用域口径是「模块被 import 时会不会执行到这条语句」：递归下探 ``try:``（含每个
+  ``except`` 分支体、``else``、``finally``）、``if``（含 ``if TYPE_CHECKING:``）、
+  ``with``、``match`` 各分支体与**类体**，只在 ``def`` / ``async def`` 的函数定义处停手。
+  函数体内的惰性 import 是合法的：``examples/robot_dry_run.py`` 就是这样把厂商 client
+  藏在最内层工厂里，以便无 lerobot 的主环境也能加载脚本并打印跳过文案。本库自身只有
+  ``src/alohamini_cartesian/adapter/protocol.py`` 是运行时接触面。守卫带自测：顶层、
+  ``try:``、``if TYPE_CHECKING:``、``except`` 分支体、类体各有一例必须判出违规，函数体内
+  （含嵌在 ``try:`` / ``if TYPE_CHECKING:`` 里的函数）必须放行。
 - D：契约 A 的「0 次发送」不能是靠硬编码打印出来的假绿。源码级用 **AST 级**守卫要求
   示例里存在一个 ``ast.Assert`` 节点，被测表达式形如 ``<x>.send_action_calls == 0``
   （注释、docstring、``if False:`` 分支、``or True`` 都不算数），且源码 AST 里
@@ -25,7 +32,8 @@
 
 全程离线：不连设备、不联网，唯一的外部动作是拉起一个子进程跑示例脚本。读真实配置时
 一律传 ``check_devices=False``（本机没有这些 ``/dev`` 节点），并传 ``env={}`` 让断言不
-受 ambient 环境变量干扰。
+受 ambient 环境变量干扰；拉子进程时用 :func:`_isolated_env` 剥掉 ``PYTHONPATH`` /
+``PYTHONHOME`` / ``VIRTUAL_ENV``。
 """
 
 from __future__ import annotations
@@ -33,6 +41,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import operator
+import os
 import re
 import subprocess
 import sys
@@ -60,6 +69,9 @@ TEMPLATE_PATH = CONFIGS_DIR / "template.yaml"
 SITE_PATH = CONFIGS_DIR / "site.yaml"
 
 SUBPROCESS_TIMEOUT_S = 60
+
+# 子进程只在这个白名单之外裁环境：这三个变量能让示例误以为自己在 vendor 环境里。
+STRIPPED_ENV_VARS = ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV")
 
 # 冻结值：这两份字典就是 coder 必须写进 YAML 的内容，逐字段断言。
 TEMPLATE_VALUES: dict[str, Any] = {
@@ -93,7 +105,14 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 
 @pytest.fixture(scope="module")
 def example_run() -> subprocess.CompletedProcess[str]:
-    """在仓库根下用当前解释器跑一次示例脚本，四条契约断言复用同一份输出。"""
+    """在仓库根下用当前解释器跑一次示例脚本，四条契约断言复用同一份输出。
+
+    子进程带 :func:`_isolated_env` 剥过环境变量：调用方的 ``PYTHONPATH`` 若指向 vendor
+    的 ``src``，示例就不再是「主环境」形态。
+
+    Returns:
+        子进程运行结果。
+    """
     return subprocess.run(
         [sys.executable, str(EXAMPLE_PATH)],
         cwd=REPO_ROOT,
@@ -101,7 +120,17 @@ def example_run() -> subprocess.CompletedProcess[str]:
         text=True,
         timeout=SUBPROCESS_TIMEOUT_S,
         check=False,
+        env=_isolated_env(),
     )
+
+
+def _isolated_env() -> dict[str, str]:
+    """返回剥掉 ``PYTHONPATH`` / ``PYTHONHOME`` / ``VIRTUAL_ENV`` 的环境变量副本。
+
+    Returns:
+        可用于 ``subprocess.run(env=...)`` 的环境变量映射。
+    """
+    return {name: value for name, value in os.environ.items() if name not in STRIPPED_ENV_VARS}
 
 
 def _describe(proc: subprocess.CompletedProcess[str]) -> str:
@@ -288,34 +317,80 @@ def _parse_module(path: Path) -> ast.Module:
     return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
 
-def _module_scope_lerobot_imports(tree: ast.Module) -> list[str]:
-    """收集 AST 模块**顶层**语句里 import 到的 lerobot 模块名。
+def _imported_lerobot_names(node: ast.Import | ast.ImportFrom) -> list[str]:
+    """给出单个 import 节点里 import 到的 lerobot 模块名。
 
-    只看 ``tree.body`` 的直接子节点（模块作用域上的语句）；函数体内的 import 不在统计
-    范围，那是用 ``connect(..., client_factory=...)`` 注入真 client 时的惰性导入写法，
-    合法。返回值去重且排序。
+    Args:
+        node: ``ast.Import`` 或 ``ast.ImportFrom`` 节点。
+
+    Returns:
+        该语句 import 到的 lerobot 模块名列表（非 lerobot 的为空）。
+    """
+    if isinstance(node, ast.Import):
+        return [
+            alias.name
+            for alias in node.names
+            if alias.name == "lerobot" or alias.name.startswith("lerobot.")
+        ]
+    if node.level != 0 or node.module is None:
+        return []
+
+    return [node.module] if node.module == "lerobot" or node.module.startswith("lerobot.") else []
+
+
+def _module_scope_import_nodes(tree: ast.Module) -> list[ast.Import | ast.ImportFrom]:
+    """收集**模块 import 期作用域**里的 import 语句节点。
+
+    口径是「模块被 import 时会不会执行到这条语句」，不是「它是不是 ``tree.body`` 的直接
+    子节点」：只看直接子节点会漏判「``try:`` 块体里的 ``import lerobot``」与
+    「``if TYPE_CHECKING:`` 块体里的 ``import lerobot``」这类写法。
+
+    - **下探**：``try:`` / ``try/except*``（body、每个 handler 体、orelse、finalbody）、
+      ``if``（body、orelse，含 ``if TYPE_CHECKING:``）、``with``、``match`` 各分支体，
+      以及**类体**——类体也在模块 import 时执行，``class C: import lerobot`` 一样会把
+      lerobot 拉进主环境，所以它也属于本守卫的作用域。
+    - **停手**：``def`` / ``async def`` 的函数体。函数体是惰性执行域，
+      ``def factory(...): from lerobot... import AlohaMiniClient`` 合法，正是
+      ``examples/robot_dry_run.py`` 注入真 client 的形态。
+
+    实现是「遇到 import 就收下、遇到函数定义就整棵剪掉、其余节点继续下探」，因此上面列出的
+    分支形态不必逐个枚举也不会漏。
 
     Args:
         tree: 待检查的 AST 模块根节点。
 
     Returns:
-        顶层 import 到的 lerobot 模块名列表；没有违规时为空列表。
+        import 期作用域上的 ``ast.Import`` / ``ast.ImportFrom`` 节点列表。
+    """
+    found: list[ast.Import | ast.ImportFrom] = []
+    stack: list[ast.AST] = list(tree.body)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        if isinstance(node, ast.Import | ast.ImportFrom):
+            found.append(node)
+            continue
+        stack.extend(ast.iter_child_nodes(node))
+
+    return found
+
+
+def _module_scope_lerobot_imports(tree: ast.Module) -> list[str]:
+    """收集模块 import 期作用域里 import 到的 lerobot 模块名。
+
+    作用域口径见 :func:`_module_scope_import_nodes`：下探 ``try:`` / ``if TYPE_CHECKING:``
+    / ``with`` / ``match`` 的分支体与类体，在函数定义处停手。返回值去重且排序。
+
+    Args:
+        tree: 待检查的 AST 模块根节点。
+
+    Returns:
+        import 期作用域上 import 到的 lerobot 模块名列表；没有违规时为空列表。
     """
     names: set[str] = set()
-    for node in tree.body:
-        if isinstance(node, ast.Import):
-            names.update(
-                alias.name
-                for alias in node.names
-                if alias.name == "lerobot" or alias.name.startswith("lerobot.")
-            )
-        elif (
-            isinstance(node, ast.ImportFrom)
-            and node.level == 0
-            and node.module is not None
-            and (node.module == "lerobot" or node.module.startswith("lerobot."))
-        ):
-            names.add(node.module)
+    for node in _module_scope_import_nodes(tree):
+        names.update(_imported_lerobot_names(node))
 
     return sorted(names)
 
@@ -327,17 +402,19 @@ def test_examples_directory_contains_python_sources() -> None:
 
 
 def test_examples_do_not_import_lerobot_at_module_scope() -> None:
-    """契约 C：``examples/`` 下所有 ``*.py`` 的模块顶层都不 import ``lerobot``。
+    """契约 C：``examples/`` 下所有 ``*.py`` 的模块 import 期作用域都不 import ``lerobot``。
 
-    检查改用 **AST 级作用域**判定，不再是文本级子串扫描：
+    检查是 **AST 级作用域**判定，不是文本级子串扫描；作用域口径是「模块被 import 时会不会
+    执行到这条语句」（细则见 :func:`_module_scope_import_nodes`）：
 
-    - **顶层不得**：``tree.body`` 上的 ``import lerobot...`` / ``from lerobot...`` 一律违例——
-      示例脚本在无 lerobot 的主环境里必须能被加载与运行（主环境跑的是跳过分支）。
-    - **函数体内允许**：``def factory(...): from lerobot... import AlohaMiniClient`` 这种惰性
-      导入合法，也正是 ``examples/robot_dry_run.py`` 注入真 client 的写法。
+    - **不得**：模块作用域上的 ``import lerobot...`` / ``from lerobot...`` 一律违例，包括
+      ``try:`` 块体、``if TYPE_CHECKING:`` 块体、``with`` 块体、``match`` 分支体与类体里
+      的写法。
+    - **允许**：``def factory(...): from lerobot... import AlohaMiniClient`` 这种函数体内的
+      惰性导入，也包括嵌在 ``try:`` / ``if TYPE_CHECKING:`` 里的函数定义。
 
-    所以本用例拦的是「把 lerobot 拉到模块作用域」这件事，不是「文件里出现 lerobot 字样」。
-    下面的 ``_module_scope_lerobot_imports`` 另有自测用例，保证这条守卫没有退化成空检查。
+    所以本用例拦的是「把 lerobot 拉到模块 import 期作用域」这件事，不是「文件里出现 lerobot
+    字样」。下面的参数化自测保证这条守卫没有退化成空检查、也没退化成只看 ``tree.body``。
     """
     sources = sorted(EXAMPLES_DIR.glob("*.py"))
     assert sources, f"examples 下没有任何 *.py: {EXAMPLES_DIR}"
@@ -349,7 +426,8 @@ def test_examples_do_not_import_lerobot_at_module_scope() -> None:
     }
 
     assert not offenders, (
-        "这些示例在模块顶层 import 了 lerobot（顶层不得、函数体内的惰性导入允许）: "
+        "这些示例在模块 import 期作用域上 import 了 lerobot"
+        "（模块作用域不得、函数体内的惰性导入允许）: "
         f"{offenders}；请把厂商 import 移到最内层工厂函数体内"
     )
 
@@ -361,30 +439,69 @@ def test_examples_do_not_import_lerobot_at_module_scope() -> None:
         "import lerobot.robots.alohamini.alohamini_client\n",
         "from lerobot import isaac\n",
         "from lerobot.robots.alohamini.alohamini_client import AlohaMiniClient\n",
+        # 嵌在 try: 里（旧守卫只看 tree.body 直接子节点，这例曾漏判）。
+        "try:\n    import lerobot\nexcept ImportError:\n    lerobot = None\n",
+        # 嵌在 except 分支体里（Try.handlers）。
+        "try:\n    import os\nexcept ImportError:\n    from lerobot import isaac\n",
+        # 嵌在 if TYPE_CHECKING: 里（旧守卫漏判）。
+        "from typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    import lerobot\n",
+        # 嵌在 with 体里。
+        "import contextlib\n\nwith contextlib.suppress(Exception):\n    import lerobot\n",
+        # 嵌在 match 分支体里。
+        'match "x":\n    case "y":\n        import lerobot\n',
+        # 类体：类体在模块 import 时执行，所以算模块 import 期作用域。
+        "class _Holder:\n    import lerobot\n",
     ],
 )
-def test_module_scope_lerobot_guard_catches_top_level_import(source: str) -> None:
-    """契约 C 自测：顶层导入 lerobot 的源码会被守卫判出违规（守卫保有拦截能力）。
+def test_module_scope_lerobot_guard_catches_module_scope_import(source: str) -> None:
+    """契约 C 自测：模块 import 期作用域上的 lerobot 导入一律被判出违规。
 
     Args:
-        source: 一段含顶层 lerobot 导入的源码文本。
+        source: 一段含 lerobot 导入的源码文本（导入位置在模块 import 期作用域上）。
     """
     offenders = _module_scope_lerobot_imports(ast.parse(source))
 
-    assert offenders, f"守卫漏掉了顶层 lerobot 导入（退化成空检查）: {source!r}"
+    assert offenders, f"守卫漏掉了模块作用域上的 lerobot 导入（退化成空检查）: {source!r}"
     assert all(name == "lerobot" or name.startswith("lerobot.") for name in offenders), (
         f"守卫报出的模块名不是 lerobot 体系: {offenders}"
     )
 
 
-def test_module_scope_lerobot_guard_allows_import_inside_function() -> None:
-    """契约 C 自测：函数体内的 lerobot 导入不算违例（惰性导入正是被允许的写法）。"""
-    source = (
-        "def build_factory():\n"
-        "    from lerobot.robots.alohamini.alohamini_client import AlohaMiniClient\n"
-        "    return AlohaMiniClient\n"
-    )
+@pytest.mark.parametrize(
+    "source",
+    [
+        # 最普通的一例：惰性导入正是被允许的写法。
+        (
+            "def build_factory():\n"
+            "    from lerobot.robots.alohamini.alohamini_client import AlohaMiniClient\n"
+            "    return AlohaMiniClient\n"
+        ),
+        # 函数定义嵌在 try: 里：停手应落在 def 上，而不是继续下探到函数体。
+        (
+            "try:\n"
+            "    def build_factory():\n"
+            "        import lerobot\n"
+            "        return lerobot\n"
+            "except ImportError:\n"
+            "    build_factory = None\n"
+        ),
+        # 函数定义嵌在 if TYPE_CHECKING: 里，同理。
+        (
+            "from typing import TYPE_CHECKING\n"
+            "\n"
+            "if TYPE_CHECKING:\n"
+            "    def build_factory():\n"
+            "        import lerobot\n"
+            "        return lerobot\n"
+        ),
+    ],
+)
+def test_module_scope_lerobot_guard_allows_import_inside_function(source: str) -> None:
+    """契约 C 自测：函数体内的 lerobot 导入不算违例（包括函数定义嵌在 try/if 里的情形）。
 
+    Args:
+        source: 一段把 lerobot 导入放在函数体内（可能嵌在 try: / if 里）的源码文本。
+    """
     offenders = _module_scope_lerobot_imports(ast.parse(source))
 
     assert offenders == [], f"函数体内的惰性 lerobot 导入被误判为违例: {offenders}"
