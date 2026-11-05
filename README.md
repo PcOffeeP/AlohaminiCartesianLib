@@ -47,7 +47,7 @@ finally:
 | 验收要满足哪些条目（V01–V13） | [docs/acceptance-baseline.md](docs/acceptance-baseline.md) |
 | 现场到底取到了什么数字 | [docs/field-results.md](docs/field-results.md) |
 | 到现场逐条怎么执行（命令、判据、退出码） | [docs/s4-field-smoke.md](docs/s4-field-smoke.md) |
-| 每个版本改了什么、当时测试多少条（v0.2.0 → v0.7.0） | [docs/changelog.md](docs/changelog.md) |
+| 每个版本改了什么、当时测试多少条（v0.2.0 → 最新） | [docs/changelog.md](docs/changelog.md) |
 | 接下来要做什么 | [TODO.md](TODO.md) |
 | Agent 在本仓库的行为约定、项目现状与已知限制 | [AGENTS.md](AGENTS.md) |
 
