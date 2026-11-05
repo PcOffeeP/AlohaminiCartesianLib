@@ -17,8 +17,9 @@ Mode A — ``rtt`` (default): ZERO MOTION
     ``host_sample_duration_s``.
 
 Mode B — ``tracking``: REAL ROBOT MOTION
-    Step one joint by ``--delta-deg`` at a time (capped at ``MAX_STEP_DELTA_DEG``)
-    and measure the step response: 90 % rise time, overshoot and steady-state
+    Step one joint by ``--delta-deg`` at a time (its magnitude capped at
+    ``MAX_STEP_DELTA_DEG``; a negative value steps the joint down) and measure
+    the step response: 90 % rise time, overshoot and steady-state
     error.  This mode moves the robot.  It requires ``--enable-motion`` plus
     ``--joint`` (Gate A) and the Gate B-F checks that run after the first
     observation, and it must only be used after Gate A-F pass and on-site
@@ -124,6 +125,9 @@ no formula at all for ``degrees``.  That factor is a DIFFERENT one per joint.
 a goal put on the wire is ``baseline_units + delta_deg / deg_per_unit``
 (``cmd_units``) and a feedback value is converted back with
 ``units * deg_per_unit`` before it is compared with any limit or tolerance.
+``--delta-deg`` may be negative (the same step taken the other way), and the
+sign survives both the ``MAX_STEP_DELTA_DEG`` clamp and that conversion: only
+the magnitude is capped, and only the limits are compared against ``abs()``.
 
 The factor comes from the calibration the host publishes in its robot metadata
 (``motors.<motor>.range_min`` / ``range_max`` / ``resolution``).  A run that
@@ -1644,7 +1648,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=float,
         default=DEFAULT_DELTA_DEG,
         help=(
-            f"Requested step size in DEGREES (clamped to {MAX_STEP_DELTA_DEG} deg). A .pos "
+            f"Requested step size in DEGREES; a negative value steps the joint down (the "
+            f"magnitude is clamped to {MAX_STEP_DELTA_DEG} deg, the sign is kept). A .pos "
             "value on the wire is a normalized unit, not a degree: the goal is sent as "
             "baseline_units + delta_deg / deg_per_unit, with the deg-per-unit factor read from "
             "the host metadata (motors.<motor>.range_min/range_max/resolution and its "
@@ -1731,31 +1736,42 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error(
             f"--settle-tolerance-deg must be a finite number >= 0 (got {args.settle_tolerance_deg})"
         )
-    # A non-positive step is not a step.  Checked before the tolerance cross-check
-    # below, which would otherwise blame the clamp for a value the operator typed:
-    # ``--delta-deg 0`` used to surface as "settle-tolerance-deg must be below the
-    # effective --delta-deg ... delta 0.0 deg after the 1.0 deg clamp".
-    # ``inf`` is ``> 0`` and would pass a sign-only check, after which
+    # A zero-magnitude step is not a step, and a negative step IS a step (the same
+    # experiment in the other direction, field manual §10.5 M2): the bound is
+    # ``!= 0`` and the ``MAX_STEP_DELTA_DEG`` cap in ``resolve_delta_deg`` applies
+    # to the magnitude, so the sign of the request survives it.  Checked before
+    # the tolerance cross-check below, which would otherwise blame the clamp for a
+    # value the operator typed: ``--delta-deg 0`` used to surface as
+    # "settle-tolerance-deg must be below the effective --delta-deg ... delta 0.0
+    # deg after the 1.0 deg clamp".
+    # ``inf`` is ``!= 0`` and would pass a zero-only check, after which
     # ``resolve_delta_deg`` silently clamps it to ``MAX_STEP_DELTA_DEG``: the run
     # would command a step the operator never asked for instead of refusing a
-    # value that cannot be a step.  ``nan`` fails every step-size comparison
-    # downstream.  ``1e400`` is ``inf`` after ``float()``.  ``0`` and negative
-    # values keep their own refusal (below), so the finiteness test is added
+    # value that cannot be a step.  ``-inf`` is the negative twin the magnitude
+    # clamp must not "fix".  ``nan`` is ``!= 0`` true and makes every step-size
+    # comparison downstream false.  ``1e400`` is ``inf`` after ``float()``.  ``0``
+    # and ``-0.0`` keep their own refusal (below), so the finiteness test is added
     # around that rule, not instead of it.
-    if not (math.isfinite(args.delta_deg) and args.delta_deg > 0.0):
-        parser.error(f"--delta-deg must be a finite number > 0 (got {args.delta_deg})")
+    if not (math.isfinite(args.delta_deg) and args.delta_deg != 0.0):
+        parser.error(
+            f"--delta-deg must be a finite and non-zero number (got {args.delta_deg}); "
+            "negative steps are legal, a zero step commands nothing"
+        )
     # A tolerance at or above the step the run actually takes judges the joint
     # settled on the first poll, which leaves ``rise_90`` empty in every row.  The
     # reference is the CLAMPED step (``resolve_delta_deg``): ``--delta-deg 5.0``
     # commands 1.0 deg, so a 1.0 deg tolerance is already the empty-column case.
+    # Compared on the magnitude: the residual the settle loop tests is
+    # ``abs(measured - target)``, so ``0.15 >= -1.0`` would wave every negative
+    # step through while accepting ``-0.05`` with a ``0.15`` tolerance.
     # Checked in every mode on purpose: rtt parses the same knobs and ignores them,
     # and the default pair (1.0 / 0.15) stays legal.
     effective_delta_deg = resolve_delta_deg(args)
-    if args.settle_tolerance_deg >= effective_delta_deg:
+    if args.settle_tolerance_deg >= abs(effective_delta_deg):
         parser.error(
-            f"--settle-tolerance-deg must be below the effective --delta-deg "
-            f"(got settle-tolerance {args.settle_tolerance_deg} deg >= delta "
-            f"{effective_delta_deg} deg after the {MAX_STEP_DELTA_DEG} deg clamp)"
+            f"--settle-tolerance-deg must be below the effective --delta-deg magnitude "
+            f"(got settle-tolerance {args.settle_tolerance_deg} deg >= "
+            f"|delta| {abs(effective_delta_deg)} deg after the {MAX_STEP_DELTA_DEG} deg clamp)"
         )
     if args.csv is None:
         args.csv = _default_csv_path(args.mode)
@@ -2057,8 +2073,14 @@ def collect_rtt_samples(
 
 
 def resolve_delta_deg(args: argparse.Namespace) -> float:
-    """Per-step delta actually used: the request clamped to ``MAX_STEP_DELTA_DEG``."""
-    return min(float(args.delta_deg), MAX_STEP_DELTA_DEG)
+    """Per-step delta actually used: the request with its magnitude clamped to the cap.
+
+    The cap is on the MAGNITUDE, so both directions get the same safety limit and
+    the sign of the request survives it: ``--delta-deg -10`` commands -1.0 deg,
+    not a ten degree step down.
+    """
+    delta = float(args.delta_deg)
+    return min(max(delta, -MAX_STEP_DELTA_DEG), MAX_STEP_DELTA_DEG)
 
 
 def _achieved_rate_hz(sample_count: int, elapsed_s: float) -> float:
@@ -2337,16 +2359,20 @@ def _tracking_preflight(
             "nothing was commanded."
         )
 
-    if delta_deg <= 0.0 or int(args.steps) < 1:
+    if delta_deg == 0.0 or int(args.steps) < 1:
         return (
             None,
-            "Gate E refused: --delta-deg and --steps must both be positive; nothing was commanded.",
+            "Gate E refused: --delta-deg must be non-zero and --steps at least 1; "
+            "nothing was commanded.",
         )
-    total_travel_deg = delta_deg * int(args.steps)
+    # Judged on the magnitude: a signed comparison is vacuous for a run that steps
+    # down (``-21.0 > 20.0`` is false), so 21 x (-1.0 deg) would walk 21 degrees in
+    # the direction nothing is watching.
+    total_travel_deg = abs(delta_deg) * int(args.steps)
     if total_travel_deg > MAX_TOTAL_TRAVEL_DEG:
         return None, (
             f"Gate E refused: planned travel {total_travel_deg:.2f} deg exceeds the "
-            f"{MAX_TOTAL_TRAVEL_DEG:.1f} deg cap ({delta_deg:.2f} deg x {args.steps} steps); "
+            f"{MAX_TOTAL_TRAVEL_DEG:.1f} deg cap (|{delta_deg:.2f}| deg x {args.steps} steps); "
             "nothing was commanded."
         )
 

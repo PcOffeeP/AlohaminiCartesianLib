@@ -59,8 +59,14 @@ What the tests below lock down (the banners group them by topic):
 
 Contract note (frozen here as the expectation):
 ``resolve_delta_deg(args) -> float`` is a pure helper on the module. The
-tracking branch must clamp ``--delta-deg`` to ``MAX_STEP_DELTA_DEG`` through it
-and print the value actually used.
+tracking branch must clamp ``--delta-deg`` through it and print the value
+actually used. The clamp applies to the **magnitude** and keeps the sign
+(``min(max(delta, -MAX_STEP_DELTA_DEG), MAX_STEP_DELTA_DEG)``), because a
+negative ``--delta-deg`` is a legal step: the same step-response experiment run
+in the opposite direction (field manual §10.5, the "M2" entry; section ``AA``
+below). What ``parse_args`` refuses is a **zero** step (``0`` / ``-0.0``) and
+the non-finite values ``math.isfinite`` catches -- the sign bound is
+``!= 0``, never ``> 0``, and ``MAX_STEP_DELTA_DEG`` stays ``1.0``.
 
 Regression intent (each entry is a plausible-but-wrong implementation that
 must turn this file red):
@@ -252,10 +258,12 @@ link and the only liveness signal is ``client.observation_sequence`` growing
   ``--request-window < 1`` are rejected by ``parse_args`` with
   ``SystemExit(2)``, never by falling through to ``EXIT_CONNECT_FAILED == 3``.
   The same applies to a ``--settle-tolerance-deg`` at or above the *effective*
-  step (``--delta-deg`` after the ``MAX_STEP_DELTA_DEG`` clamp): a tolerance that
-  large judges the joint settled on the first poll, which leaves ``rise_90``
-  empty for every row.  The check is unconditional (rtt mode parses the same
-  knobs and ignores them) because the default pair ``1.0`` / ``0.15`` is safe.
+  step (``--delta-deg`` after the ``MAX_STEP_DELTA_DEG`` clamp, compared on the
+  **magnitude** so a negative step is judged exactly like its positive twin): a
+  tolerance that large judges the joint settled on the first poll, which leaves
+  ``rise_90`` empty for every row.  The check is unconditional (rtt mode parses
+  the same knobs and ignores them) because the default pair ``1.0`` / ``0.15``
+  is safe.
 
 Round 6: command pacing (frozen here as the expectation; section Q).
 
@@ -2759,6 +2767,13 @@ def test_parse_args_should_reject_a_nonsense_step_or_settle_shape(latency, argv:
 # clamp.  A tolerance at or above the step makes the first settle poll judge the
 # joint settled, so every row keeps ``rise_90_time_s`` empty and the column is
 # silently useless.
+#
+# The reference is the *magnitude* of that effective step, not its signed value:
+# the settle judgement itself is ``abs(measured - target) <= tolerance``, so a
+# ``--delta-deg -1.0`` run has exactly the same empty-column failure mode as
+# ``--delta-deg 1.0`` and is refused by the same rule (section ``AA``).  A
+# signed comparison would be vacuously true for every negative step
+# (``0.15 >= -1.0``) and would refuse the whole negative direction.
 #
 # Scope ruling of this file: **unconditional**, not ``--mode tracking`` only.
 # The knob is parsed in every mode and the default pair (``delta 1.0`` /
@@ -6628,6 +6643,12 @@ def test_collect_rtt_samples_should_not_let_duplicate_frames_throttle_the_row_ra
 # path and the report path used to normalise ``host_loop_hz`` differently, so a
 # *direct* caller's ``nan`` produced ``queue_bound_s=0.04`` in the rows and
 # ``queue_bound_ms=0.000`` in the report of the same run.
+#
+# ``--delta-deg`` is the one knob of the four whose sign bound is **not**
+# ``> 0.0``: a negative step is a legal run (the opposite direction of the same
+# experiment), so its finiteness test is wrapped around ``!= 0`` and the
+# ``MAX_STEP_DELTA_DEG`` cap is applied to the magnitude.  Section ``AA`` owns
+# that contract; the R31 tests here only keep the non-finite and zero refusals.
 
 
 @pytest.mark.parametrize("value", ["nan", "inf", "1e400"], ids=["nan", "inf", "overflow_to_inf"])
@@ -6740,16 +6761,46 @@ def test_parse_args_should_keep_a_zero_settle_tolerance_legal(latency) -> None:
     assert args.settle_tolerance_deg == pytest.approx(0.0)
 
 
-@pytest.mark.parametrize("value", ["nan", "inf", "1e400"], ids=["nan", "inf", "overflow_to_inf"])
+def _parser_error_text(stderr: str) -> str:
+    """The ``error:`` line of an argparse refusal, lowercased.
+
+    Matching the whole stderr is vacuous here: ``parser.error`` prints the usage
+    block first, and that block lists **every** option name, so
+    ``"settle-tolerance-deg" in stderr`` is true for a run that failed on
+    ``--delta-deg`` (and true for an option that no longer exists, as long as the
+    usage string still mentions it).  Only the ``error:`` line says *why* the
+    parser refused, so that is the line an assertion may talk about.
+    """
+    lines = [line for line in stderr.splitlines() if "error:" in line]
+    assert lines, f"argparse printed no error line: {stderr!r}"
+    return lines[-1].lower()
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["nan", "inf", "1e400", "-inf"],
+    ids=["nan", "inf", "overflow_to_inf", "negative_inf"],
+)
 def test_parse_args_should_reject_a_non_finite_delta_deg(latency, capsys, value: str) -> None:
     """R31: a non-finite ``--delta-deg`` is a usage error (2).
 
-    ``inf`` is ``> 0`` and passes the sign check; ``resolve_delta_deg`` then
+    ``inf`` passes the sign test (it is non-zero); ``resolve_delta_deg`` then
     clamps it to ``MAX_STEP_DELTA_DEG``, so the run silently commands a step the
     operator never asked for instead of refusing a value that cannot be a step.
-    ``nan`` makes ``<= 0.0`` false and survives to ``min(nan, cap)``, i.e. every
-    step-size comparison in the tracking path is false.  The legal value is
-    parsed first for the same reason as in R25.
+    ``nan`` makes ``<= 0.0`` false *and* ``!= 0`` true and survives to the clamp,
+    i.e. every step-size comparison in the tracking path is false.  ``-inf`` is
+    the negative twin the magnitude clamp must not be able to "fix": a sign-only
+    ``!= 0`` test would let it through, so ``math.isfinite`` is what catches it
+    (both infinities have to be refused for the same reason: neither is a step).
+    ``1e400`` is ``inf`` after ``float()``.  The legal value is parsed first for
+    the same reason as in R25.
+
+    Note on the argument form: every variant is passed as ``--delta-deg=<value>``.
+    That is required, not stylistic: argparse only classifies a leading-dash token
+    as a *value* when it matches its negative-number pattern
+    (``^-<digits>$`` or ``^-<digits>.<digits>$``), which ``-inf`` does not -- as a
+    separate token it would be read as an unknown option and fail with "expected one
+    argument" instead of the refusal asserted here.
     """
     legal = latency.parse_args(["--host", "127.0.0.1", "--delta-deg", "0.5"])
     assert getattr(legal, "delta_deg", None) == pytest.approx(0.5), (
@@ -6765,27 +6816,35 @@ def test_parse_args_should_reject_a_non_finite_delta_deg(latency, capsys, value:
         "error 2: a non-finite step is silently clamped (inf) or poisons every "
         "step-size comparison (nan)"
     )
-    message = capsys.readouterr().err.lower()
+    message = _parser_error_text(capsys.readouterr().err)
     assert "delta-deg" in message, f"the error does not name the option: {message!r}"
 
 
-@pytest.mark.parametrize("value", ["0", "-1"], ids=["zero", "negative"])
-def test_parse_args_should_reject_a_non_positive_delta_deg(latency, capsys, value: str) -> None:
-    """R31: ``--delta-deg 0`` / negative stay usage errors (2) -- no regression.
+@pytest.mark.parametrize("value", ["0", "-0.0"], ids=["positive_zero", "negative_zero"])
+def test_parse_args_should_still_reject_a_zero_delta_deg(latency, capsys, value: str) -> None:
+    """R31/AA: ``--delta-deg 0`` / ``-0.0`` stay usage errors (2) -- no regression.
 
-    The finiteness check is added *around* this rule, not instead of it: a
-    non-positive step commands nothing, so it keeps its own refusal (and its own
-    wording) rather than being folded into the cross-check that would blame the
-    clamp for a value the operator typed.
+    This replaced ``test_parse_args_should_reject_a_non_positive_delta_deg``, whose
+    ``"-1"`` arm is now obsolete: a **non-zero negative** step is a legal input
+    (the opposite direction of the same experiment), so the refusal it pins is the
+    zero one only -- see the negative-``--delta-deg`` section (``AA``) below for
+    ``-0.5`` / ``-1.0`` / ``-10``.  The finiteness check is added *around* this
+    rule, not instead of it: a zero step commands nothing, so it keeps its own
+    refusal (and its own wording) rather than being folded into the cross-check
+    that would blame the clamp for a value the operator typed.
+
+    Both zeros are passed as ``--delta-deg=<value>``: ``-0.0`` does match
+    argparse's negative-number pattern, but the ``=`` form keeps the two arms of
+    this test in one shape and pins the value the operator typed.
     """
     with pytest.raises(SystemExit) as excinfo:
         latency.parse_args(["--host", "127.0.0.1", f"--delta-deg={value}"])
 
     assert excinfo.value.code == 2, (
         f"--delta-deg={value} exited with {excinfo.value.code} instead of the usage "
-        "error 2: a non-positive step commands nothing"
+        "error 2: a zero step commands nothing"
     )
-    message = capsys.readouterr().err.lower()
+    message = _parser_error_text(capsys.readouterr().err)
     assert "delta-deg" in message, f"the error does not name the option: {message!r}"
 
 
@@ -6885,3 +6944,413 @@ def test_rtt_report_should_agree_with_the_rows_for_an_unusable_host_loop_hz(
     assert terms["queue_mean_ms"] == pytest.approx(row["queue_mean_s"] * 1000.0, abs=1e-6)
     assert terms["prefetch_bound_ms"] == pytest.approx(row["prefetch_bound_s"] * 1000.0, abs=1e-6)
     assert terms["prefetch_mean_ms"] == pytest.approx(row["prefetch_mean_s"] * 1000.0, abs=1e-6)
+
+
+# ===========================================================================
+# AA. A negative ``--delta-deg``: the M2 entry (the same step, taken *down*)
+# ===========================================================================
+#
+# Field manual §10.5 asks for the step-response measurement in both directions:
+# a joint that only ever steps up leaves the sign handling of every downstream
+# judgement (the target sum, the 90 % crossing, the overshoot, the settle
+# residual, the travel cap and the tolerance cross-check) untested, and the
+# plant's behaviour is not symmetric either.
+#
+# Contract frozen here:
+#
+# 1. ``parse_args`` accepts a **finite non-zero** ``--delta-deg`` of either sign.
+#    ``0`` / ``-0.0`` stay usage errors (``test_parse_args_should_still_reject_a_zero_delta_deg``,
+#    section R31) and so do ``nan`` / ``inf`` / ``-inf`` / ``1e400``.
+# 2. ``resolve_delta_deg`` clamps the **magnitude**:
+#    ``min(max(delta, -MAX_STEP_DELTA_DEG), MAX_STEP_DELTA_DEG)``.  The safety
+#    cap stays 1 deg per step in either direction, and the sign of the request
+#    survives the clamp.  The old one-armed ``min(delta, cap)`` is a no-op for
+#    every negative value, i.e. ``--delta-deg -10`` would command 10 deg.
+# 3. The settle-tolerance cross-check and Gate E's travel cap compare the
+#    **magnitude** as well: ``abs(delta)`` against the tolerance, and
+#    ``abs(delta) * steps`` against ``MAX_TOTAL_TRAVEL_DEG``.  A signed
+#    comparison would either be vacuous (``0.15 >= -1.0``) or let 21 negative
+#    steps through as "-21 deg of travel".
+# 4. ``run_tracking_steps`` already works in the negative direction (its target,
+#    crossing and overshoot judgements are ``abs()``-based); the row-level tests
+#    below freeze that so a later "simplification" that drops an ``abs()``
+#    turns red instead of silently reporting a rise time of ``None``.
+#
+# Argument forms, deliberately: a negative *number* works both as
+# ``--delta-deg -0.5`` and as ``--delta-deg=-0.5``, because argparse's
+# ``_negative_number_matcher`` reclassifies a token matching ``^-\d+$`` /
+# ``^-\d*\.\d+$`` as a value (no option string of this parser looks like a
+# negative number).  ``-inf`` matches neither pattern, so it is *only* usable in
+# the ``=`` form -- see R31's non-finite test.  Both forms of a plain negative
+# number are pinned below, since an operator will type the space form.
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        pytest.param(["--delta-deg", "-0.5"], -0.5, id="space_form_half_degree"),
+        pytest.param(["--delta-deg", "-1.0"], -1.0, id="space_form_one_degree"),
+        pytest.param(["--delta-deg=-0.5"], -0.5, id="equals_form_half_degree"),
+    ],
+)
+def test_parse_args_should_accept_a_negative_delta_deg(
+    latency, argv: list[str], expected: float
+) -> None:
+    """AA1: a negative step is a legal input, not a usage error (2).
+
+    The old rule was ``math.isfinite(x) and x > 0.0``: it refused every negative
+    ``--delta-deg`` in the parser, so the whole M2 direction was unreachable from
+    the CLI even though ``run_tracking_steps`` handles it.
+    """
+    args = latency.parse_args(["--host", "127.0.0.1", *argv])
+
+    assert args.delta_deg == pytest.approx(expected), (
+        f"{argv} parsed into delta_deg={args.delta_deg!r} instead of {expected!r}"
+    )
+
+
+def test_parse_args_should_report_a_negative_delta_deg_without_its_sign_lost(latency) -> None:
+    """AA1: the parsed namespace carries the sign, not just the magnitude.
+
+    ``--delta-deg -0.5`` must not arrive as ``0.5``: the direction of the run is
+    the whole point of the knob, and a ``abs()`` applied at parse time would be
+    invisible in every later ``abs()``-based judgement.
+    """
+    args = latency.parse_args(["--host", "127.0.0.1", "--delta-deg", "-0.5"])
+
+    assert args.delta_deg < 0.0
+
+
+def test_resolve_delta_deg_should_pass_a_negative_value_within_the_cap_through(latency) -> None:
+    """AA2: a legal negative step is passed through untouched, like ``0.25`` is."""
+    requested = latency.parse_args(["--host", "127.0.0.1", "--delta-deg", "-0.5"])
+
+    assert latency.resolve_delta_deg(requested) == pytest.approx(-0.5)
+
+
+@pytest.mark.parametrize(
+    ("text", "sign"),
+    [("-10", -1.0), ("10", +1.0)],
+    ids=["negative_request", "positive_request"],
+)
+def test_resolve_delta_deg_should_clamp_the_magnitude_in_both_directions(
+    latency, text: str, sign: float
+) -> None:
+    """AA2: the 1 deg cap applies to the magnitude, and the sign survives it.
+
+    ``min(delta, MAX_STEP_DELTA_DEG)`` is the wrong shape for a signed knob: it
+    clamps ``+10`` to ``+1`` but returns ``-10`` unchanged, so the negative arm
+    would command a step ten times the documented safety cap.  The two arms here
+    pin the symmetric clamp
+    ``min(max(delta, -MAX_STEP_DELTA_DEG), MAX_STEP_DELTA_DEG)``; the existing
+    ``3.0 -> 1.0`` and ``0.25 -> 0.25`` cases (round-3 J7) stay untouched and pin
+    that the positive side did not regress.
+    """
+    requested = latency.parse_args(["--host", "127.0.0.1", "--delta-deg", text])
+
+    clamped = latency.resolve_delta_deg(requested)
+
+    assert clamped == pytest.approx(latency.MAX_STEP_DELTA_DEG * sign), (
+        f"--delta-deg {text} resolved to {clamped!r}, not "
+        f"{latency.MAX_STEP_DELTA_DEG * sign!r}: the clamp is one-armed"
+    )
+
+
+def test_resolve_delta_deg_should_clamp_a_large_negative_request_to_minus_the_cap(latency) -> None:
+    """AA2: the brief's exact shape -- ``-10`` must not stay ``-10``.
+
+    Same rule as the parametrised test above, written out separately because this
+    is the value that makes the one-armed clamp's failure mode unambiguous (a
+    ten-degree step on a real robot instead of a one-degree one).
+    """
+    requested = latency.parse_args(["--host", "127.0.0.1", "--delta-deg", "-10"])
+
+    assert latency.resolve_delta_deg(requested) == pytest.approx(latency.MAX_STEP_DELTA_DEG * -1)
+
+
+def test_parse_args_should_accept_a_settle_tolerance_below_a_negative_step(latency) -> None:
+    """AA3: ``--delta-deg -1.0 --settle-tolerance-deg 0.15`` is the legal default pair.
+
+    The cross-check compares the tolerance against the *magnitude* of the
+    effective step.  Written as ``tolerance >= effective_delta`` it is vacuously
+    true for every negative step (``0.15 >= -1.0``), so the negative direction
+    would be refused for the one combination that is legal -- and the same
+    signed comparison would accept ``-0.05`` with a ``0.15`` tolerance, which is
+    the empty-``rise_90`` case the rule exists to prevent.
+    """
+    args = latency.parse_args(
+        [
+            "--host",
+            "127.0.0.1",
+            "--delta-deg",
+            "-1.0",
+            "--settle-tolerance-deg",
+            "0.15",
+        ]
+    )
+
+    assert latency.resolve_delta_deg(args) == pytest.approx(-1.0)
+    assert args.settle_tolerance_deg == pytest.approx(0.15)
+
+
+@pytest.mark.parametrize(
+    ("delta_deg", "tolerance"),
+    [("-1.0", "1.0"), ("-0.05", "0.15")],
+    ids=["tolerance_equals_the_magnitude", "tolerance_above_the_magnitude"],
+)
+def test_parse_args_should_reject_a_settle_tolerance_at_or_above_a_negative_steps_magnitude(
+    latency, capsys, delta_deg: str, tolerance: str
+) -> None:
+    """AA3: the tolerance is judged against ``abs(delta)``, not against ``delta``.
+
+    Both arms are the *same* knobs as N2/N3 with the sign flipped, so they must
+    be refused for the same reason and with the same wording: the tolerance wins
+    the settle race and ``rise_90`` stays empty in every row.  The error names
+    ``settle-tolerance`` (not ``delta-deg``): blaming the step for a tolerance
+    the operator typed would point at the wrong knob.
+    """
+    with pytest.raises(SystemExit) as excinfo:
+        latency.parse_args(
+            [
+                "--host",
+                "127.0.0.1",
+                "--delta-deg",
+                delta_deg,
+                "--settle-tolerance-deg",
+                tolerance,
+            ]
+        )
+
+    assert excinfo.value.code == 2, (
+        f"--delta-deg {delta_deg} with --settle-tolerance-deg {tolerance} exited with "
+        f"{excinfo.value.code} instead of the usage error 2"
+    )
+    message = _parser_error_text(capsys.readouterr().err)
+    assert "settle-tolerance" in message, f"the refusal does not name the tolerance: {message!r}"
+
+
+def _negative_tracking_argv(out: Path, *, steps: str, delta_deg: str = "-1.0") -> list[str]:
+    """A complete ``main``-level tracking run that steps *down* by ``delta_deg``."""
+    return [
+        "--host",
+        "127.0.0.1",
+        "--mode",
+        "tracking",
+        "--enable-motion",
+        "--joint",
+        "arm_left_shoulder_pan",
+        "--delta-deg",
+        delta_deg,
+        "--steps",
+        steps,
+        "--settle-timeout-s",
+        "0.05",
+        "--rate-hz",
+        "200",
+        "--control-hz",
+        "50",
+        "--csv",
+        str(out),
+    ]
+
+
+def test_main_should_run_a_negative_step_end_to_end(latency, tmp_path, capsys) -> None:
+    """AA4: Gate E must not refuse a negative step -- the command really goes out.
+
+    Gate E's first arm was ``delta_deg <= 0.0``, i.e. "``--delta-deg`` and
+    ``--steps`` must both be positive".  That made every negative run a
+    ``EXIT_MOTION_GATE_REFUSED`` with zero motion.  Asserted: exit 0, a non-empty
+    ``sent_actions``, and a first step goal that is *below* the measured baseline
+    in normalized units (the fake fixes the feedback at one unit on a 0.879
+    deg/unit joint, so the direction is visible on the wire).
+    """
+    client = _TrackingFake()
+    factory = _Factory(client)
+    out = tmp_path / "tracking-down.csv"
+
+    code = latency.main(_negative_tracking_argv(out, steps="2"), client_factory=factory)
+    printed = capsys.readouterr()
+
+    assert code == latency.EXIT_OK, (
+        f"the negative tracking run exited with {code} instead of 0: {printed.err!r}"
+    )
+    assert client.sent_actions, "the negative run issued no command at all"
+    baseline_units = _TRACKING_STATE[_TRACKING_JOINT]
+    expected_units = baseline_units + latency.units_from_deg(-1.0, _TRACKING_SCALE_DEG)
+    first_goal = client.sent_actions[0][_TRACKING_JOINT]
+    assert first_goal == pytest.approx(expected_units, rel=0, abs=1e-9), (
+        f"the first command asked for {first_goal!r} instead of {expected_units!r} "
+        f"(baseline {baseline_units!r} on a {_TRACKING_SCALE_DEG!r} deg/unit joint)"
+    )
+    assert first_goal < baseline_units, "the step goal was not below the baseline"
+
+
+def test_main_should_judge_the_travel_cap_by_magnitude_for_a_negative_step(
+    latency, tmp_path, capsys
+) -> None:
+    """AA4: 21 x (-1.0 deg) is -21 deg of travel, i.e. over the 20 deg cap.
+
+    The signed comparison ``-21.0 > 20.0`` is false, so the negative arm of the
+    travel cap lets the run through and commands a 21-degree march in the
+    direction nothing is looking at.  Asserted: the gate's own exit code, the
+    ``Gate E`` wording on stderr and zero commands.
+    """
+    client = _TrackingFake()
+    factory = _Factory(client)
+    out = tmp_path / "tracking-down-cap.csv"
+
+    code = latency.main(_negative_tracking_argv(out, steps="21"), client_factory=factory)
+    printed = capsys.readouterr()
+
+    assert code == latency.EXIT_MOTION_GATE_REFUSED, (
+        f"21 x -1.0 deg exited with {code} instead of {latency.EXIT_MOTION_GATE_REFUSED} "
+        f"(the travel cap is judged on the signed value): {printed.err!r}"
+    )
+    assert client.sent_actions == [], (
+        f"a run over the travel cap commanded {len(client.sent_actions)} action(s)"
+    )
+    assert "Gate E" in printed.err, f"the refusal does not name Gate E: {printed.err!r}"
+    # Not just "Gate E refused": the *cap* arm has to be the one that fired.  A
+    # signed comparison either lets this run through (``-21.0 > 20.0`` is false) or
+    # the old sign arm refuses it with "must both be positive" -- which would make
+    # every assertion above pass while the magnitude rule is still missing.
+    assert "cap" in printed.err.lower(), (
+        f"the refusal does not name the travel cap: {printed.err!r}"
+    )
+    assert "positive" not in printed.err.lower(), (
+        'Gate E refused on the sign arm ("must both be positive") instead of on the '
+        f"travel cap: {printed.err!r}"
+    )
+
+
+def test_run_tracking_rows_should_command_below_the_baseline_for_a_negative_delta(latency) -> None:
+    """AA5: ``cmd_deg`` / ``cmd_units`` are ``baseline + delta`` with the sign kept.
+
+    The joint's scale is deliberately not 1 (0.879 deg/unit), so an implementation
+    that mixed degrees and units, or that dropped the sign of the converted
+    step, cannot pass: ``cmd_deg`` is below ``baseline_deg`` while ``cmd_units``
+    is below ``baseline_units`` by ``|delta| / scale``, not by ``|delta|``.
+    """
+    scale = _TRACKING_SCALE_DEG
+    client = _TrackingFake()
+    baseline_units = _TRACKING_STATE[_TRACKING_JOINT]
+
+    summary = _run_steps(latency, client, delta_deg=-1.0, steps=1, deg_per_unit=scale)
+
+    row = summary["rows"][0]
+    assert row["cmd_deg"] < row["baseline_deg"], (
+        f"cmd_deg={row['cmd_deg']!r} is not below baseline_deg={row['baseline_deg']!r}"
+    )
+    assert row["cmd_deg"] == pytest.approx(row["baseline_deg"] + (-1.0), rel=0, abs=1e-9)
+    assert row["cmd_units"] == pytest.approx(baseline_units + (-1.0) / scale, rel=0, abs=1e-9)
+    assert row["cmd_units"] < baseline_units, (
+        f"cmd_units={row['cmd_units']!r} is not below the baseline {baseline_units!r}"
+    )
+    # The row is not decoration: the same value went out on the wire.
+    assert client.sent_actions[0][_TRACKING_JOINT] == pytest.approx(
+        row["cmd_units"], rel=0, abs=1e-9
+    )
+
+
+def test_run_tracking_rows_should_keep_the_sign_of_a_negative_error_deg(latency) -> None:
+    """AA5: ``error_deg`` is ``cmd_deg - measured_deg``, i.e. negative here.
+
+    The feedback is frozen at the baseline, so the residual is exactly the
+    (negative) step: ``abs()`` in the wrong place would report ``+1.0`` and the
+    CSV would claim the joint was above its goal.
+    """
+    client = _TrackingFake()
+
+    summary = _run_steps(latency, client, delta_deg=-1.0, steps=1)
+
+    row = summary["rows"][0]
+    assert row["measured_deg"] == pytest.approx(row["baseline_deg"], rel=0, abs=1e-9)
+    assert row["error_deg"] == pytest.approx(row["cmd_deg"] - row["measured_deg"], rel=0, abs=1e-12)
+    assert row["error_deg"] == pytest.approx(-1.0, rel=0, abs=1e-9), (
+        f"error_deg={row['error_deg']!r}: the residual lost its sign"
+    )
+
+
+def test_run_tracking_rows_should_book_the_rise_of_a_negative_step_symmetrically(latency) -> None:
+    """AA5: the 90 % crossing is booked on ``abs(travel)``, so both directions rise.
+
+    Two runs of the same shape, one stepping up and one stepping down, with the
+    same scripted arrival stamps.  A signed crossing test
+    (``travel >= 0.9 * delta``) would never fire in the negative arm
+    (``-0.9 >= -0.9`` is true only because the comparison is symmetric by
+    accident; ``-0.54 >= -0.9`` is *also* true, i.e. it would book the crossing a
+    whole poll early), so the assertion is not just "not None": the negative
+    rise time must equal the positive one exactly.
+    """
+    scale = 0.9
+    arrivals = [10.0, 20.0, 30.0]
+    up = _run_steps(
+        latency,
+        _ScriptedTrackingFake(values=[1.0, 1.6, 2.0], received=arrivals),
+        delta_deg=1.0,
+        steps=1,
+        settle_timeout_s=0.4,
+        deg_per_unit=scale,
+    )
+    down = _run_steps(
+        latency,
+        _ScriptedTrackingFake(values=[1.0, 0.4, 0.0], received=arrivals),
+        delta_deg=-1.0,
+        steps=1,
+        settle_timeout_s=0.4,
+        deg_per_unit=scale,
+    )
+
+    up_row = up["rows"][0]
+    down_row = down["rows"][0]
+    assert up_row["rise_90_time_s"] is not None, "the positive arm booked no crossing"
+    assert down_row["rise_90_time_s"] is not None, (
+        "the negative arm booked no 90 % crossing: the crossing test is signed"
+    )
+    assert down_row["received_monotonic_s"] == pytest.approx(arrivals[2], rel=0, abs=1e-9)
+    assert down_row["rise_90_time_s"] == pytest.approx(
+        down_row["received_monotonic_s"] - down_row["t_send_monotonic_s"], rel=0, abs=1e-9
+    )
+    assert down_row["rise_90_time_s"] == pytest.approx(
+        up_row["rise_90_time_s"], rel=0, abs=1e-12
+    ), "the two directions of the same step reported different rise times"
+
+
+def test_run_tracking_rows_should_report_the_overshoot_of_a_negative_step_as_a_magnitude(
+    latency,
+) -> None:
+    """AA5: ``overshoot_deg`` is ``peak_travel - abs(delta)`` and never negative.
+
+    The scripted feedback undershoots the goal by 40 % (travel 1.26 deg on a
+    1.0 deg step), which is the negative twin of the round-3 overshoot case.
+    ``peak_travel - delta`` (signed) would report 2.26 deg here and the row
+    would claim a wildly larger overshoot than happened.
+    """
+    scale = 0.9
+    # Unit feedback per poll: baseline, -0.6, -1.4 (peak), -1.1 (settled).
+    client = _ScriptedTrackingFake(values=[1.0, 0.4, -0.4, -0.1])
+
+    summary = _run_steps(
+        latency, client, delta_deg=-1.0, steps=1, settle_timeout_s=0.4, deg_per_unit=scale
+    )
+
+    row = summary["rows"][0]
+    peak_travel_deg = (1.0 - (-0.4)) * scale
+    assert row["overshoot_deg"] == pytest.approx(peak_travel_deg - 1.0, rel=0, abs=1e-9)
+    assert row["overshoot_deg"] > 0.0, (
+        f"overshoot_deg={row['overshoot_deg']!r}: the measured overshoot was dropped"
+    )
+    assert row["overshoot_deg"] >= 0.0
+    assert row["error_deg"] == pytest.approx(row["cmd_deg"] - row["measured_deg"], rel=0, abs=1e-12)
+    assert row["settled"] is True, (
+        f"the negative step did not settle on |residual| <= tolerance: {row!r}"
+    )
+    # The flag is not taken on trust: the residual the test recomputes itself has to
+    # be inside the tolerance, otherwise ``settled`` fired a poll early -- exactly
+    # what a settle comparison without ``abs()`` does in this direction (the
+    # residual is negative while the joint is still short of the goal).
+    assert abs(row["measured_deg"] - row["cmd_deg"]) <= 0.15, (
+        f"the negative step was judged settled on a residual of "
+        f"{row['measured_deg'] - row['cmd_deg']!r} deg, i.e. before it was within the "
+        "0.15 deg tolerance"
+    )
