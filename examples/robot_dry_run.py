@@ -1,7 +1,7 @@
 """真机 dry-run 示例：把厂商 ``AlohaMiniClient`` 注入本库 ``connect(dry_run=True)``。
 
 这是「真 client 注入」的参考实现：用真实的厂商客户端打开本库会话，**零发送、只读观测**
-（「只读」指不发动作，不等于不请求图像——相机帧缺口见第 1 节末段）。
+（「只读」指不发动作，不等于不请求图像——相机帧缺口见本文件第 3 节末段）。
 
 1. 这是什么。``examples/minimal_dry_run.py`` 用内存里的假 transport 演示调用形状；这份脚本
    换成真的 ``AlohaMiniClient``（厂商 ``lerobot_alohamini`` 的客户端），经
@@ -137,8 +137,8 @@ class _CountingTransport:
     """计数代理：转调真 client 的传输面，并真的数 ``send_action`` 被调用了几次。
 
     真机上这一层就是厂商 ``AlohaMiniClient``；包一层只为了拿到「下发了几次」这个读数，
-    不改变任何行为。其余属性（``latest_robot_metadata``、``observation_sequence``、
-    ``latest_control_status`` 这些旁路字段）经 ``__getattr__`` 原样转发。
+    不改变任何行为。其余属性经 ``__getattr__`` 原样转发，其中厂商 client 真实存在的旁路字段是
+    ``latest_robot_metadata`` 与 ``observation_sequence``（property）。
     """
 
     def __init__(self, client: Any) -> None:
