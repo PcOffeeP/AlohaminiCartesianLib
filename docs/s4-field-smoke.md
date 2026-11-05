@@ -2,7 +2,7 @@
 
 这份文档是一次现场窗口的执行手册，从到场核对写到收尾，每一节给命令、判据与产物。现场由 Agent 通过 SSH 连上 Pi，照着逐条取数、执行，不靠临时决策补缺失的信息。
 
-实测边界：第 3、4.1、4.3、5、7.1 节的命令在 2026-10-25 对 `pi5@10.34.170.98` 跑过一轮，产物在证据目录 `evidence/s4-20261025/`，数字汇总见 `docs/field-results.md`。第 4.2、5.3、6.1、6.2、7.2 节是本轮新增，**未在现场执行过**；首跑若输出形态与本文不符，按实际输出修正，并回写到本文档。
+实测边界：第 3、4.1、4.3、5、7.1 节的命令在 2026-10-25 对 `pi5@10.34.170.98` 跑过一轮，产物在证据目录 `evidence/s4-20261025/`，数字汇总见 `docs/field-results.md`。第 4.2、5.3、6.1、6.2、7.2 节原定为本轮新增、未在现场执行过；2026-11-05 的现场会话（远程 SSH，Pi 运行时 HEAD `6aee1f81`、lerobot `0.6.1`）已把这五节与 §4.1 的 Pi 侧 capture 跑过一轮，命令与本文原写法不同之处已在对应小节写明，数字汇总见 `docs/field-results.md` 的 2026-11-05 节。首跑若输出形态与本文不符，按实际输出修正，并回写到本文档。
 
 ## 0 这份文档怎么用
 
@@ -335,6 +335,16 @@ run 4.1-capture uv run --no-sync python benchmarks/alohamini_io/capture_robot_fi
 
 产物：`capture/fingerprint-$STAMP.json`、`stdout/4.1-capture-*`。
 
+#### capture 在 Pi 侧跑（2026-11-05 实战做法）
+
+本次实战里 capture 是**在 Pi 上跑的**（Mac 主环境没有 `lerobot`），因此 JSON 的 `host` 字段记的是 `127.0.0.1`。命令形态是「脚本经 stdin 投递 + Pi 侧 venv 解释器 + `PYTHONPATH=/home/pi5/lerobot_alohamini/src`」，产物落 Pi 的 `/tmp`，再用 `scp` 取回 `$S4DIR/capture/`。命令原文（路径按现场替换）：
+
+```bash
+ssh "$PI" 'cd /tmp && PYTHONPATH=/home/pi5/lerobot_alohamini/src ~/miniconda3/envs/lerobot_alohamini/bin/python - --host 127.0.0.1 --lerobot-version 0.6.1 --samples 5 --timeout-s 30.0 --out /tmp/fingerprint-$STAMP.json' < benchmarks/alohamini_io/capture_robot_fingerprint.py
+```
+
+判据补充：`host` 字段是 `127.0.0.1` 时，说明 capture 在被测机本机回环上跑，不是 Mac 到 Pi 的跨机路径——不要当成网络路径写进记录。
+
 #### capture 的 JSON 有 11 个顶层键
 
 | 键 | 含义 |
@@ -419,6 +429,8 @@ MOTORS = {
 
 要看的寄存器：`Min_Position_Limit`、`Max_Position_Limit`、`Present_Position`、`Goal_Position`、`Homing_Offset`、`Torque_Enable`、`Operating_Mode`、`Model_Number`、`Status`。
 
+2026-11-05 的实战做法：把探测目标从 `shoulder_pan`（ID1）扩到 `gripper`（ID7），`MOTORS` 里加 `"gripper": Motor(7, "sts3250", MotorNormMode.RANGE_0_100)`，并把存活探测（`probe` 与波特率重试）换成对 ID7 读 `Model_Number`；左右两臂各跑一次（两个脚本，右臂脚本的 `PORT` 换成右臂总线别名）。
+
 执行方式有三件事，其中两件已定值，一件仍需现场确认：
 
 1. 投递方式：有「向 Pi 写文件」授权就走下面的 scp 支；没有授权就走 stdin 支（不向 Pi 落盘）。
@@ -427,7 +439,7 @@ MOTORS = {
 
 把改好的脚本放到 Pi 的 `/tmp/` 属于向 Pi 写文件，需在第 3.9 节的授权记录里写明。
 
-本脚本未在现场执行过（第 4.2 节整体属「新增、未现场执行」，与文档开头说明一致），首跑若输出形态不符，按实际修正并回写本文档。
+本脚本 2026-11-05 已在真机执行两次：左臂、右臂各一次，两次都是 `EXIT_CODE: 0`（`stdout/4.2-gripper-regs-*`、`stdout/4.2-gripper-regs-right-*`）。实测读数：左臂 ID7 `Min_Position_Limit = 2021` / `Max_Position_Limit = 2072`，命中判据第一支（固件限位生效，成因在标定值，D14 维持不重标定）；右臂 ID7 `2010` / `3479`；两只都是 `Torque_Enable=0`、`Lock=1`。可比性限定：本轮 `Torque_Enable=0` 与 2026-10-25 读到的 ID1/2/3/6 `Torque_Enable=1` 不可比——测量对象不同（本轮读的是夹爪 ID7）。
 
 #### 第一步：在 Mac 上建脚本
 
@@ -724,16 +736,20 @@ run 4.3e-load-check uv run --no-sync python -c "from pathlib import Path; from a
 ### 5.1 部署形态（请求 30 Hz、窗口 3）
 
 ```bash
-run 5.1-rtt-deploy uv run --no-sync python benchmarks/alohamini_io/measure_latency.py --host "$PI_HOST" --mode rtt --rate-hz 30 --request-window 3 --samples 500 --csv "$S4DIR/rtt/rtt-deploy-$STAMP.csv"
+run 5.1-rtt-deploy env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python benchmarks/alohamini_io/measure_latency.py --host "$PI_HOST" --mode rtt --rate-hz 30 --request-window 3 --samples 500 --csv "$S4DIR/rtt/rtt-deploy-$STAMP.csv"
 ```
 
 判据：exit 0，`$S4DIR/rtt/rtt-deploy-$STAMP.csv` 写出且有数据行。返回 `3` 是连接问题，按第 12 节处置。
 
+解释器不用 `uv run --no-sync python`：主环境没装 `lerobot`，那样写会以 exit `3`、`No module named 'lerobot'` 失败（2026-11-05 实测）。隔离环境与 `PYTHONPATH` 快照的取法见第 5.3 节的「解释器与 `PYTHONPATH`」小节。
+
 ### 5.2 RTT 形态（请求 1000 Hz、窗口 1）
 
 ```bash
-run 5.2-rtt-net uv run --no-sync python benchmarks/alohamini_io/measure_latency.py --host "$PI_HOST" --mode rtt --rate-hz 1000 --request-window 1 --samples 500 --csv "$S4DIR/rtt/rtt-net-$STAMP.csv"
+run 5.2-rtt-net env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python benchmarks/alohamini_io/measure_latency.py --host "$PI_HOST" --mode rtt --rate-hz 1000 --request-window 1 --samples 500 --csv "$S4DIR/rtt/rtt-net-$STAMP.csv"
 ```
+
+解释器与 `PYTHONPATH` 的来由同 5.1（见第 5.3 节）；`uv run --no-sync python` 在主环境会以 exit `3` 失败，不是代码问题。
 
 判据：`exit 0` 且 CSV 有数据行。
 
@@ -777,6 +793,22 @@ run 5.3-rtt-net-cross /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venv
 
 判据：`exit 0` 且 `rtt/rtt-net-cross-$STAMP.csv` 有数据行。把该 CSV 里 `net_rtt_estimate_s` 的 p50 与 Pi 回环的 `6.176 ms` 并列写进现场记录（`docs/background.md` 记 `net_rtt_estimate_ms` p50 6.176；原始 CSV 是 `rtt/rtt-loopback-merged-20261025.csv`），两者之差就是 PC 到 Pi 这一段网段的开销。返回 `9` 或 `3` 的处置与 5.2 相同。
 
+#### 解释器与 `PYTHONPATH`（2026-11-05 实测）
+
+两条硬事实：
+
+- 主环境不装 `lerobot`，直接 `uv run --no-sync python benchmarks/alohamini_io/measure_latency.py …` 会以 exit `3`、`No module named 'lerobot'` 失败。
+- 隔离环境装的是构建出的 vendor wheel，不含 `latest_request_timing`；不把 `PYTHONPATH` 指向 fork 快照时，rtt 会以 exit `9` 结束（实测见 `stdout/5.3-rtt-net-cross-*`；重跑 `5.3-rtt-net-cross-2` 把 `PYTHONPATH` 指向 `6aee1f81` 快照后 exit 0）。
+
+所以本节与 5.1、5.2、7.1 的测量命令都写成 `env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src .venvs/alohamini-lerobot/bin/python …`。快照取法：把只读 fork 克隆到 `/tmp`，不改 fork 本身。
+
+```bash
+git clone --branch p1a-merged --quiet /Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini /tmp/lerobot-vendor-6aee1f81
+git -C /tmp/lerobot-vendor-6aee1f81 rev-parse HEAD
+```
+
+第二条应等于 Pi 运行时的 HEAD `6aee1f81`（本次实测输出 `6aee1f81d503be98972d605ed32189221a674607`）。
+
 环境事实：
 
 | 项 | 值 |
@@ -798,13 +830,13 @@ run 5.3-rtt-net-cross /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venv
 
 ## 6 量级验证：臂总线电流能不能判读
 
-本节要给出一条前置事实：`[Currents]` 这条日志能不能用来判负载。后面所有依赖电流的判断（第 7.2 节）都以这个结论为准。
+本节要给出一条前置事实：臂总线电流能不能用来判负载。后面所有依赖电流的判断（第 7.2 节）都以这个结论为准。取数主路径是客户端的 `latest_safety_status["currents_ma"]`；`[Currents]` 这条日志在当前 vendor 的日志级别下不打印（见第 6.1 节）。
 
 先固定三件已核对的事：
 
 - 打印值已经是 mA，不是 raw 刻度：Host 侧按 `int(raw × 6.5)` 截断后打印。
 - 电流读取本身正常：同一轮 Host 日志里升降轴 `Present_Current` 读到 `71.5 / 221.0 / 936.0 / 2639.0 mA`（`stdout/v2verify-host-20261025.log`）。
-- 局限在臂总线：2026-10-25 整份日志的 `[Currents]` 共 1278 行、11502 个元素（元素分布：`0` 11056 个、`6` 444 个、`13` 2 个），最大值 `13 mA`，等于 2 个 raw 刻度。静止与轻载下只有 0–2 个刻度，运动中的量级未验证。计数须按整份日志复算，按前缀统计会偏小。
+- 局限在臂总线：2026-10-25 整份日志的 `[Currents]` 共 1278 行、11502 个元素（元素分布：`0` 11056 个、`6` 444 个、`13` 2 个），最大值 `13 mA`，等于 2 个 raw 刻度。静止与轻载下只有 0–2 个刻度，运动中的量级见第 6.2 节（2026-11-05 实测）。计数须按整份日志复算，按前缀统计会偏小。
 
 `[Currents]` 数组下标与电机 ID 的映射**没有文档**：禁止按位置推断是哪个电机。要判具体电机的电流，用 sidecar 的 `current_ma` 列（带键名，见第 11 节）。厂商快照里的键叫 `currents_ma`，写进 sidecar 的列叫 `current_ma`，查代码时别把这两个名字互换。
 
@@ -820,17 +852,33 @@ run 6.1a-host-start ssh "$PI" "cd /home/pi5/lerobot_alohamini && PYTHONPATH=/hom
 
 判据：`.log` 里有 `pid=<数字>`。记下这个 PID，第 8.2 节停 Host 要用。
 
-启起来后等 30 s，再取 `[Currents]`：
+启起来后等 30 s，再取基线。
+
+#### 主路径：`latest_safety_status["currents_ma"]`（2026-11-05 起）
+
+用一个小脚本连上客户端的观测面，逐帧读 18 个电机的 `currents_ma` 并汇总。脚本范式是 `stdout/6.1c-obs-idle-$STAMP.py`，只调 `connect()`、`get_observation(include_cameras=False)`、`disconnect()`，不发任何动作。本次参数 5 Hz × 20 s = 100 帧。运行方式与 §4.2 同形（脚本投到 Pi 的 `/tmp`、用 Pi 侧 venv 解释器跑，`scp` 需「向 Pi 写文件」授权）：
+
+```bash
+run 6.1c-obs-idle ssh "$PI" 'cd /home/pi5 && PYTHONPATH=/home/pi5/lerobot_alohamini/src ~/miniconda3/envs/lerobot_alohamini/bin/python /tmp/6.1c-obs-idle-$STAMP.py'
+```
+
+产物：`stdout/6.1c-obs-idle-$STAMP.{cmd,log}`。日志末尾自动打两段汇总：`# per_motor_table`（逐电机 `n` / `min_mA` / `max_mA` / `mean_mA`）与 `# summary`（全局最大、`motors_seen`、恒 0 电机清单）。
+
+判据：`.exit` 为 `0`；`motors_seen=18`；`# per_motor_table` 有 18 行且每行 `n` 相同。
+
+基线参考值（2026-11-05 实测，18/18 电机 × 100 帧）：读数只有 `0` 与 `+6.50 mA` 两个值，7 只恒 0（`arm_left_gripper`、`arm_left_wrist_yaw`、`arm_right_gripper`、`arm_right_wrist_flex`、`arm_right_wrist_roll`、`base_left_wheel`、`base_right_wheel`），全局最大 `+6.50 mA`。
+
+#### 支路：`[Currents]` grep（当前 vendor 日志级别压制，不可依赖）
 
 ```bash
 run 6.1b-currents-idle ssh "$PI" 'sleep 30; HOSTLOG=/tmp/site-host-<启动该 Host 时的 STAMP>.log; grep -c "\[Currents\]" "$HOSTLOG"; grep "\[Currents\]" "$HOSTLOG" | tail -3'
 ```
 
-日志路径里的 `<启动该 Host 时的 STAMP>` 按实际文件名填，同一会话里就是上一条命令里的 `$STAMP`。这条 grep 是本轮新写的，未在现场执行过；判据不依赖它的具体写法，只看有没有 `[Currents]` 原文与计数。
+日志路径里的 `<启动该 Host 时的 STAMP>` 按实际文件名填，同一会话里就是上一条命令里的 `$STAMP`。
 
-判据：`.exit` 为 `0`；`.log` 里有一行计数（`[Currents]` 的行数）与至少 3 行 `[Currents]` 原文。基线量级参考 2026-10-25 那份日志：1278 行、11502 个元素、最大 13 mA（计数须按整份日志复算，按前缀统计会偏小）。
+这一支**不可依赖**：2026-11-05 实测整份 Host 日志的 `[Currents]` 行数为 0（`stdout/6.1b-currents-dist-*` 打出 `lines 0` / `elements 0`），原因是厂商 client 里 `logging.basicConfig(... level=logging.INFO)` 的 level 那行被注释、root logger 停在 WARNING；同类 INFO 行（`[HOST TRACKING]`）同样不打印（`stdout/7.2b-host-tracking-count-*` 计数 `0`）。所以「有 `[Currents]` 原文」不再作判据，取数走上面的主路径。
 
-产物：`stdout/6.1a-host-start-*`（若启了 Host）、`stdout/6.1b-currents-idle-*`。
+产物：`stdout/6.1a-host-start-*`（若启了 Host）、`stdout/6.1c-obs-idle-*`、`stdout/6.1b-currents-idle-*`（支路，当前 vendor 下通常为空）。
 
 ### 6.2 短运动电流量级
 
@@ -839,10 +887,14 @@ run 6.1b-currents-idle ssh "$PI" 'sleep 30; HOSTLOG=/tmp/site-host-<启动该 Ho
 跑 2 步单关节步进：
 
 ```bash
-run 6.2-currents-move uv run --no-sync python benchmarks/alohamini_io/measure_latency.py --host "$PI_HOST" --mode tracking --enable-motion --joint arm_left_shoulder_pan.pos --delta-deg 1.0 --steps 2 --control-hz 50.0 --settle-tolerance-deg 0.05 --settle-timeout-s 2.0 --timeout-s 60 --csv "$S4DIR/tracking/tracking-6.2-$STAMP.csv"
+run 6.2-currents-move env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python benchmarks/alohamini_io/measure_latency.py --host "$PI_HOST" --mode tracking --enable-motion --joint arm_left_shoulder_pan.pos --delta-deg 1.0 --steps 2 --control-hz 50.0 --settle-tolerance-deg 0.05 --settle-timeout-s 2.0 --timeout-s 60 --csv "$S4DIR/tracking/tracking-6.2-$STAMP.csv"
 ```
 
-跑完立刻取同一份 Host 日志的 `[Currents]`：
+解释器与 §5.3 的「解释器与 `PYTHONPATH`」小节一致；写成 `uv run --no-sync python` 会以 exit `3`、`No module named 'lerobot'` 失败。
+
+跑完取数走 sidecar 主路径：按 §6.1 的脚本范式（`stdout/6.1c-obs-idle-$STAMP.py`）统计运动窗口内的 `current_ma`，或直接分析本次 tracking 的 sidecar `tracking/tracking-6.2-$STAMP-safety.csv`。要统计三项：运动窗口内 `current_ma` 的最大值、取值分布、`≥20 mA` 的样本数。
+
+`[Currents]` 的 grep 支保留为旁证（当前 vendor 日志级别压制，整份日志 0 行，不可依赖）：
 
 ```bash
 run 6.2b-currents-move ssh "$PI" 'HOSTLOG=/tmp/site-host-<STAMP>.log; grep "\[Currents\]" "$HOSTLOG" | tail -20'
@@ -850,16 +902,18 @@ run 6.2b-currents-move ssh "$PI" 'HOSTLOG=/tmp/site-host-<STAMP>.log; grep "\[Cu
 
 判据（必须写出结论，不写「看起来正常」）：
 
-| 运动窗口内的读数 | 结论 | 后续怎么用 |
+| 运动窗口内 sidecar `current_ma` 的读数 | 结论 | 后续怎么用 |
 | --- | --- | --- |
 | 出现 ≥3 个 raw 刻度（≥20 mA） | 臂总线电流可判读 | 7.2 的电流走势可以当负载旁证用 |
 | 仍是 0–2 个刻度 | 臂总线电流不能判负载 | 后续所有依赖电流的判断降级为「无电流证据」，不要拿它下结论 |
 
 `13 mA` 是 2 个 raw 刻度，`20 mA` 对应 3 个刻度，判读门槛就卡在这一档。
 
+实测参考（2026-11-05，同一参数集）：腕部 run 的运动窗口 1638 个（帧×电机）样本，最大 `6.5 mA`，`≥20 mA` 样本 0 个；`pan` / `lift` 两次 run 窗口内最大 `19.5 mA`，取值只有 `0` / `6.5` / `13.0` / `19.5` → 结论「臂总线电流不能判负载」。
+
 两点必须一起写进记录：打印值是 mA，不是 raw 刻度；`[Currents]` 的数组下标与电机 ID 没有映射文档，禁止按位置推断是哪个电机。要判具体电机，用 sidecar 的 `current_ma`（带键名，列定义见第 11 节）。
 
-判据另一半：主 CSV 与 sidecar 都写出。产物：`tracking/tracking-6.2-$STAMP.csv` 与其 sidecar、`stdout/6.2-currents-move-*`、`stdout/6.2b-currents-move-*`。
+判据另一半：主 CSV 与 sidecar 都写出。产物：`tracking/tracking-6.2-$STAMP.csv` 与其 sidecar、`stdout/6.2-currents-move-*`、`stdout/6.2b-currents-move-*`、`stdout/6.2b-analysis-*`、`stdout/7.2-analysis-*`。
 
 ## 7 受控试动（唯一动机器人的节）
 
@@ -892,8 +946,10 @@ Gate F 第①条的判断式在 `benchmarks/alohamini_io/measure_latency.py`，�
 命令：
 
 ```bash
-run 7.1-tracking uv run --no-sync python benchmarks/alohamini_io/measure_latency.py --host "$PI_HOST" --mode tracking --enable-motion --joint arm_left_shoulder_pan.pos --delta-deg 1.0 --steps 5 --control-hz 50.0 --settle-tolerance-deg 0.05 --settle-timeout-s 2.0 --timeout-s 60 --csv "$S4DIR/tracking/tracking-$STAMP.csv"
+run 7.1-tracking env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python benchmarks/alohamini_io/measure_latency.py --host "$PI_HOST" --mode tracking --enable-motion --joint arm_left_shoulder_pan.pos --delta-deg 1.0 --steps 5 --control-hz 50.0 --settle-tolerance-deg 0.05 --settle-timeout-s 2.0 --timeout-s 60 --csv "$S4DIR/tracking/tracking-$STAMP.csv"
 ```
+
+解释器与 `PYTHONPATH` 的来由同第 5.3 节：主环境没装 `lerobot`，`uv run --no-sync python` 会以 exit `3` 失败（2026-11-05 实测）。
 
 参数与理由：
 
@@ -905,7 +961,7 @@ run 7.1-tracking uv run --no-sync python benchmarks/alohamini_io/measure_latency
 | `--delta-deg` | `1.0` | 会被硬性 clamp 到 `1.0°`（常量 `MAX_STEP_DELTA_DEG`），传更大也只发 1.0 |
 | `--steps` | 先 `5`，成功后再说 | `delta × steps` 必须不超过 20.0°；默认 20 步正好顶在上限 |
 | `--control-hz` | `50.0`（默认） | 两条命令最小间隔 1/50 s = 20 ms；必须有限且不小于 1，`inf`/`nan` 被拒 |
-| `--settle-tolerance-deg` | `0.05` | 默认 `0.15` 可能让 90% 上升时间测不到：容差不小于 `0.1 × delta`（即 0.1°）时，settle 循环的退出条件比 90% 越线更宽松，于是 `rise_90_ms` 报 `count=0`、`p50=nan`。要测上升时间必须取小于 0.1° 的值 |
+| `--settle-tolerance-deg` | `0.05`（本次实测；容差小不是 `rise_90` 有值的充分条件） | 默认 `0.15`。2026-11-05 用 `0.05`（小于 `0.1 × delta`，即小于 `0.1°`）跑三轴，`rise_90_ms` 仍报 `count=0`、`p50=nan`：原先「容差不小于 `0.1 × delta` 时 settle 循环先退、于是 `rise_90_ms` 报 `count=0`」的推论被实测推翻，容差取小也补不上这一列 |
 | `--settle-timeout-s` | `2.0` | 默认 `1.0` s，20 ms 命令节奏下每步预算偏紧 |
 | `--timeout-s` | `60` | 默认 `30` s 对多步加 settle 偏紧，中途超时会以 exit 1 结束 |
 
@@ -983,11 +1039,26 @@ run 7.2b-host-tracking ssh "$PI" 'HOSTLOG=/tmp/site-host-<STAMP>.log; grep "\[HO
 
 ### 8.2 Host 停启留痕
 
-- 停 Host 用第 3.2 节 `3.2-host-procs` 取到的 PID 执行 `kill`。具体命令本轮没有留痕，需现场确认后执行，并把命令原文与 PID 落盘。
+- 停 Host 用第 3.2 节 `3.2-host-procs` 取到的 PID 执行 `kill`。2026-11-05 实测的命令原文与判据：
+
+```bash
+run 8.2a-host-stop ssh "$PI" 'date -u +%Y-%m-%dT%H:%M:%SZ; kill <PID>; echo kill_exit=$?'
+```
+
+本次 `<PID>` 为 `2096`，`.log` 为 `2026-11-05T07:08:54Z` 与 `kill_exit=0`（`stdout/8.2a-host-stop-*`）。
+- 停后 5 秒内验证进程与端口都已消失：
+
+```bash
+run 8.2b-host-verify ssh "$PI" 'pgrep -af "alohamini_host|lerobot"; ss -ltnp | grep -E ":5555|:5556"'
+```
+
+判据：`pgrep` 无输出、`ss` 那一段无 `LISTEN`（`stdout/8.2b-host-verify-*`）。`pgrep` 会匹配到 ssh 远端那条 `bash -c …` 自己（本次多出 `pid=3112` 一行），判据按「除该行以外无输出」读。
 - 重启 Host 按第 6.1 节的命令骨架，日志路径一并写进同一份记录。
 - 记下停机与重启的时间（UTC），供日志对齐。
 
-判据：一份记录里有 PID、停命令原文、重启命令原文、两个 UTC 时间。产物：`stdout/8.1-host-stop-*`。
+判据：一份记录里有 PID、停命令原文、重启命令原文、两个 UTC 时间。产物：`stdout/8.1-host-stop-*`、`stdout/8.2a-host-stop-*`、`stdout/8.2b-host-verify-*`。
+
+停 Host 不等于失力：手臂仍带电保持，见第 8.1 节。2026-11-05 的事实是 Host 停后机器人**未断电**——现场没有远程电源通道，需人工先把手臂放到低位再断电，断电仍待人工。
 
 ### 8.3 产物归档与交回
 
@@ -1003,11 +1074,11 @@ run 7.2b-host-tracking ssh "$PI" 'HOSTLOG=/tmp/site-host-<STAMP>.log; grep "\[HO
 | --- | --- | --- | --- |
 | P0 曾广播 v1（已关闭） | 只核对，不回退、不重跑 v1 拒绝路径 | `capture` exit 0 且 `robot_metadata.schema_version == 2` | `capture/fingerprint-*.json` |
 | Gate F 第二段不可达 | 不制造记录，只记「未触发」；禁止改标定文件造记录 | 无拒绝记录即为正确结果 | `stdout/4.1b-probe-*`（历史同类产物 `stdout/5.1-probe21-*`） |
-| 肩部两轴不跟随 | 试动后立刻取 sidecar 与 Host 追踪行 | 达成率 ≥50% 且 `settled=True`，或判出结构性原因 | sidecar CSV + `stdout/7.2-*` |
-| 臂总线电流量级未知 | 静止基线 + 短运动两段 grep | 运动中 ≥20 mA 则电流可判读 | `stdout/6.1*-`、`stdout/6.2*-` |
+| 肩部两轴不跟随 | 试动后取 sidecar 与 `[HOST TRACKING]`（后者因日志级别压制不打，改用 sidecar，见第 6.1 节）：判据三项里 `requested == accepted` 零例外、运动帧 `target_source` 全 `command`，结论落到「① 目标被接受，停滞在伺服或机械侧」 | 达成率 ≥50% 且 `settled=True`，或判出结构性原因 | sidecar CSV + `stdout/7.2-*` |
+| 臂总线电流量级未知 | 静止基线（`0` 与 `+6.5 mA`）+ 运动窗口（腕部 1638 样本 max `6.5 mA`；肩部 pan/lift 窗口 max `19.5 mA`，取值 `0` / `6.5` / `13` / `19.5`）**全部低于 20 mA 门槛，结论：臂总线电流不能判负载**，依赖电流的判断降级为「无电流证据」 | 已判：门槛 20 mA（3 个 raw 刻度），运动窗口最大 19.5 mA，电流不能判读 | `stdout/6.1*-`、`stdout/6.2*-`、`stdout/6.2b-analysis-*`、`stdout/7.2-analysis-*` |
 | `Torque_Enable=1` 写入者未识别 | 只记录，不主动改扭矩寄存器 | 寄存器读数原文落盘 | `stdout/4.2-*` |
 | 左夹爪 51 tick（D14 暂不重标定） | 只读 ID7 限位 | 是否 `2021` / `2072` | `stdout/4.2-*` |
-| 跨机 RTT 未测 | 隔离环境跑一次 | exit 0 + `net_rtt_estimate_s` p50 有值 | `rtt/rtt-net-cross-*.csv` |
+| 跨机 RTT（2026-11-05 已测） | 已执行：隔离环境 + fork 快照 `PYTHONPATH` 跑一次 `--mode rtt`（命令见 §5.3） | exit 0、500 行、`net_rtt_estimate_s` p50 `6.010 ms`、`host_timing_missing=0/500`、`achieved_rate_hz=48.0`（请求 1000 Hz）；与 Pi 回环 p50 `6.188 ms` 同量级 | `rtt/rtt-net-cross-20261105T063600Z-2.csv`、`stdout/5.3-rtt-net-cross-2-*` |
 | 4 路相机零帧 | 采集时把 stderr 落盘 | 有零帧原文或无非空帧 | `stdout/` + `capture/*.json` |
 
 两条禁令，原文照办：
@@ -1205,7 +1276,7 @@ sidecar 写盘失败（`OSError`）也只打一条自己的警告，**退出码�
 - [ ] 第 4.2 节 ID7 的 `Min_Position_Limit` / `Max_Position_Limit` 原文在盘，并写明是否等于 `2021` / `2072`；`Torque_Enable` 只记录未改动
 - [ ] 第 4.3 节两份 YAML 落盘，字段名与 `config/overlay.py` 一致，`load_settings(check_devices=False)` exit 0
 - [ ] 第 5 节三条 rtt 各 exit 0、各 500 样本、CSV 各有数据行；`achieved_rate_hz` 与请求率的差距有记录；跨机那条给出 `net_rtt_estimate_s` p50 并与 `6.176 ms` 并列
-- [ ] 第 6 节两段 `[Currents]` 原文与计数在盘，并写出结论：臂总线电流可判读，或不能判负载
+- [ ] 第 6 节两段电流读数在盘（主路径 `latest_safety_status["currents_ma"]`，范式见 `stdout/6.1c-obs-idle-$STAMP.py`；`[Currents]` 日志路径当前不可依赖，见 §6.1），并写出结论：臂总线电流可判读，或不能判负载
 - [ ] 第 7.1 节若执行：每步的 `error_deg`、`overshoot_deg`、`settled` 齐全；`rise_90_time_s` 为空时写明原因；收尾 `hold_issued` 在报告里
 - [ ] 第 7.2 节：`target_source` 分布、`requested_target` 与 `accepted_target` 的比较、`current_ma` 走势三项有结论，且落到三类之一；`_joint_hold_goal` 有无写入点的 grep 原文在盘
 - [ ] sidecar 的四个数字有记录：每帧行数、`motor` 空行占比、`current_ma` 分布、`hold_active` 全列取值（safety sidecar 此前只有离线测试覆盖，真机首跑按这四项记）
@@ -1214,7 +1285,7 @@ sidecar 写盘失败（`OSError`）也只打一条自己的警告，**退出码�
 
 判据里两条与数据形态有关的注意：
 
-- 2026-10-25 五份 tracking CSV 的 `received_monotonic_s` 与 `rise_90_time_s` 全空，同因：没有帧记到 90% 交点。要补这两列，先把 `--settle-tolerance-deg` 取到小于 `0.1 × delta`（即小于 0.1°），再确认脚本在该帧写入到达时刻。
+- 2026-10-25 五份 tracking CSV 的 `received_monotonic_s` 与 `rise_90_time_s` 全空，同因：没有帧记到 90% 交点。**2026-11-05 用 `--settle-tolerance-deg 0.05`（小于 0.1°）跑三轴，`rise_90_ms count=0 p50=nan` 仍然为空，「容差取小就能补上这一列」的假设不成立**；三份 CSV 的 `rise_90_time_s` 仍全空。报告自带的说明是：要记一次 90% 交叉，需残余 ≤ `0.1 × delta` 且发生在 settle 循环结束之前，实测没发生。原因未定位，未验证。
 - Mode B 只在 2026-10-25 跑过五次，都是左臂单关节、每步 1°。右臂、多关节联动、更大的单步行程都未跑过。
 
 ## 附录 A：两个脚本的完整参数表
