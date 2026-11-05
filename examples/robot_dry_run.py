@@ -5,32 +5,47 @@
 1. 这是什么。``examples/minimal_dry_run.py`` 用内存里的假 transport 演示调用形状；这份脚本
    换成真的 ``AlohaMiniClient``（厂商 ``lerobot_alohamini`` 的客户端），经
    ``connect(..., client_factory=...)`` 注入本库。脚本做三件事：读一次观测、对升降轴下一条
-   dry-run 命令、断开。会话里所有下发都要过本库的 dry-run 门禁，``send_action`` 一次都不会
-   被调用；结尾把包在真 client 外面的计数代理断言出来（不是硬编码的 0）。
+   dry-run 命令、断开。命令在 priming 阶段的 adapter 门禁就被拒（第 3 节），本会话
+   ``send_action`` 一次都不会被调用；结尾把包在真 client 外面的计数代理断言出来（不是硬编码
+   的 0）。
 2. 真机怎么跑。厂商 client 只存在于装了 ``lerobot`` 的环境里，本库主环境（只有 numpy）没有
    它。两条命令：第一条把 vendor 快照与本库的 ``src`` 一起放进 ``PYTHONPATH``（本库没装进
    vendor 环境，所以要带 ``:src``），第二条用 vendor 环境的解释器跑本脚本；``--host`` 就是
    机器人 Pi 的 IP/主机名::
 
        export PYTHONPATH=<vendor fork>/src:src
-       .venvs/alohamini-lerobot/bin/python examples/robot_dry_run.py --host 192.168.1.50
+       .venvs/alohamini-lerobot/bin/python examples/robot_dry_run.py --host <Pi 的 IP>
 
-   在 Pi 本机上跑时省掉 ``--host``（默认 ``127.0.0.1``）。主环境（无 ``lerobot``）下脚本走
-   跳过分支：打印跳过文案、退出码 ``0``，不连设备、不联网。
-3. 零发送的保证来自哪条库内路径。本库三处门禁一起把下发挡住：
+   在 Pi 本机上跑时省掉 ``--host``（默认 ``127.0.0.1``）。解释器路径与 ``--host`` 都按本机
+   环境替换。主环境（无 ``lerobot``）下脚本走跳过分支：打印跳过文案、退出码 ``0``，不连设备、
+   不联网。
+3. 零发送的保证来自哪条库内路径。本脚本**不注入** ``JointKinematicAdapter``（也不建
+   ``placo`` IK），所以命令根本进不了状态机；实际生效的是这三处：
 
-   - ``src/alohamini_cartesian/control/controller.py:169-172``：控制器 ``_send()`` 在
-     ``self._dry_run`` 为真时直接 ``return``，臂的动作字典算得出、发不出；
+   - ``src/alohamini_cartesian/control/api.py:860-862``：**priming 阶段的 adapter 门禁**。
+     ``session._prime_state_machine()`` 在 ``LiftHandle.move_to`` 的 ``state.handle()`` 之前
+     调用（``api.py:513``）；会话没有 adapter、且观测也没带显式的 ``settled``/``valid`` 时，
+     它抛 ``MotionNotEnabled("motion requires a kinematic adapter; ...")``。命令在读第一帧
+     反馈之后就被拒绝，没有任何动作进状态机。厂商 ``AlohaMiniClient`` 既不在观测字典里给
+     ``_control_status``，也没有 ``latest_control_status`` 旁路属性（已按源码核对），
+     ``_has_explicit_settled_valid`` 恒为 False，所以真机上同样落在这条分支；
    - ``src/alohamini_cartesian/control/api.py:674-675``：``connect(dry_run=True)`` 连初始保持
      都不发（``if not dry_run: self._send_initial_hold()``）；
    - ``src/alohamini_cartesian/control/api.py:913-914``：``disconnect()`` 的底座零速同样只在
      非 dry-run 下发。
 
-   本脚本命令的是升降轴（``LiftHandle.move_by``）：它不需要注入 IK 与按关节的标定就能走完
-   状态机，到位后的下发被 ``src/alohamini_cartesian/control/api.py:519-520`` 的
-   ``if not session.dry_run`` 拦住。臂的 ``move_by``/``move_to`` 需要 ``ik_factory``
-   （``placo``，可选 extra ``kinematics``）与按关节的 ``signs``/``zeros`` 标定；本脚本不伪造
-   这两样，因此不在真机路径上指挥臂。
+   另外两处常被当成「零发送门禁」的代码在本脚本里**不可达 / 不适用**，不要按它们解释：
+   ``api.py:519-520``（升降轴到位后的下发门禁）位于 ``state.handle()`` 之后，无 adapter 时
+   前面已经抛错，走不到；``controller.py:169-172``（臂 ``CartesianController._send()`` 的
+   dry-run 早退）属于臂控制器，而控制器只在 ``adapter is not None and ik_factory is not
+   None`` 时才构造（构造条件见 ``api.py:653-672``），本脚本不建控制器。
+
+   为什么命令的是升降轴而不是臂：臂的 ``move_by``/``move_to`` 需要 ``adapter`` 与
+   ``ik_factory``（``placo``，可选 extra ``kinematics``），库内唯一的 adapter
+   ``JointKinematicAdapter`` 需要每侧六关节完整的 ``signs``/``zeros``，现场没有标定值；
+   伪造这些值与 ``AGENTS.md`` 第 3 节的证据纪律冲突，因此不在真机路径上指挥臂。升降轴同样要
+   过 adapter 门禁，只是不需要 IK，所以在真机上的预期结果是**命令被拒**，而不是真的走到下发
+   门禁。
 """
 
 from __future__ import annotations
@@ -238,6 +253,27 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _is_lerobot_import_error(exc: ImportError) -> bool:
+    """判断导入异常是否确属 ``lerobot`` 缺件（而不是被顺带包住的真故障）。
+
+    ``ModuleNotFoundError``（``ImportError`` 子类）带 ``.name``；纯 ``ImportError`` 的
+    ``.name`` 可能为 ``None``，此时按 ``str(exc)`` 里是否出现 ``lerobot`` 判断。两者都不命中
+    就返回 ``False``，由调用方原样 ``raise``——不能把「厂商包缺失」之外的任何导入错误都当成
+    「需要 vendor 环境」而退 0。
+
+    Args:
+        exc: 在 ``connect(...)`` 调用链里捕到的导入异常。
+
+    Returns:
+        确实是 ``lerobot``（或其子模块）缺件时为 ``True``。
+    """
+    name = getattr(exc, "name", None)
+    if name is not None:
+        return name == "lerobot" or name.startswith("lerobot.")
+
+    return "lerobot" in str(exc)
+
+
 def _print_vendor_skip(args: argparse.Namespace, exc: ImportError) -> None:
     """打印主环境（无 ``lerobot``）的跳过说明与真机跑法。
 
@@ -286,21 +322,28 @@ def _print_observation(
 def _run_dry_run_lift_command(session: AlohaMiniControl) -> None:
     """对升降轴下一条 dry-run 命令：读高度、``move_by``、再读高度。
 
-    ``LiftHandle.move_by`` 先读观测里的 ``lift_axis.height_mm`` 再走状态机；dry-run 下状态机
-    到位的下发被 ``src/alohamini_cartesian/control/api.py:519-520`` 的
-    ``if not session.dry_run`` 拦住，所以高度读数前后相等。命令被控制层拒绝时只打印原因、
-    不打印 Traceback：拒绝本身也是「零发送」的一种结果，不该让读数消失。
+    本会话没有注入 ``JointKinematicAdapter``：``LiftHandle.move_by`` 走到
+    ``session._prime_state_machine()`` 就会抛 ``MotionNotEnabled``
+    （``src/alohamini_cartesian/control/api.py:860-862``），命令进不了状态机，也到不了下发
+    门禁。命令被控制层拒绝时只打印原因、不打印 Traceback：拒绝本身也是「零发送」的一种结果，
+    不该让读数消失。
 
     Args:
         session: ``connect(dry_run=True)`` 打开的会话。
     """
-    print(f"命令：lift.move_by(delta_mm={_LIFT_STEP_MM})（dry_run=True，只走状态机，不下发）")
+    print(
+        f"命令：lift.move_by(delta_mm={_LIFT_STEP_MM})"
+        "（dry_run=True，无 adapter，预期在 priming 阶段被拒）"
+    )
     try:
         height_before = session.lift.height()
         session.lift.move_by(delta_mm=_LIFT_STEP_MM)
         height_after = session.lift.height()
     except (FeedbackLost, MotionBlocked, MotionNotEnabled, MotionTimeout) as exc:
-        print(f"升降轴命令被控制层拒绝：{type(exc).__name__}: {exc}（零发送不变）")
+        print(
+            f"升降轴命令被控制层拒绝：{type(exc).__name__}: {exc}"
+            "（命令在 priming 阶段被拒、未进入状态机，零发送不变）"
+        )
         return
 
     print(
@@ -311,6 +354,9 @@ def _run_dry_run_lift_command(session: AlohaMiniControl) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """真机 dry-run 主流程：注入厂商 client、读一次观测、下一条零发送命令、断开。
+
+    命令在 priming 阶段的 adapter 门禁（``src/alohamini_cartesian/control/api.py:860-862``）
+    就被拒，不进入状态机，所以本会话不会下发任何动作。
 
     Args:
         argv: 命令行参数；``None`` 时取 ``sys.argv[1:]``。
@@ -327,7 +373,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     # 厂商 import 与 client 构造都发生在 connect 调用注入工厂的那一刻；主环境在这里抛
-    # ImportError，按设计走跳过分支（不打印 Traceback，退 0）。
+    # ImportError。只有它确属 lerobot 缺件时才走跳过分支（不打印 Traceback、退 0），
+    # 其余导入错误原样往上抛。若异常发生在 client.connect() 之后，厂商 _connect() 自己会关
+    # 两条 zmq socket 并销毁 context 再抛出（alohamini_client.py:160-167），本脚本不兜。
     try:
         session = connect(
             args.host,
@@ -336,7 +384,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             clock=time.monotonic,
             sleeper=time.sleep,
         )
-    except (ImportError, ModuleNotFoundError) as exc:
+    except ImportError as exc:
+        if not _is_lerobot_import_error(exc):
+            raise
         _print_vendor_skip(args, exc)
         return 0
 
@@ -345,7 +395,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise RuntimeError("connect() 没有调用注入的工厂：拿不到计数代理，无法给出下发读数")
 
     try:
-        observation = transport.get_observation()
+        # 只读的一次观测：先用 include_cameras=False 预热观测请求窗口，再按同样口径取帧。
+        # 厂商 docstring（lerobot/robots/alohamini/alohamini_client.py:279-285）指出：开场前
+        # 窗口里可能残留一整窗相机请求，直接返回它们会造成「无意的图像突发」；远程链路上也
+        # 不该拖相机帧（本脚本只看状态键）。
+        transport.prime_observation_request_window(include_cameras=False)
+        observation = transport.get_observation(include_cameras=False)
         _print_observation(args.host, observation, transport)
         _run_dry_run_lift_command(session)
     finally:
@@ -354,9 +409,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     assert transport.send_action_calls == 0, (
         f"dry_run=True 下不应下发动作，实际调用 {transport.send_action_calls} 次"
     )
-    print(
-        f"send_action 调用次数: {transport.send_action_calls} 次发送（dry_run=True，期望 0 次发送）"
-    )
+    print(f"send_action 调用次数: {transport.send_action_calls} 次发送（dry_run=True，期望 0）")
     return 0
 
 
