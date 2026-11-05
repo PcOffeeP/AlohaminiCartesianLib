@@ -29,7 +29,10 @@
   出现且键数对得上（确实读过观测）；假 client 自己的 ``send_action`` 计数为 0（独立于
   被测代码计数代理的第二重证据）；命令步的结局被如实打印为「被拒 / MotionNotEnabled」。
   夹具用 ``monkeypatch.setitem`` 注入并在 teardown 恢复 ``sys.modules``，不污染
-  ``tests/test_capability.py`` 与两个 parity 文件的跳过判定。
+  ``tests/test_capability.py`` 与两个 parity 文件的跳过判定。另一条用例把**取帧序列**钉死：
+  预热带 ``include_cameras=False``、脚本自己那次观测也带 ``include_cameras=False``，而落回厂商
+  默认 ``include_cameras=True`` 的无关键字取帧**恰好 3 次**——这就是文档里「多发 3 次相机帧」
+  的数字。
 - D：防「硬编码 0 次发送」假绿。这里**不用**源码常量守卫（旧守卫要求 ``print`` 的参数里
   含字面量 ``0 次发送``，而旧文案里的「期望 0 次发送」能让硬编码冒充真读数：计数为 3 时
   stdout 也含「0 次发送」）。现行口径是三条：
@@ -82,6 +85,13 @@ SUBPROCESS_TIMEOUT_S = 60
 # 主环境（无 lerobot）跳过分支的两个契约字面量：一句说明「为什么跳过」，一句给出跑法。
 SKIP_NOTICE_LITERAL = "需要 vendor 环境"
 HOWTO_RUN_LITERAL = "PYTHONPATH"
+
+# 真机分支的取帧口径：脚本自己那次观测的关键字，以及库内无参 ``get_observation()`` 的次数。
+# 后者落回厂商默认 ``include_cameras=True``（``alohamini_client.py:535``），对应文档里
+# 「真机分支仍会多发 3 次相机帧请求」（``height_before``、``move_by`` 内部的 ``height()``、
+# priming 首帧）。数字变了就得同步示例与文档口径，所以这里按契约写死成一个常量。
+SCRIPT_OBSERVATION_KWARGS: dict[str, Any] = {"include_cameras": False}
+LIB_INTERNAL_CAMERA_FETCHES = 3
 
 # 真机路径读数行的形态；契约 D 用正则取数，不做子串匹配。
 READOUT_RE = re.compile(r"send_action 调用次数: (\d+) 次发送")
@@ -1238,6 +1248,58 @@ def test_example_real_branch_reads_a_real_observation(real_branch_run: _RealBran
     assert clients[0].get_observation_calls >= 1, (
         f"假 client 的 get_observation 调用次数是 {clients[0].get_observation_calls}，"
         f"要求 >= 1\n{_describe_run(real_branch_run)}"
+    )
+
+
+def test_example_real_branch_pins_observation_fetch_sequence(
+    real_branch_run: _RealBranchRun,
+) -> None:
+    """契约 C：真机分支的取帧序列与 ``include_cameras`` 口径被钉死。
+
+    文件头（``examples/robot_dry_run.py``）与 ``docs/changelog.md`` 都声称：脚本自己那次观测
+    带 ``include_cameras=False``，随后库内 ``LiftHandle.height()``
+    （``src/alohamini_cartesian/control/api.py:494``）与 ``_prime_state_machine()``
+    （``api.py:845``）的无参 ``get_observation()`` 再拉 3 帧、落回厂商默认
+    ``include_cameras=True``（``alohamini_client.py:535``）。实测序列为
+    ``prime_include_cameras=[False]``、
+    ``get_observation_kwargs=[{'include_cameras': False}, {}, {}, {}]``。
+
+    三条一起锁住「多发 3 次相机帧」这个数字：
+
+    1. 预热确实以 ``include_cameras=False`` 被调过；
+    2. 脚本自己那次取帧确实带 ``include_cameras=False``；
+    3. 无关键字（落回厂商默认 ``include_cameras=True``）的取帧**恰好** 3 次。
+
+    任何一侧改了口径（脚本少传 / 多传关键字，库内那两处无参调用增减），这里立刻变红——
+    那是要同步示例与文档的契约变更，不是可以把断言放宽的噪音。
+    """
+    clients = real_branch_run.clients
+    assert clients, (
+        f"假 client 一次都没被构造出来，真机分支根本没走\n{_describe_run(real_branch_run)}"
+    )
+
+    client = clients[0]
+
+    assert False in client.prime_include_cameras, (
+        "真机分支必须以 include_cameras=False 预热观测请求窗口（否则开场残留的相机请求会"
+        "造成厂商 docstring 警告的「无意的图像突发」）；实收 "
+        f"prime_include_cameras={client.prime_include_cameras}\n{_describe_run(real_branch_run)}"
+    )
+
+    assert SCRIPT_OBSERVATION_KWARGS in client.get_observation_kwargs, (
+        "脚本自己那次取帧必须带 include_cameras=False（它与预热的 include_cameras=False 是同"
+        f"一个口径，不能一侧带一侧不带）；实收 "
+        f"get_observation_kwargs={client.get_observation_kwargs}\n{_describe_run(real_branch_run)}"
+    )
+
+    camera_fetches = [kwargs for kwargs in client.get_observation_kwargs if kwargs == {}]
+    assert len(camera_fetches) == LIB_INTERNAL_CAMERA_FETCHES, (
+        f"无关键字（落回厂商默认 include_cameras=True）的取帧次数必须恰好 "
+        f"{LIB_INTERNAL_CAMERA_FETCHES} 次，实测 {len(camera_fetches)} 次。这是文档里「真机分支"
+        "仍会多发 3 次相机帧」的数字：若库内 LiftHandle.height() / "
+        "_prime_state_machine() 的无参 get_observation() 调用口径变了，需同步 "
+        "examples/robot_dry_run.py 与 docs/library-guide.md、docs/changelog.md 的口径。实收 "
+        f"get_observation_kwargs={client.get_observation_kwargs}\n{_describe_run(real_branch_run)}"
     )
 
 
