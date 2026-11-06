@@ -2,10 +2,45 @@
 
 按时间倒序。每行一条结论，数字可在「证据文件」里核对。证据文件都在仓库外的证据目录：
 
+- 2026-11-06 节：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261106/`
 - 2026-11-05 节：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261104/`
 - 2026-10-25 及更早：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261025/`（索引 [evidence/s4-20261025/README.md](file:///Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261025/README.md)）
 
 下表「证据文件」列给的是**该节所属目录**下的相对路径（各节首段的「条件」一句已写明本节用哪个目录）。逐条命令、判据与退出码表在 [docs/s4-field-smoke.md](s4-field-smoke.md)，本文件只记拿到了什么。
+
+## 2026-11-06（远程会话）· S4 现场窗口（第 3 次）
+
+条件：AlohaMini 2 Pro（`robot_model=alohamini2pro`），18 个电机，Pi 上 lerobot `0.6.1`，远程 SSH 会话；**无人在机器人旁、无物理急停操作者**（scope 偏离，见 `stdout/scope-20261106T062506Z.md`），全程 0 条运动命令——§7.1b 走拒绝路径、§4.4 走 `dry_run=True`。STAMP `20261106T062506Z`；Host 起 `06:44:41Z` / 停 `06:45:45Z`。证据目录（仓库外）为 `/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261106/`，下表「证据文件」列都是这个目录下的相对路径。
+
+### 结论一览
+
+| 结论 | 关键数字 | 条件 | 证据文件 |
+| --- | --- | --- | --- |
+| 全 18 电机静态体检：18/18 在线、612/612 读取零失败 | 18 个电机 × 34 项寄存器 = 612 次读取，`'ok': False` 0 条；左组 11 只（左臂 7 + 底盘 3 + 升降 1）、右组 7 只，两份 `.exit` 均 `0` | 停 Host 后只读，走 `/dev/am_arm_follower_left` 与 `/dev/am_arm_follower_right` | `stdout/4.2-all18-left-20261106T062506Z.log`、`stdout/4.2-all18-right-20261106T062506Z.log`（各带 `.cmd` / `.exit` / `.py`） |
+| ID8–11（底盘 3 轮 + 升降轴）首次实机确认在线 | `base_left_wheel` / `base_back_wheel` / `base_right_wheel` / `lift_axis` 的 `Model_Number` = `2825` / `2825` / `2825` / `2569`（2825 = sts3250、2569 = sts3095） | 同上；底盘三轮 `Operating_Mode=1`，升降轴 `Operating_Mode=0` | 同上 |
+| 标定寄存器三项 54/54 与 2026-11-05 基线全等 | `Min_Position_Limit` / `Max_Position_Limit` / `Homing_Offset` × 18 电机 = 54 项，逐项与 `fingerprint-20261105T063600Z.json` 的 `range_min` / `range_max` / `homing_offset` 相同，差异 0 项；指纹 JSON 侧 8 字段 × 18 电机的全量 diff 也是 `CALIB_FIELD_DIFFS: 0` | 只读；`Drive_Mode` 不在 34 项寄存器清单里，寄存器侧只能比这三项（见「未取到 / 未验证」） | `stdout/4.1c-postpower-diff-20261106T064429Z.txt`、`stdout/4.2-all18-*.log` |
+| 左夹爪 Min/Max 仍是 `2021` / `2072`（51 tick 未变） | 寄存器读数与原基线逐项相同，`docs/ADR.md` D14「本轮不重标定」的依据延续 | 同上 | `stdout/4.2-all18-left-20261106T062506Z.log`、`capture/fingerprint-postpower-20261106T064429Z.json` |
+| 电压读数：18 电机原始值 min `106` / mean `107.83` / max `109`（≈10.6–10.9 V） | 每单位 0.1 V 是厂商手册推导，**未在 lerobot 源码里核实**；最小 `106` 恰卡在判据线 10.6 V 上（判据是「任一 < 10.6 V 才需充电后再取基准」），故不判需充电 | 只读寄存器 `Present_Voltage`；本轮未单独测母线电压 | `stdout/4.2-all18-left-20261106T062506Z.log`、`stdout/4.2-all18-right-20261106T062506Z.log` |
+| 温度读数：min `20` / max `29` ℃ | `arm_right_wrist_yaw` 单点 `29` ℃，其余 17 只在 20–23 ℃；单点偏高的成因未验证 | 同上；读数时机器人静止、Host 已停 | 同上 |
+| 上电自复位升降轴两轮都到位 | 会话 1 峰值 `Present_Current=2658.5 mA`、会话 2 峰值 `2015.0 mA`，两轮日志均有 `Lift axis homed to 0mm.` | vendor Host 启动时自动执行，不是本库命令 | `stdout/6.1a-hostlog-20261106T064429Z.log`（会话 2）；会话 1 原文是 Pi 上 `/tmp/site-host-20261106T063251Z.log`，未取回证据目录，数字见 `stdout/scope-20261106T062506Z.md` |
+| postpower 指纹齐全 | `robot_metadata.schema_version=2`、18 个电机、`captured_utc=2026-11-06T06:45:05+00:00`、`lerobot_version="0.6.1"`、`observation_state` 18 键、`sample_count=5` | capture 在 Pi 侧跑（指纹 `host` 字段是 `127.0.0.1`），`scp` 取回 | `capture/fingerprint-postpower-20261106T064429Z.json`、`stdout/4.1c-capture-check-20261106T064429Z.log`、`stdout/4.1c-capture-20261106T064429Z.*` |
+| 位置比对：8 只臂电机超 3 tick，**不可归因** | 超阈 8 只：`arm_right_wrist_roll` −303、`arm_left_shoulder_pan` +200、`arm_left_wrist_roll` +91、`arm_right_wrist_yaw` −83、`arm_right_shoulder_pan` −39、`arm_left_wrist_yaw` +29、`arm_right_elbow_flex` −9、`arm_left_wrist_flex` +6；其余 6 只 ≤ 3 tick（其中 `arm_right_wrist_flex` 恰为 +3）。`lift_axis.height_mm` 由 −0.095947265625 变 `0.0`（Host 自复位的结果） | 基线 `fingerprint-20261105T063600Z.json` 采于 2026-11-05 06:43:10Z，**早于那轮试动**，差值里混着试动位移，不能当断电滑移证据 | `stdout/4.1c-postpower-diff-20261106T064429Z.txt` |
+| **基准换账**：旧基线作废，`fingerprint-postpower-20261106T064429Z.json` 升为新基线 | 新基线 `captured_utc=2026-11-06T06:45:05+00:00`；旧基线 `fingerprint-20261105T063600Z.json` 跨过了 11-05 那轮试动，不能再作「断电前位置」基准 | — | `capture/fingerprint-postpower-20261106T064429Z.json`、`stdout/4.1c-postpower-diff-20261106T064429Z.txt` |
+| §7.1b 反向拒绝：exit `6` 但落在 **Gate B**，不是 Gate C | stderr 原文四行：厂商客户端 `ERROR:root:Error processing observation data, serving last observation: Host robot_model does not match the client configuration`，随后本库 `Gate B refused: 'arm_left_shoulder_pan.pos' is not part of the connected state schema.`（`available: forward, wrist_right`）+ `Check --joint and --robot-model against the host side; nothing was commanded.`；零命令、无 CSV（`ls` 报 `No such file or directory`） | `--robot-model alohamini2` 故意写错，宿主报 `alohamini2pro`；厂商客户端先把观测 schema 降级成只剩相机键，本库的键存在性检查 Gate B 先拦，Gate C 文案在真机链路上不可达 | `stdout/7.1b-gatec-reverse-20261106T064429Z.{cmd,log,exit}`、`stdout/7.1b-no-csv-20261106T064429Z.*` |
+| 本库 dry-run 真机首跑通过 | `exit 0`；观测 `21` 键；`metadata schema_version=2`、motor 条目 `18`；`send_action` 调用 `0` 次；升降轴 `lift.move_by(delta_mm=1.0)` 在 priming 阶段被拒，报文 `MotionNotEnabled: motion requires a kinematic adapter; connect() was called without one` | `examples/robot_dry_run.py` 注入厂商 `AlohaMiniClient`，`dry_run=True`、无 adapter；vendor 快照 `/tmp/lerobot-vendor-6aee1f81/src` | `stdout/4.4-robot-dry-run-20261106T064429Z.{cmd,log,exit}` |
+| 串口符号链接与 `configs/site.yaml` 一致 | `/dev/am_arm_follower_left -> ttyACM0`、`/dev/am_arm_follower_right -> ttyACM1`，正对 `site.yaml` 的 `left_port` / `right_port` | 只读 `ls -l` | `stdout/3.7b2-serial-links-20261106T062506Z.log`、`stdout/3.7b-serial-pi-20261106T062506Z.log` |
+| Pi 磁盘占用 84%，与上一轮持平 | `/dev/mmcblk0p2` 29G、已用 23G、可用 4.6G、`Use%` 84% | 只读 `df -h /` | `stdout/3.p0-df-20261106T062506Z.log` |
+
+### 未取到 / 未验证
+
+| 项目 | 状态 |
+| --- | --- |
+| `Drive_Mode` 的寄存器侧核对 | 未取到。`Drive_Mode` 不在 §4.2 脚本读的 34 项寄存器清单里，寄存器层「标定四字段」只能比三项（`Min_Position_Limit` / `Max_Position_Limit` / `Homing_Offset`）；`drive_mode` 只由指纹 JSON 侧比对（8 字段 diff 为 0） |
+| `base_back_wheel` 一次 `Moving=1` 瞬时扰动 | 成因未验证。左组日志里 `base_back_wheel` 读到 `Moving=1`、`Present_Velocity=-50`，同一轮其余电机 `Moving=0`；后段 `pass2` 复读全为 `Moving=0`。未重测、未定位 |
+| `arm_right_wrist_yaw` 温度 `29 ℃`（其余 17 只 20–23 ℃） | 成因未验证。单点读数，未复测，未查该轴负载与驱动配置 |
+| 第一次起 Host 的本地 ssh 挂 600 s | 根因未定位。会话 1（`06:32:51Z` 起）本地 ssh 调用 600 s 未返回，而远端 Host 已就绪；上层中止后 `06:43:31Z` 执行 `kill 2340`（`kill_exit=0`），复查无 LISTEN、无残留。会话 2 改用「本地 ssh 后台 + 轮询端口 + 杀本地 ssh」，`06:44:41Z` 一次起通（python PID `2517`） |
+| Gate C 的真机专属证据 | 不可达。真机链路上厂商客户端先降级观测 schema，本库 Gate B 先拒；Gate C 文案只在离线测试里成立（见 `docs/s4-field-smoke.md` §7.1b）。V10 的 Gate C 专属实机子项是否接受 Gate B 替代，待裁决 |
+| 会话 1 的 Host 日志原件 | 未取回证据目录。`/tmp/site-host-20261106T063251Z.log` 的 `2658.5 mA` 与 `Lift axis homed to 0mm.` 两行只经 `stdout/scope-20261106T062506Z.md` 转述 |
 
 ## 2026-11-05（远程会话）· S4 现场窗口（第 2 次）
 

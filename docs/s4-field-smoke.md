@@ -433,7 +433,7 @@ run 4.1c-capture uv run --no-sync python benchmarks/alohamini_io/capture_robot_f
 
 #### 第二步：一行能抄的比对命令
 
-比对基准是 2026-11-05 的现场指纹 `~/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261104/capture/fingerprint-20261105T063600Z.json`（`captured_utc=2026-11-05T06:43:10+00:00`，18 个电机）。做法沿用 2026-11-05 已验证的 `robot_metadata.motors` 子树 diff 思路，但**把标定与位置拆成两段**，判据不同。
+比对基准是**上一次收工断电前**采的现场指纹，现指向 `~/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261106/capture/fingerprint-postpower-20261106T064429Z.json`（`captured_utc=2026-11-06T06:45:05+00:00`，18 个电机；2026-11-06 起它升为新基线）。**基准必须采于上一次收工断电前，且此后没有未记录的运动**——否则位置组差值里混着那些运动，超阈也归不了因：2026-11-05 的旧指纹 `evidence/s4-20261104/capture/fingerprint-20261105T063600Z.json` 采于那轮试动之前、跨过了试动，位置组 8 只电机超 3 tick 却无法归因，已作废为**位置**基准（标定字段仍可作历史对照）。做法沿用 2026-11-05 已验证的 `robot_metadata.motors` 子树 diff 思路，但**把标定与位置拆成两段**，判据不同。
 
 先把脚本落到 `$S4DIR/stdout/` 并在同一份指纹上自检一次（两侧同一文件，期望两组计数都是 0）：
 
@@ -543,7 +543,7 @@ if __name__ == "__main__":
     raise SystemExit(main(sys.argv))
 PY
 
-export BASEFP=~/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261104/capture/fingerprint-20261105T063600Z.json
+export BASEFP=~/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261106/capture/fingerprint-postpower-20261106T064429Z.json
 run 4.1c-selfcheck uv run --no-sync python "$S4DIR/stdout/4.1c-postpower-diff.py" "$BASEFP" "$BASEFP" "$S4DIR/stdout/4.1c-selfcheck-$STAMP.txt"
 ```
 
@@ -1156,13 +1156,29 @@ git -C /tmp/lerobot-vendor-6aee1f81 rev-parse HEAD
 
 前置条件：Host 在跑（`3.2-host-procs` 有一行）；机器人上电、手臂不动；启停 Host 在授权范围内（第 0 节的表）。
 
-Host 未运行时按下面这条启动。原文来自证据文件 `stdout/2.1-host-start-20261025T094403Z.cmd`，该文件在命令前多一个本地 `tmo 25` 前缀，那是本地的超时包装，不是命令的一部分；`$!` 已转义，`$STAMP` 由本地 shell 展开：
+Host 未运行时按下面这条启动。**2026-11-06 实测：原来的「一次 ssh 前台拉起、等它回话」写法有风险——本地 ssh 会挂住 600 s 不返回，而远端 Host 其实已经起来了**（会话 1：`06:32:51Z` 启动、python PID `2340`，本地 ssh 一直不返回，空转 10 分 40 秒后由上层中止，再在 `06:43:31Z` 远端 `kill 2340`（`kill_exit=0`）收场，复查无 LISTEN、无残留；挂住的根因未定位）。改成三步写法：
 
 ```bash
-run 6.1a-host-start ssh "$PI" "cd /home/pi5/lerobot_alohamini && PYTHONPATH=/home/pi5/lerobot_alohamini/src setsid nohup /home/pi5/miniconda3/envs/lerobot_alohamini/bin/python -u -m lerobot.robots.alohamini.alohamini_host --robot_model alohamini2pro </dev/null >/tmp/site-host-$STAMP.log 2>&1 & echo pid=\$!"
+# ① 本地后台跑起 Host 命令：远端照旧 setsid nohup 脱离，本地 ssh 放后台
+ssh "$PI" "cd /home/pi5/lerobot_alohamini && PYTHONPATH=/home/pi5/lerobot_alohamini/src setsid nohup /home/pi5/miniconda3/envs/lerobot_alohamini/bin/python -u -m lerobot.robots.alohamini.alohamini_host --robot_model alohamini2pro </dev/null >/tmp/site-host-$STAMP.log 2>&1 & echo pid=\$!" >"$S4DIR/stdout/6.1a-host-start-$STAMP.log" 2>&1 &
+LOCAL_SSH_PID=$!
+
+# ② 轮询 5556 监听（判据是端口起来，不是等本地 ssh 返回）：最多等 90 s、每 3 s 探一次
+for _ in $(seq 1 30); do
+  ssh -o ConnectTimeout=5 "$PI" 'ss -ltn | grep -q ":5556" && echo ready=1' | tee -a "$S4DIR/stdout/6.1a-host-start-$STAMP.log" | grep -q ready=1 && break
+  sleep 3
+done
+run 6.1a-host-pid ssh "$PI" 'date -u +%Y-%m-%dT%H:%M:%SZ; ps -eo pid,args | grep alohamini_host | grep -v "bash -c" | grep -v grep; ss -ltnp | grep -E ":5555|:5556"'
+
+# ③ 端口起来后杀本地 ssh；远端 Host 已 setsid 脱离，不受影响
+kill "$LOCAL_SSH_PID" 2>/dev/null
 ```
 
-判据：`.log` 里有 `pid=<数字>`。记下这个 PID，第 8.2 节停 Host 要用。
+判据：`6.1a-host-start-$STAMP.log` 里有 `pid=<数字>` 与 `ready=1`；`6.1a-host-pid-$STAMP.log` 里 `ps` 那行是 `python … -m lerobot.robots.alohamini.alohamini_host`，`ss` 给出 `:5555` 与 `:5556` 各一行 `LISTEN`（2026-11-06 实测原文：`pid=2516`、`ready=1`，`ps` 打出 PID `2517`，两个端口各一行 `LISTEN`）。
+
+**停 Host 用的 PID 要取 `6.1a-host-pid` 里 `ps` 打出的那个，不要用 `echo pid=$!` 的**：2026-11-06 实测 `echo pid=$!` 打 `2516`，实际 python 是 `2517`（`setsid` 自己占掉一个 PID），照 `2516` 去 kill 打不中。
+
+原写法的风险就是上面那次事故：本地 ssh 不返回时没有超时，现场会白等，而远端 Host 已在跑、升降轴已自复位，容易误判成「没起来」再启一次。
 
 启起来后等 30 s，再取基线。
 
@@ -1308,14 +1324,18 @@ run 7.1b-gatec-reverse env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pc
 
 `--robot-model alohamini2` 是故意写的错值：宿主报的是 `alohamini2pro`（`configs/site.yaml:12`）。两个值都是 vendor 的合法 SKU（`model_specs.py:61-79`），且两侧的关节键名集合相同（`model_specs.py:35-44`），所以 Gate B（键在不在）不会先拒。
 
-#### 期望与现场最可能的实际结果
+#### 实测结果（2026-11-06）：真机落 Gate B，不是 Gate C
+
+原先按代码顺序预判的两支，实测只成立一支，且与预判相反：exit `6`，但拦下来的是 **Gate B**（键在不在），不是 Gate C（模型名）。
 
 | 分支 | 现象 | 结论与记录 |
 | --- | --- | --- |
-| ① 期望 | exit **6**，stderr `Gate C refused: the host reports robot_model='alohamini2pro' but --robot-model='alohamini2' was requested.`（`benchmarks/alohamini_io/measure_latency.py:2349-2353`），无 CSV（这是离线测试锁住的形态：`tests/benchmarks/test_measure_latency.py` 的两个 Gate C 用例；真 client 上按代码顺序必然先撞厂商客户端校验，见②） | 记 Gate C 反向拒绝成立 |
-| ② 现场更可能命中：厂商客户端先拒 | exit **3**，stderr `connect failed: first feedback unavailable: ValueError: Host robot_model does not match the client configuration`（`measure_latency.py:3358`；`ValueError` 出处 vendor `alohamini_client.py:417-420`） | 记「厂商客户端在 `_remote_state_from_obs` 里先按 `robot_model` 拒，Gate C 在这条链路上不可达」 |
+| ① 真机主支（2026-11-06 实测） | exit **6**；stderr 原文四行：厂商客户端先打 `ERROR:root:Error processing observation data, serving last observation: Host robot_model does not match the client configuration`，随后本库打 `Gate B refused: 'arm_left_shoulder_pan.pos' is not part of the connected state schema.`（`available: forward, wrist_right`）与 `Check --joint and --robot-model against the host side; nothing was commanded.`；无 CSV（`ls` 报 `No such file or directory`） | 记 Gate B 反向拒绝成立：厂商客户端先按 `robot_model` 把观测 schema 降级成只剩相机键，本库的键存在性检查先拦下，命令一次没下发 |
+| ② 不可达 | Gate C 文案 `Gate C refused: the host reports robot_model='alohamini2pro' but --robot-model='alohamini2' was requested.`（`benchmarks/alohamini_io/measure_latency.py:2349-2353`） | **真机链路不可达**：Gate B 在它之前就拒了。Gate C 的零命令拒绝只能由离线测试锁定（见下） |
 
-分支 ② 的机理：厂商客户端在解每一帧观测时拿 metadata 的 `robot_model` 与自己的配置比对，不一致直接 `raise ValueError`；`measure` 的第一次 `get_observation` 就撞上，于是还没走到 `_tracking_preflight` 的 Gate C 就以「连接失败」结束。**这是厂商行为，不改 vendor、不为凑 exit 6 改本库代码**。分支 ② 同样是有效的「零命令」证据：命令一次都没下发。
+机理：厂商客户端解每一帧观测时拿 metadata 的 `robot_model` 与自己的配置比对，不一致就打一条 ERROR 并退回上一帧观测（`serving last observation`），此时状态 schema 里已没有关节键；本库的键存在性检查（Gate B）按 `--joint` 找不到键，直接以 `6` 退出，Gate C 的模型名比对根本没走到。**这是厂商行为，不改 vendor，也不为凑 Gate C 去改本库代码。** Gate B 同样是有效的「零命令」证据。
+
+原文此处曾写「两侧关节键名集合相同，所以 Gate B（键在不在）不会先拒」——2026-11-06 实测推翻：厂商先在客户端侧把 schema 降级，键集合随之改变，Gate B 反而先拒。V10 的 Gate C 专属实机子项在真机上不可达，是否接受 Gate B 替代由上层裁决（已登记进 `TODO.md`）。
 
 Gate C 本身的零命令拒绝由离线测试锁住（现场拿不到就以它们为据）：`tests/benchmarks/test_measure_latency.py::test_main_should_refuse_tracking_when_the_host_reports_another_robot_model`（退出码 `6`、`sent_actions == []`、不写 CSV）、`::test_main_should_refuse_tracking_when_the_host_cannot_name_its_model[empty_metadata|no_robot_model|null_robot_model]`（宿主报不出型号时 fail closed）。
 
