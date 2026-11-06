@@ -2,7 +2,7 @@
 
 这份文档是一次现场窗口的执行手册，从到场核对写到收尾，每一节给命令、判据与产物。现场由 Agent 通过 SSH 连上 Pi，照着逐条取数、执行，不靠临时决策补缺失的信息。
 
-实测边界：第 3、4.1、4.3、5、7.1 节的命令在 2026-10-25 对 `pi5@10.34.170.98` 跑过一轮，产物在证据目录 `evidence/s4-20261025/`，数字汇总见 `docs/field-results.md`。第 4.2、5.3、6.1、6.2、7.2 节原定为本轮新增、未在现场执行过；2026-11-05 的现场会话（远程 SSH，Pi 运行时 HEAD `6aee1f81`、lerobot `0.6.1`）已把这五节与 §4.1 的 Pi 侧 capture 跑过一轮，命令与本文原写法不同之处已在对应小节写明，数字汇总见 `docs/field-results.md` 的 2026-11-05 节。首跑若输出形态与本文不符，按实际输出修正，并回写到本文档。2026-11-05 之后新增的 §4.1c、§4.2 的「全 18 电机静态体检」、§4.4、§4.5、§7.1b 与改写后的 §10.5 **尚未在任何现场跑过**：命令形式在本地验过（`--help`、`--delta-deg` 的负值与零值行为、位置比对脚本的自检与变异自检），现场输出形态以首次执行为准。
+实测边界：第 3、4.1、4.3、5、7.1 节的命令在 2026-10-25 对 `pi5@10.34.170.98` 跑过一轮，产物在证据目录 `evidence/s4-20261025/`，数字汇总见 `docs/field-results.md`。第 4.2、5.3、6.1、6.2、7.2 节原定为本轮新增、未在现场执行过；2026-11-05 的现场会话（远程 SSH，Pi 运行时 HEAD `6aee1f81`、lerobot `0.6.1`）已把这五节与 §4.1 的 Pi 侧 capture 跑过一轮，命令与本文原写法不同之处已在对应小节写明，数字汇总见 `docs/field-results.md` 的 2026-11-05 节。首跑若输出形态与本文不符，按实际输出修正，并回写到本文档。2026-11-05 之后新增的 §4.1c、§4.2 的「全 18 电机静态体检」、§4.4、§7.1b 已在 2026-11-06 的现场窗口跑过（证据目录 `evidence/s4-20261106/`，数字汇总见 `docs/field-results.md` 的 2026-11-06 节）；§4.5 只跑过 ssh 连通性检查，`stash list` / `reflog` / `status --porcelain` 三份原文未取；改写后的 §10.5 仍未在任何现场跑过：命令形式在本地验过（`--help`、`--delta-deg` 的负值与零值行为、位置比对脚本的自检与变异自检），现场输出形态以首次执行为准。
 
 ## 0 这份文档怎么用
 
@@ -1322,7 +1322,7 @@ run 7.1-tracking env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pcoffeep
 run 7.1b-gatec-reverse env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python benchmarks/alohamini_io/measure_latency.py --host "$PI_HOST" --mode tracking --enable-motion --joint arm_left_shoulder_pan.pos --robot-model alohamini2 --delta-deg 1.0 --steps 1 --control-hz 50.0 --settle-tolerance-deg 0.05 --settle-timeout-s 2.0 --timeout-s 60 --csv "$S4DIR/tracking/tracking-7.1b-$STAMP.csv"
 ```
 
-`--robot-model alohamini2` 是故意写的错值：宿主报的是 `alohamini2pro`（`configs/site.yaml:12`）。两个值都是 vendor 的合法 SKU（`model_specs.py:61-79`），且两侧的关节键名集合相同（`model_specs.py:35-44`），所以 Gate B（键在不在）不会先拒。
+`--robot-model alohamini2` 是故意写的错值：宿主报的是 `alohamini2pro`（`configs/site.yaml:12`）。两个值都是 vendor 的合法 SKU（`model_specs.py:61-79`），且两侧的关节键名集合相同（`model_specs.py:35-44`），按代码顺序看 Gate B（键在不在）不会先拒——**2026-11-06 实测推翻这一预判**，理由见本节「实测结果」。
 
 #### 实测结果（2026-11-06）：真机落 Gate B，不是 Gate C
 
