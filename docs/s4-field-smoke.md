@@ -299,7 +299,7 @@ EOF
 - [ ] 机器人已上电。
 - [ ] 单臂、空场、无负载三项在第 7.1 节开跑前再确认一次。
 
-本节产物：`$S4DIR/stdout/` 下的 `3.1-ping-*`、`3.2-host-procs-*`、`3.3-tools-*`、`3.4-ports-*`（或 `3.4b-ports-netstat-*`）、`3.5-pi-ip-*`、`3.6-capture-help-*`、`3.6b-measure-help-*`、`3.7-serial-*`、`3.7b-serial-pi-*`、`3.7c-video-*`、`3.7d-video-pi-*`、`3.7e-calib-*`、`scope-*`。
+本节产物：`$S4DIR/stdout/` 下的 `3.1-ping-*`、`3.2-host-procs-*`、`3.3-tools-*`、`3.4-ports-*`（或 `3.4b-ports-netstat-*`）、`3.5-pi-ip-*`、`3.6-capture-help-*`、`3.6b-measure-help-*`、`3.7-serial-*`、`3.7b-serial-pi-*`、`3.7b2-serial-links-*`、`3.7c-video-*`、`3.7d-video-pi-*`、`3.7e-calib-*`、`scope-*`。
 
 ## 4 只读确认（不动机器人）
 
@@ -433,7 +433,7 @@ run 4.1c-capture uv run --no-sync python benchmarks/alohamini_io/capture_robot_f
 
 #### 第二步：一行能抄的比对命令
 
-比对基准是**上一次收工断电前**采的现场指纹，现指向 `~/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261106/capture/fingerprint-postpower-20261106T064429Z.json`（`captured_utc=2026-11-06T06:45:05+00:00`，18 个电机；2026-11-06 起它升为新基线）。**基准必须采于上一次收工断电前，且此后没有未记录的运动**——否则位置组差值里混着那些运动，超阈也归不了因：2026-11-05 的旧指纹 `evidence/s4-20261104/capture/fingerprint-20261105T063600Z.json` 采于那轮试动之前、跨过了试动，位置组 8 只电机超 3 tick 却无法归因，已作废为**位置**基准（标定字段仍可作历史对照）。做法沿用 2026-11-05 已验证的 `robot_metadata.motors` 子树 diff 思路，但**把标定与位置拆成两段**，判据不同。
+比对基准是**上一次收工断电前**采的现场指纹，现指向 `~/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261106/capture/fingerprint-postpower-20261106T070942Z.json`（`captured_utc=2026-11-06T07:10:31+00:00`，`robot_metadata.schema_version=2`，18 个电机（左 11 + 右 7），`lerobot_version="0.6.1"`，`host=127.0.0.1`，`sample_count=5`；同一 STAMP 的产物另带 `stdout/4.1c-capture-20261106T070942Z.*` 与 `stdout/4.1c-capture-scp-20261106T070942Z.*`）。上一份 `fingerprint-postpower-20261106T064429Z.json`（`captured_utc=2026-11-06T06:45:05+00:00`）**已作废为位置基准**：2026-11-06 07:00Z 后用户换新电池并重新上电（`stdout/scope-append-20261106T070942Z.md` ①），位置跨过换电不再连续，它只剩标定字段可作历史对照；换电那一轮因此**判不了「断电期间移位」**，这份新基线服务的是下一轮断电。**基准必须采于上一次收工断电前，且此后没有未记录的运动**——否则位置组差值里混着那些运动，超阈也归不了因：2026-11-05 的旧指纹 `evidence/s4-20261104/capture/fingerprint-20261105T063600Z.json` 采于那轮试动之前、跨过了试动，位置组 8 只电机超 3 tick 却无法归因，已作废为**位置**基准（标定字段仍可作历史对照）。做法沿用 2026-11-05 已验证的 `robot_metadata.motors` 子树 diff 思路，但**把标定与位置拆成两段**，判据不同。
 
 先把脚本落到 `$S4DIR/stdout/` 并在同一份指纹上自检一次（两侧同一文件，期望两组计数都是 0）：
 
@@ -543,7 +543,7 @@ if __name__ == "__main__":
     raise SystemExit(main(sys.argv))
 PY
 
-export BASEFP=~/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261106/capture/fingerprint-postpower-20261106T064429Z.json
+export BASEFP=~/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261106/capture/fingerprint-postpower-20261106T070942Z.json
 run 4.1c-selfcheck uv run --no-sync python "$S4DIR/stdout/4.1c-postpower-diff.py" "$BASEFP" "$BASEFP" "$S4DIR/stdout/4.1c-selfcheck-$STAMP.txt"
 ```
 
@@ -575,7 +575,9 @@ run 4.1c-postpower-diff uv run --no-sync python "$S4DIR/stdout/4.1c-postpower-di
 
 ### 4.2 左夹爪 ID7 与全 18 电机只读确认
 
-前置条件：第 1 节 P0–P5 全过；第 3.7 节确认 Pi 上有串口节点；Host 已停（串口被 Host 占着时读不到）；授权记录里写明了「向 Pi 写文件」与「停 Host」。
+前置条件：第 1 节 P0–P5 全过；按本节「现场确认项」表的 `3.7b2-serial-links` 确认两个串口别名在（`/dev/am_arm_follower_left` → `ttyACM0`、`/dev/am_arm_follower_right` → `ttyACM1`）；Host 已停（串口被 Host 占着时读不到）；授权记录里写明了「向 Pi 写文件」与「停 Host」。
+
+为什么别名要单独核：第 3.7 节的 `ls -l /dev/serial/by-id/` 只列出 by-id 名（2026-11-06 实测 `usb-1a86_USB_Single_Serial_5B14029263-if00 → ../../ttyACM0`、`…5B14111703-if00 → ../../ttyACM1`，`stdout/3.7b-serial-pi-20261106T062506Z.log`），从这份列表核不出 `am_arm_follower_*` 这两个别名是否存在、指向哪个口——两套名字不能互相代替。
 
 背景一句：离线核对（`docs/field-results.md`「离线核对（无新采集）· 左右夹爪行程差异」）发现 `arm_left_gripper` 的 `range` 是 2021-2072，只有 51 tick（`range_0_100` 下 4.48°），而 `arm_right_gripper` 是 2010-3479，1469 tick（129.14°）。两侧同为 `sts3250`、`drive_mode` 同为 0，根因未确认。`docs/ADR.md` D14 已定本轮不重标定，本步只做只读确认，判成因落在哪一侧。
 
@@ -866,7 +868,7 @@ run 4.2-all18-right ssh "$PI" "~/miniconda3/envs/lerobot_alohamini/bin/python /t
 
 | 项 | 怎么确认 | 填什么 |
 | --- | --- | --- |
-| 左 / 右总线别名的实际指向（复核） | §3.7 的 `run 3.7b-serial-pi ssh "$PI" 'ls -l /dev/serial/by-id/'` | 2026-10-25 已实测 `left→ttyACM0`、`right→ttyACM1`（见 `configs/site.yaml:2-3`）；换机、重插、换 USB 口后需复核 |
+| 左 / 右总线别名的实际指向（复核） | `run 3.7b2-serial-links ssh "$PI" 'ls -l /dev/am_arm_follower_left /dev/am_arm_follower_right'` | 判据：两个别名都存在且分别指向 `ttyACM0` / `ttyACM1`，与 `configs/site.yaml` 的 `left_port` / `right_port` 一致。2026-11-06 实测 `left → ttyACM0`、`right → ttyACM1`（`stdout/3.7b2-serial-links-20261106T062506Z.log`）；换机、重插、换 USB 口后需复核 |
 | 左总线上 ID8–11 是否在线 | 本节左总线那份日志里 `base_*` / `lift_axis` 的 `Model_Number` 是否回读到 | 读到 = 与源码一致；读不到 = 记现象原文，暂按「这台的底盘 / 升降接在别处」追查，不改脚本去猜端口 |
 | vendor Host 启动输出里的端口 | Host 启动日志原文（§6.1 的启动命令骨架） | 若出现别的串口名，把原文抄进记录 |
 | 底盘三轴与升降是否带电 | 本节读到的 `Torque_Enable` | 三个轮子与 `lift_axis` 各自的 `Torque_Enable` 值 |
@@ -1370,7 +1372,7 @@ Gate C 本身的零命令拒绝由离线测试锁住（现场拿不到就以它�
 | 结论 | 判据 | 记录怎么写 |
 | --- | --- | --- |
 | ① 目标被接受，停滞在伺服或机械侧 | 全步 `target_source=command`，且同一步内 `requested_target == accepted_target` 全段成立 | 写明「目标已被 Host 采纳」；电流走势作为旁证，并注明电流判读是否可用（第 6.2 节的结论） |
-| ② 目标被底层接管 | 任一步出现 `target_source` 为 `protection` 或 `watchdog` | 写明出现该值的 `step_index` 与帧数 |
+| ② 目标被底层接管 | 任一步出现 `target_source` 为 `protection` 或 `watchdog` | 写明出现该值的 `step_index` 与帧数。早于该轮第一条命令帧的那一帧不算：它记的是上一轮遗留的 `watchdog`（上一轮客户端结束后 Host 看门狗触发过，`target_source` 一直保持到下一个合法命令），与本轮无关，见 §10.5 M1 的「首帧 `target_source=watchdog`」段与 `docs/field-results.md` 2026-11-06 节 |
 | ③ 目标未及时接受 | `accepted_target` 相对 `requested_target` 滞后于同一序列的目标（同一行不相等，或目标要到后续帧才出现） | 写明首次出现差异的 `sample_sequence` |
 
 必须现场核实的一条：`hold_active` 在这版固件上是否恒 `False`。用 grep 取原文：
@@ -1400,7 +1402,11 @@ run 7.2b-host-tracking ssh "$PI" 'HOSTLOG=/tmp/site-host-<STAMP>.log; grep "\[HO
 
 ### 8.1 停 Host 不等于失力
 
-停 Host 之后手臂仍然带电保持。2026-10-25 停 Host 后读到的寄存器是 `Torque_Enable=1`、`Lock=0`，位置环还在通电，人手推就是顶着位置环。断电才失力。
+停 Host 之后手臂仍然带电保持。2026-10-25 停 Host 后读到的寄存器是 `Torque_Enable=1`、`Lock=0`，位置环还在通电，人手推就是顶着位置环。断电才失力。（2026-10-25 那次用的信号未记录；若是 `kill -9` 则与本段相容，若是 `kill -INT` 则与实测冲突，需复核。）
+
+**只有 `SIGINT` 会释放扭矩。** Host 收到 `SIGINT`（`kill -INT`）走 `except KeyboardInterrupt` → `finally` → `robot.disconnect()`，`disconnect()` 调 `left_bus.disconnect(self.config.disable_torque_on_disconnect)`，该字段默认 `True`，即释放扭矩。源码（本地 fork `ec65318f`；Pi 副本 `6aee1f81` 行号差 +33）：`alohamini_host.py:548-556`、`alohamini.py:1251-1253`、`config_alohamini.py:68`。现场：2026-11-06 实测 `kill -INT` 之后左总线两轴（ID1 / ID6）`Torque_Enable=0`（`stdout/rt-regs-verdict-20261106T083449Z.md` 第 1.2 节），Host 日志末两行 `Keyboard interrupt received. Exiting...` / `Shutting down AlohaMini Host.`（`stdout/rt-regs-host-verify-20261106T083449Z.log` 末两行）。`kill -9` 与 `SIGTERM` 不给进程收尾机会，扭矩保持带电：2026-11-06 实测 `kill -9` 后左总线 11 只电机 `Torque_Enable` 全 `1`（`stdout/10.5-m1-regs-final-20261106T073052Z.log`，11 个 `Torque_Enable = 1` 行）。`SIGTERM` 那一支本轮没有单独读数，是按「不给收尾机会」推的，**未验证**。
+
+另一条是**外部来源、非本轮实测**：写 `Goal_Position` 时固件会自置 `Torque_Enable=1`（厂商手册与社区帖两处，原文不在证据目录）。因此「读到的 `Torque_Enable=1`」本身不足以断定是谁写的。
 
 所以收工若要断电，先把手臂放到低位再断电，避开断电瞬间的下落。这条只约束断电时序，不改变任何一条退出码判据。
 
@@ -1584,13 +1590,35 @@ python examples/alohamini/teleoperate_bi.py \
 
 阈值（只有一条下发路径，所以只有一组数）：`--steps 10` 整轮 10° 时，每步目标是「当前反馈 + 1°」（`measure_latency.py:3093-3094` 每步都重读 `baseline_units` 再 `+delta_deg`），前一步没走到位的部分不带进下一步，因此**最后一步的 `Goal_Position − Present_Position` ≈ 11 tick**（1° ÷ 0.0879°/tick = 11.375，M0 取整 11 tick），**不是累积 110 tick**。
 
+**看门狗会改写 `Goal_Position`，让分支③ 假命中。** Host 在最后一条合法命令之后超过 `watchdog_timeout_ms`（默认 1000 ms）仍没收到新命令时，会把 `last_observation` 的 `*.pos` 当保持位重新下发，并把 `target_source` 置 `watchdog`。此时读到的 `Goal_Position − Present_Position` ≈ 1 tick，远小于 11 tick，**分支③「写没到总线」会假命中**。机理依据：判定式与保持位构造（`hold_action` 取 `last_observation` 的 `.pos`）在 `alohamini_host.py:348-362`、`:357` 置 `target_source`；默认超时 `1000` 在 `config_alohamini.py:122`（本地 fork `ec65318f` 只读核对；Pi 副本 `6aee1f81` 行号差 +33）。现场告警原文两行 `WARNING:root:Host command watchdog expired; stopping motion` 在 `stdout/site-host-20261106T074049Z.log` 第 16–17 行，**属 07:40:49Z 起的那个 Host 会话**（装的是 07:40 腕部轮与 07:46 pan 轮），不是「客户端先死」的专用证据。
+
+**首帧 `target_source=watchdog` 不代表本轮客户端先死。** `target_source` 是 Host 侧的持久状态：只在收到合法命令时置 `command`（`alohamini_host.py:330`）、看门狗触发时置 `watchdog`（`:357`）、监督纠偏时置 `protection`（`:373`），新客户端连上本身不改它。上一轮客户端结束（正常退出或被 kill）后 1 s 看门狗即触发，于是「上一轮客户端刚结束、Host 仍在跑」的会话里，新客户端连上的**第一条数据帧**就是 `watchdog`，早于它自己的第一条命令。2026-11-06 实测：`tracking/m1r3-pan-20261106T074620Z-safety.csv` 与 `tracking/slowvsstall-pan-20261106T090635Z-safety.csv` 各有且仅有 18 行 `watchdog`（18 只电机 × 1 帧），全部 `step_index=0`、`sample_sequence=2`，而各轮第一条命令帧在 `sample_sequence=3`；其余 5 份 sidecar（`m1r3-wrist`、`m2-pan`、`slowvsstall-wrist`、`final-rightpan`、`final-punchtest`）`watchdog` 帧数全为 0，首帧都是 `none`。
+
+可执行的三步（读寄存器之前做，做完再决定这一轮能不能用于分支③）：
+
+1. **主判据：时刻先后。** Host 的 `kill` 时刻必须早于客户端的收尾时刻（Host 死时客户端还在跑）。照 `stdout/10.5-m1-verdict-20261106T072606Z.md` 的「起止 UTC 时刻」表格式，把客户端 `kill -9` 与 Host `kill -9` 各自一行 UTC 时刻单列记下。Host 死在客户端之后（客户端先退出或先被 `kill`）→ 该轮作废。2026-11-06 的 07:26 那轮就是客户端先 `kill -9`（`07:26:48Z`）、Host 7 s 后才 `kill -9`（`07:26:55Z`），不符合本判据。
+2. **sidecar 检查只在该轮确实有 sidecar 时做。** 有 `tracking/tracking-10.5-m1-$STAMP-safety.csv` 时，只看**最后一帧 `command` 之后**是否出现 `watchdog`，不是「是否出现过」：
+
+   ```bash
+   CSV=$S4DIR/tracking/tracking-10.5-m1-$STAMP-safety.csv
+   ls -l "$CSV"                     # 无此文件 = 本轮无 sidecar，跳到第 3 步
+   LASTCMD=$(tr -d '\r' < "$CSV" | awk -F, 'NR>1 && $9=="command" && $2+0>m+0 {m=$2} END{print m}')
+   echo "last command frame: sample_sequence=$LASTCMD"
+   tr -d '\r' < "$CSV" | awk -F, -v last="$LASTCMD" 'NR>1 && $9=="watchdog" && $2+0>last+0 {print $2}' | sort -un
+   ```
+
+   判据：最后那条 `awk` 空输出 → 过了这一关；打印出任何 `sample_sequence` → 说明该客户端当时还在采样、却已 ≥1 s 没有发出被接受的命令（那几帧的 `target_source` 是 Host 的保持位改写），该轮读数**不能**用于分支③，改判「未落到分支」并重跑。两条实现要点：sidecar 是 CRLF 行尾，`tr -d '\r'` 不能省（不删 `\r` 时 `$9` 永远不等于 `watchdog`，检查会静默「通过」）；`$9` 是 `target_source`、`$2` 是 `sample_sequence`（列义见第 11 节）。
+
+   这一检查管不了「客户端先死」：sidecar 只记客户端收到的帧，客户端一断采样就不再落行（本仓库 `benchmarks/alohamini_io/measure_latency.py` 的 `_observe` 按新帧计快照，约 `:3058`），所以那种情形在本轮 sidecar 里根本看不到 `watchdog`——主判据只能靠第 1 步。首帧 `watchdog` 之所以也不算：它在第一条命令之前，是上一轮遗留（见上一段），与本轮客户端死活无关。
+3. **没有 sidecar 时以 Host 日志 + 时刻先后为准。** 按本节的跑动中 `kill -9` 流程（先杀 Host）时，客户端多半在收尾前就断了，`tracking/tracking-10.5-m1-$STAMP.csv` 与 sidecar 通常都不落盘——2026-11-06 的 07:26 那轮即是：`tracking/` 下没有任何 `tracking-10.5-m1-20261106T072606Z*`，该轮判读自记「无 CSV、无每步日志」（`stdout/10.5-m1-verdict-20261106T072606Z.md`「有效性质疑」段）。这种情况下第 2 步无从执行，判定只靠第 1 步的时刻先后，并查 Host 日志里有无 `Host command watchdog expired` 行（有则该轮视为目标被改写，不得当「写没到总线」的证据）。
+
 三分支判据：
 
 | 分支 | 读数形态 | 结论 | 记录怎么写 |
 | --- | --- | --- | --- |
 | ① | `Torque_Enable=0` | 该轴在运动过程中未使能（未使能路径） | 写明「未使能」，附 `Torque_Enable` 原文与读的电机 ID |
 | ② | `Goal_Position` 前进量达到 **≈ 11 tick**，而 `Present_Position` 不动 | 伺服**收到了目标但不响应**，对应候选根因「伺服保护锁存 / 力矩不足 / 机械」 | 三个数（起点 `Present_Position`、`Goal_Position`、`Present_Position`）逐值抄原文，算出前进量 |
-| ③ | `Goal_Position − Present_Position` 远小于 **11 tick**（两个读数近似相等） | 目标**根本没写进总线**（软件侧 / 总线写静默失败） | 写明「写没到总线」，附两个寄存器的原文 |
+| ③ | `Goal_Position − Present_Position` 远小于 **11 tick**（两个读数近似相等） | 目标**根本没写进总线**（软件侧 / 总线写静默失败） | 写明「写没到总线」，附两个寄存器的原文；**先过上面三步检查**（尤其第 2 步：最后一帧 `command` 之后不得出现 `watchdog`；无 sidecar 时靠第 1 步时刻先后 + Host 日志），否则本轮读数不得用于本分支 |
 
 留痕：`stdout/10.5-m1-$STAMP.{cmd,log,exit}`、`stdout/10.5-m1-kill-$STAMP.{cmd,log,exit}`、`stdout/10.5-m1-regs-$STAMP.log`；寄存器日志里要有六个寄存器的逐值原文与读的电机 ID 清单。
 
@@ -1614,9 +1642,12 @@ run 10.5-m2 env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pcoffeep/pi-w
 | 正向 0 / 反向正常 | **单向机械**问题（棘轮、单向卡阻类） |
 | 双向都 0 | **阈值型**（静摩擦 / 死区阈值把 11 tick 级别的目标吃掉了） |
 | 双向都按比例（例如都只走 1–2 tick） | **力矩不足** |
+| 双向都动、但**都低于命令量**（例如正向 1.8 tick/步、反向 4.2 tick/步，反向/正向 ≈ 2.33 倍） | **阈值型为主、叠加方向不对称**：既不是「单向机械」（另一向也不达标），也不是严格的「双向都 0 的阈值型」；记录时给出两向的 tick/步与比值，并注明「**不能据此判单向机械阻挡**」 |
 | 正向卡死（M1 走不动）+ **反向能动**（M2 位移明显大于 0） | **单向机械阻挡**：缆线绷紧、结构顶住、行程限制三类之一；定性到此完成，转机械检查 |
 
 最后一行是 **2026-11-05 之后项目方提出的机械假设，不是已验证结论**：它的意思是「同一台电机、同一个命令语义，反向能走而正向不走时，优先怀疑单方向的机械阻挡」。要判它成立，M1 与 M2 两轮的寄存器原文都得在盘，且 M2 的位移超过 3 tick（不是 1–2 tick 的抖动量）。
+
+2026-11-06 实测落在新增的「介于两档之间」那一档：左肩正向 15.82%（18.0 / 113.7527 tick，10 步合计 1.8 tick/步）、左肩反向 36.92%（42.0 tick，4.2 tick/步，反向/正向 2.33 倍）、右肩正向 11.43%（13.0 tick），三轮 10/10 步 `settled=False`。判读见 `stdout/10.5-m2r1-verdict-20261106T075623Z.md`（第 1.4、2.2 节）、`stdout/10.5-rightpan-judge-20261106T084419Z.txt`（第 3 节）。这一档只写「阈值型为主、叠加方向不对称」，不得据此判单向机械阻挡。
 
 留痕：`stdout/10.5-m2-$STAMP.{cmd,log,exit}`、`stdout/10.5-m2-kill-$STAMP.*`、`stdout/10.5-m2-regs-$STAMP.log` + 一份主 CSV（沿用 `--mode tracking` 的 tracking CSV 命名，见第 11 节）。
 
@@ -1772,23 +1803,23 @@ sidecar 写盘失败（`OSError`）也只打一条自己的警告，**退出码�
 - [x] 第 4.3 节两份 YAML 落盘，字段名与 `config/overlay.py` 一致，`load_settings(check_devices=False)` exit 0（2026-11-05 远程会话已满足，证据：`configs/template.yaml`、`configs/site.yaml`、`stdout/4.3e-load-check-20261105T063600Z.exit`，数字见 `docs/field-results.md` 2026-11-05 节）
 - [x] 第 5 节三条 rtt 各 exit 0、各 500 样本、CSV 各有数据行；`achieved_rate_hz` 与请求率的差距有记录；跨机那条给出 `net_rtt_estimate_s` p50 并与 `6.176 ms` 并列（2026-11-05 远程会话已满足跨机那条，证据：`rtt/rtt-net-cross-20261105T063600Z-2.csv`、`stdout/5.3-rtt-net-cross-2-*`，数字见 `docs/field-results.md` 2026-11-05 节）
 - [x] 第 6 节两段电流读数在盘（主路径 `latest_safety_status["currents_ma"]`，范式见 `stdout/6.1c-obs-idle-$STAMP.py`；`[Currents]` 日志路径当前不可依赖，见 §6.1），并写出结论：臂总线电流可判读，或不能判负载（2026-11-05 远程会话已满足，证据：`stdout/6.2b-analysis-20261105T063600Z.txt`、`stdout/7.2-analysis-20261105T063600Z.txt`，数字见 `docs/field-results.md` 2026-11-05 节）
-- [ ] 第 7.1 节若执行：每步的 `error_deg`、`overshoot_deg`、`settled` 齐全；`rise_90_time_s` 为空时写明原因；收尾 `hold_issued` 在报告里（未勾：`rise_90_time_s` 恒空，**原因未定位**——容差 `0.05°` 仍空，原假设被推翻）
+- [x] 第 7.1 节若执行：每步的 `error_deg`、`overshoot_deg`、`settled` 齐全；`rise_90_time_s` 为空时写明原因；收尾 `hold_issued` 在报告里（2026-11-06 到场窗口已满足：10 步的 `error_deg` / `overshoot_deg` / `settled` 与 `hold_issued=yes` 在 `stdout/10.5-m1r3-pan-20261106T074049Z.log:5`、`:11`，逐行表在 `tracking/m1r3-pan-20261106T074620Z.csv`；`rise_90_time_s` 为空的原因「残余 > 0.1 × 命令量、没有帧越过 90% 线」由 `stdout/slow-vs-stall-judge-20261106T090635Z.txt` 第 5.4 节逐轴核成立（腕收尾残余 0.1209° 对 0.100°、`pan` 0.8242° 对 0.100°），数字见 `docs/field-results.md` 2026-11-06 节。探针本身未改、以及「收敛之后会不会有 90% 交叉」仍未观测，这两件记在 `TODO.md` 的 `rise_90_time_s` 工程债行）
 - [x] 第 7.2 节：`target_source` 分布、`requested_target` 与 `accepted_target` 的比较、`current_ma` 走势三项有结论，且落到三类之一；`_joint_hold_goal` 有无写入点的 grep 原文在盘（2026-11-05 远程会话已满足，证据：`stdout/7.2-analysis-20261105T063600Z.txt`、`stdout/7.2-joint-hold-write-*`，数字见 `docs/field-results.md` 2026-11-05 节）
 - [x] sidecar 的四个数字有记录：每帧行数、`motor` 空行占比、`current_ma` 分布、`hold_active` 全列取值（safety sidecar 此前只有离线测试覆盖，真机首跑按这四项记）（2026-11-05 远程会话已满足，证据：`stdout/7.1-wrist-sidecar-try2-20261105T063600Z.log`，四项数字尚未在台账逐项登记；同一轮主表见已登记的 `stdout/7.1-wrist-try2-*`）
-- [ ] 第 8 节：断电与上电有记录，Host 停启有 PID 与两条命令原文，停机与重启时间都是 UTC（未勾：断电与上电**无记录**——无远程可控电源通道，待人工到现场；Host 停启有记录）
+- [ ] 第 8 节：断电与上电有记录，Host 停启有 PID 与两条命令原文，停机与重启时间都是 UTC（未勾：Host 停启有记录且时刻是 UTC（PID `1866`，`stdout/6.1a-host-pid-20261106T070942Z.log`；停机 `2026-11-06T09:08:01Z` + `kill_int_exit=0`，`stdout/4.1-host-int-20261106T090635Z.log`），但「断电与上电有记录」只有用户口述的换电（`stdout/scope-append-20261106T070942Z.md` ①），无仪器证据；断电前「把手臂放到低位」也没有现场记录）
 - [ ] `$S4DIR/stdout/` 里每步都有 `.cmd`、`.log`、`.exit` 三件套（未勾：缺 `stdout/6.1a-host-start-20261105T063600Z.exit`；6.1a 其余四个子步骤 `currents-peek` / `host-log-1` / `host-procs-1` / `wait-ports-1` 三件套齐全）
-- [x] 第 4.1c 节：`fingerprint-postpower-*.json` 在盘，`CALIB_FIELD_DIFFS: 0`，位置组 14 个 `arm_*` 每个 \|Δtick\| ≤ 3（已执行，判不可归因，基线已换）
+- [x] 第 4.1c 节：`fingerprint-postpower-*.json` 在盘，`CALIB_FIELD_DIFFS: 0`，位置组 8 只 `arm_*` 超 3 tick，已判**不可归因**（基线跨过试动，见 `docs/field-results.md` 2026-11-06 节），基线已换
 - [x] 第 4.2 节「全 18 电机静态体检」：左 11 / 右 7 两份日志都 `EXIT_CODE: 0`，18 个 `Model_Number` 与 `MODEL_NUMBER_TABLE` 相符，`Present_Voltage` 的 min / mean / max 有记录（已执行）
 - [x] 第 4.4 节：`examples/robot_dry_run.py` exit 0，stdout 有 `send_action 调用次数: 0 次`（已执行）
-- [ ] 第 4.5 节：`stash list` / `reflog` / `status --porcelain` 三份原文在盘，并落到「记录哈希 / 记录 reflog / 确认丢失」三支之一（未勾：本轮未跑）
+- [x] 第 4.5 节：`stash list` / `reflog` / `status --porcelain` 三份原文在盘，并落到「记录哈希 / 记录 reflog / 确认丢失」三支之一（2026-11-06 远程会话已满足，落「记录 reflog」支：`stash list` 与 `status --porcelain` 两份均 0 字节，`reflog --date=iso` 两行——`2026-10-25 09:17:30 checkout: moving from master to p1a-merged`、`09:22:01` fast-forward 到 `6aee1f81`；证据：`stdout/4.5a-stash-20261106T064822Z.log`、`stdout/4.5b-reflog-20261106T064822Z.log`、`stdout/4.5c-status-20261106T064822Z.log`，数字见 `docs/field-results.md` 2026-11-06 节）
 - [x] 第 7.1b 节：模型名故意写错的命令 exit 6 或 3 有 stderr 原文、无 CSV、命令行回显三件套，并写明落到哪一支（已执行（落 Gate B））
-- [ ] 第 10.5 节：teleop oracle 与 M1 / M2 各有一份读数记录，且每条结论都落到 §10.5 的分支之一（未勾：本轮未跑）
+- [ ] 第 10.5 节：teleop oracle 与 M1 / M2 各有一份读数记录，且每条结论都落到 §10.5 的分支之一（未勾：M1 / M2 在 2026-11-06 已有读数并落了分支——M1（`stdout/10.5-m1-verdict-20261106T072606Z.md`）字面命中分支③，其成因判为**疑似**看门狗改写（该轮无 CSV、无 sidecar、无 Host 日志原件，成因未定，见 `docs/field-results.md` 2026-11-06 节「未取到 / 未验证」）；M2 落在 §10.5 M2 判据表新增的「介于两档之间」档（`stdout/10.5-m2r1-verdict-20261106T075623Z.md`）；**teleop oracle 本轮没跑**，只有用户口述 vendor 遥操作能带动，无仪器证据，故三项不同时满足）
 
-打勾依据一律是 2026-11-05 远程会话的产物；勾选不等于该项已收口到验收基线，V 编号的实机证据仍按 `docs/acceptance-baseline.md` 填。
+打勾依据是 2026-11-05 远程会话与 2026-11-06 两段会话（远程会话 + 有人到场的到场窗口）的产物；勾选不等于该项已收口到验收基线，V 编号的实机证据仍按 `docs/acceptance-baseline.md` 填。
 
 判据里两条与数据形态有关的注意：
 
-- 2026-10-25 五份 tracking CSV 的 `received_monotonic_s` 与 `rise_90_time_s` 全空，同因：没有帧记到 90% 交点。**2026-11-05 用 `--settle-tolerance-deg 0.05`（小于 0.1°）跑三轴，`rise_90_ms count=0 p50=nan` 仍然为空，「容差取小就能补上这一列」的假设不成立**；三份 CSV 的 `rise_90_time_s` 仍全空。报告自带的说明是：要记一次 90% 交叉，需残余 ≤ `0.1 × delta` 且发生在 settle 循环结束之前，实测没发生。原因未定位，未验证。
+- 2026-10-25 五份 tracking CSV 的 `received_monotonic_s` 与 `rise_90_time_s` 全空，同因：没有帧记到 90% 交点。**2026-11-05 用 `--settle-tolerance-deg 0.05`（小于 0.1°）跑三轴，`rise_90_ms count=0 p50=nan` 仍然为空，「容差取小就能补上这一列」的假设不成立**；三份 CSV 的 `rise_90_time_s` 仍全空。报告自带的说明是：要记一次 90% 交叉，需残余 ≤ `0.1 × delta` 且发生在 settle 循环结束之前，实测没发生。2026-11-06 的 `slow-vs-stall` 判读把成因核到「残余 > 0.1 × 命令量、无帧越过 90% 线」（`stdout/slow-vs-stall-judge-20261106T090635Z.txt` 第 5.4 节，逐轴两行「成立」）；探针未改、以及「收敛之后会不会有 90% 交叉」仍未观测，这两件记在 `TODO.md` 的 `rise_90_time_s` 工程债行。
 - Mode B 只在 2026-10-25 跑过五次，都是左臂单关节、每步 1°。右臂、多关节联动、更大的单步行程都未跑过。
 
 ## 附录 A：两个脚本的完整参数表
