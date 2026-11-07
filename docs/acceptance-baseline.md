@@ -65,7 +65,7 @@ V11 仍是「部分」，缺口已由 `docs/ADR.md` D15 收口——帧平滑回
 
 实机侧已取的三条中 V12 已全实，V01、V10 仍只是部分：
 
-- V01 取到的是腕部一个关节的跟随证据（`arm_left_wrist_roll` 达成 `87.9%`，两步 `settled=True`）。肩部两轴未跟随（首次试动 `arm_left_shoulder_pan` `5.9%`，随后同一轴 `8.8%`、`arm_left_shoulder_lift` `13.2%`，全部 `settled=False`），原因排查中；判据里「不接主臂的 `connect` 成功记录」本轮未单独留存。
+- V01 取到的是腕部一个关节的跟随证据（`arm_left_wrist_roll` 达成 `87.9%`，两步 `settled=True`）。肩部两轴未跟随（首次试动 `arm_left_shoulder_pan` `5.9%`，随后同一轴 `8.8%`、`arm_left_shoulder_lift` `13.2%`，全部 `settled=False`），原因排查中；判据里「不接主臂的 `connect` 成功记录」本轮未单独留存。补证跑法与判据见 §2.5。
 - V10 取到的是 Gate F 第一段的拒绝记录（v1 宿主，退出码 `6`、零命令）。v2 宿主下第二段（换算字段不全时的拒绝）未触发、未验证，理由是 18/18 电机字段齐全，第二段不会拒。拒绝路径实机证据已取：2026-11-06 真机 exit 6 落 Gate B（厂商先降级 schema），零命令 + 无产物；Gate C 专属文案由离线测试锁定，真机链路不可达。
 - V12 已核对（离线，盘上真机数据）：`tools/verify_unit_consistency.py` 逐电机比对 18/18 两侧 `range_min`/`range_max` 完全相等（`homing_offset`/`id`/`drive_mode` 亦逐项相等），差异 0 个、退出码 `0`；`resolution` 全部 4096，`delta_deg` 列全为 `0.000`（它是两侧 range 相等的算术后果，不是第二重证据）。判据里「用它算出的 `deg_per_unit` 与标定文件 range 一致」这一条据此关闭。限定：本条只证明「两侧单位口径一致」，不含 URDF 限位交集；`deg_per_unit` 的绝对正确性无法用两份离线文件互证（`resolution` 只有指纹一个来源）。
 
@@ -77,3 +77,43 @@ V04（停止优先与条件恢复）、V05（反馈异常拦截与时效守护�
 
 理由：这四条判的是「出事时怎么处置」的横切能力（停机、反馈失效、过流、残差异常），每次运动都可能碰到，不是某个阶段的一次性里程碑。把它们计入某阶段的完成判据，会让阶段完成被一条与阶段目标无关的条目挡住；反过来，也不能因它们未取而判某阶段未完成。它们的实机证据仍按第 1 节各自填写，与阶段推进脱钩。
 
+### 2.5 V01 的实机证据补充：验证跑法（预写）
+
+V01 现在的实机证据只有一个腕部关节的跟随（`arm_left_wrist_roll` 达成 `87.9%`，两步 `settled=True`），肩部两轴未跟随，见 §2.3。本节写补证的跑法，**不改变 V01 当前状态**：跑完并拿到本节末尾的产物之后，才按 §2.2 把 V01 的实机证据列改成记录路径、并改 §2.3 的汇总数。
+
+**跑法**：机器人上电 → 按 `docs/s4-field-smoke.md` §6.1 起 Host（判据 `pid=` 与 `ready=1`）→ 左右 `shoulder_pan` 各跑一轮。关节选项是 `--joint`，取 `arm_left_shoulder_pan` / `arm_right_shoulder_pan`。以下只是**参数片段**，解释器 / `--host` / 脚本路径等前缀照 §7.1 `run 7.1-tracking` 那一行，只换关节并新增 `--anchor command`：
+
+```bash
+--mode tracking --enable-motion --anchor command --delta-deg 1.0 --steps 5 \
+--control-hz 50.0 --settle-tolerance-deg 0.05 --settle-timeout-s 2.0 --timeout-s 60 \
+--csv "$S4DIR/tracking/tracking-2.5-<side>-anchor-command-$STAMP.csv"
+```
+
+首跑 **3–5 步**（`--steps 5`）以安全为先；无异常后再考虑加步数。
+
+**`--anchor command` 的用意**：锚点从上一条**实测反馈**换成上一条**发出的 target**，误差跨步累积，肩轴才有机会破静摩擦。默认的 `--anchor present` 下每步目标都是「实测 + 1°」，走不到的部分不带进下一步。
+
+**通过判据**：
+
+| 判据 | 门槛 | 口径与来源 |
+| --- | --- | --- |
+| ① 运动帧 `requested_target == accepted_target` 占比 | **100%** | 沿用既有口径，2026-11-06 五轮 sidecar 运动帧 `requested == accepted` 全 100%（`902/902`、`800/800`、`909/909`、`804/804`、`906/906`） |
+| ② 每关节达成率 | **≥ 70%** | 基线（`--anchor present` 形态）取 `docs/field-results.md` 2026-11-06 节前几行：肩 `shoulder_pan` 10 步 × 1°（settle 2 s 窗、容差 0.05°）为左肩正向 `15.82%`、左肩反向 `36.92%`、右肩 `11.43%`（第二口径分别为 `14.95%` / `33.41%` / `9.67%`）；单步 15 s 长窗下肩 `17.582%`。取 70% 作保守门槛：明显高于基线、又不要求一步到位 |
+| ③ 左右任一侧不过 | 整轮不过 → 回查 | 先看 `current_ma` 与步末残余，再决定重跑或转排除法 |
+
+达成率口径沿用 `docs/s4-field-smoke.md` 第 7 节（净行程 ÷ 指令行程）。`--anchor command` 下指令行程按 `abs(delta_deg) × steps` 算成立；`--anchor present` 下相邻 target 的间距会被跟随误差吃掉，不能用 `delta_deg × steps` 当分母（见 `TODO.md` §4 的换算条目）。
+
+上表基线的三个百分数是**10 步 × 1°、settle 2 s 窗、容差 0.05°** 那一场的口径（`docs/field-results.md:45`），与单步 15 s 长窗的 `17.582%`（`:47`）不是同一个窗口，不要混成一个区间。对端量级参照只有口述：用户口述 vendor 遥操作同链路能带动肩部，量级约 100%（**口述，未取仪器证据**，见 `docs/field-results.md` 2026-11-06 节；本轮未跑 teleop oracle）。
+
+`70%` 与 A 阶段的 **≥50%** 不同源，不是同一场的同一门槛：A 阶段判据是 `--anchor present` + 10 步、门槛 `≥50%` 且步末残余 ≤2 tick（`TODO.md` §3.1、本文件 V01 行），本节是 `--anchor command` + 5 步、门槛 `≥70%`。
+
+**证据清单**：
+
+| 产物 | 内容 | 用来证明什么 |
+| --- | --- | --- |
+| 主 CSV（左右各一份） | 每步的 `cmd_deg` / `measured_deg` / `error_deg` / `settled` | 判据② 的达成率与步末残余 |
+| `<主CSV名>-safety.csv` sidecar | 每帧的 `requested_target` / `accepted_target` / `current_ma` | 判据①，以及不过时的回查材料 |
+| stdout note | `note: anchor=command` 那行 | 自证本轮锚点，避免与 `present` 的读数混比 |
+| scope 记录 | 步末 `Goal_Position − Present_Position` | 与 stdout 的 target 对账 |
+
+跑完拿到上表所列产物才改 V01 的实机证据列，否则 V01 维持现状。

@@ -983,7 +983,7 @@ run 4.3e-load-check uv run --no-sync python -c "from pathlib import Path; from a
 
 `watchdog_timeout_ms` 两处默认值不同：本库 `src/alohamini_cartesian/config/overlay.py` 的 `AlohaMiniSettings` 默认 `500`，厂商 `config_alohamini.py` 默认 `1000`（不写死行号：行号随厂商提交变化，2026-10-25 在 Pi 上约 122 行）。核对宿主实参时不要混用，样例里写实际生效的那个值。
 
-`robot_model` 两处默认值不一致：本库 `overlay.py:51` 是 `alohamini1`；两个现场脚本的 `DEFAULT_ROBOT_MODEL` 都是 `alohamini2pro`（`benchmarks/alohamini_io/capture_robot_fingerprint.py:90`、`benchmarks/alohamini_io/measure_latency.py:517`）。现场机型是 AlohaMini 2 Pro，而代码 Gate C 要求宿主 metadata 的 `robot_model` 与 `--robot-model` 相等（比对在 `measure_latency.py:2317-2330`）。现场 YAML 必须显式写 `robot_model: alohamini2pro`，不能用模板里的 `alohamini1`，否则配置表达的意思与真机不符。
+`robot_model` 两处默认值不一致：本库 `overlay.py:51` 是 `alohamini1`；两个现场脚本的 `DEFAULT_ROBOT_MODEL` 都是 `alohamini2pro`（`benchmarks/alohamini_io/capture_robot_fingerprint.py:90`、`benchmarks/alohamini_io/measure_latency.py:537`）。现场机型是 AlohaMini 2 Pro，而代码 Gate C 要求宿主 metadata 的 `robot_model` 与 `--robot-model` 相等（比对在 `measure_latency.py:2382-2396`）。现场 YAML 必须显式写 `robot_model: alohamini2pro`，不能用模板里的 `alohamini1`，否则配置表达的意思与真机不符。
 
 本节产物：`configs/template.yaml`、`configs/site.yaml`，`stdout/4.3a-host-args-*`、`4.3a2-host-cmdline-*`、`4.3b-host-config-*`、`4.3c-config-args-*`、`4.3d-config-classes-*`、`4.3e-load-check-*`，以及第 4.1、4.1b、4.2 节的产物。
 
@@ -1255,7 +1255,7 @@ run 6.2b-currents-move ssh "$PI" 'HOSTLOG=/tmp/site-host-<STAMP>.log; grep "\[Cu
 - [ ] 单臂：另一臂不参与本次运动
 - [ ] 空场：人物离场
 - [ ] 无负载：末端无负载
-- [ ] 行程按「1° × 更多步」规划：常量 `MAX_STEP_DELTA_DEG = 1.0`（`benchmarks/alohamini_io/measure_latency.py:498`）钳的是每步**幅度**、不钳符号——`resolve_delta_deg`（`:2075-2083`）返回 `min(max(delta, -1.0), 1.0)`，所以 `--delta-deg 2.0` 按 `1.0` 执行、`--delta-deg -2.0` 按 `-1.0` 执行、`--delta-deg -1.0` 原样执行。stdout 同时打印实际值与请求值，原文形如 `delta_deg=1.000 (requested 2.000)`。要更大总行程只能加 `--steps`，加大 `--delta-deg` 的幅度不产生更大位移
+- [ ] 行程按「1° × 更多步」规划：常量 `MAX_STEP_DELTA_DEG = 1.0`（`benchmarks/alohamini_io/measure_latency.py:504`）钳的是每步**幅度**、不钳符号——`resolve_delta_deg`（`:2118-2126`）返回 `min(max(delta, -1.0), 1.0)`，所以 `--delta-deg 2.0` 按 `1.0` 执行、`--delta-deg -2.0` 按 `-1.0` 执行、`--delta-deg -1.0` 原样执行。stdout 同时打印实际值与请求值，原文形如 `delta_deg=1.000 (requested 2.000)`。要更大总行程只能加 `--steps`，加大 `--delta-deg` 的幅度不产生更大位移
 - [ ] 断电开关在手边，可随时按下
 
 本文里的 Gate A–F 指 `benchmarks/alohamini_io/measure_latency.py` 里的运行时门禁，即发命令前的六道检查：
@@ -1266,7 +1266,7 @@ run 6.2b-currents-move ssh "$PI" 'HOSTLOG=/tmp/site-host-<STAMP>.log; grep "\[Cu
 | B | 目标关节出现在首帧观测里 | exit 6 |
 | C | 宿主 metadata 的 `robot_model` 非空，且与 `--robot-model` 相等 | exit 6 |
 | D | 该关节基线反馈是有限数 | exit 6 |
-| E | `delta_deg != 0` 且 `steps >= 1`，且 `\|delta_deg\| × steps <= 20.0`（**负值合法**，负号表示朝反方向走；判总量按绝对值，`benchmarks/alohamini_io/measure_latency.py:2362`、`:2371-2375`） | exit 6 |
+| E | `delta_deg != 0` 且 `steps >= 1`，且 `\|delta_deg\| × steps <= 20.0`（**负值合法**，负号表示朝反方向走；判总量按绝对值，`benchmarks/alohamini_io/measure_latency.py:2405`、`:2414-2418`） | exit 6 |
 | F | ① metadata `schema_version` 必须等于 `2`；`True` 与字符串 `"2"` 被拒，**浮点 `2.0` 实现上会被放行**；② 该关节的 deg-per-unit 能从 v2 校准表算出 | exit 6，零命令 |
 
 Gate F 第①条的判断式在 `benchmarks/alohamini_io/measure_latency.py`，原文 `isinstance(schema_version, bool) or schema_version != HOST_METADATA_SCHEMA_VERSION`（`HOST_METADATA_SCHEMA_VERSION = 2`）。`2.0 != 2` 在 Python 里为 `False`，所以浮点 `2.0` 与整数 `2` 同路放行；`"2" != 2` 为 `True`，字符串被拒。
@@ -1288,7 +1288,7 @@ run 7.1-tracking env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pcoffeep
 | `--mode tracking` | 必填 | 不写就落回 `rtt`，只采观测 |
 | `--enable-motion` | 必填 | 代码 Gate A 的第一个条件 |
 | `--joint` | `arm_left_shoulder_pan.pos`（先左臂单关节） | 代码 Gate A 的第二个条件；`.pos` 后缀可省 |
-| `--delta-deg` | `1.0` | 幅度被硬性钳到 `1.0°`（常量 `MAX_STEP_DELTA_DEG`，`:498`），**符号保留**：`-1.0` 按 `-1.0` 执行、`-2.0` 钳成 `-1.0`；`0` 是用法错误（exit 2）。负值即朝反方向 |
+| `--delta-deg` | `1.0` | 幅度被硬性钳到 `1.0°`（常量 `MAX_STEP_DELTA_DEG`，`:504`），**符号保留**：`-1.0` 按 `-1.0` 执行、`-2.0` 钳成 `-1.0`；`0` 是用法错误（exit 2）。负值即朝反方向 |
 | `--anchor` | `present`（默认；验证误差累积形态时用 `command`） | 两模式只差目标锚在哪：`present` 每步重读实测位置、把目标放在「实测加 `delta_deg`」上，lead 只有一步、不跨步累积；`command` 锚在上一步发出的 target（首步落回实测），lead 跨步累积。指标受影响：`command` 的一步可能补掉跨了几步的 lead，`rise_90_time_s` 提前记满、`overshoot_deg` 变成（行程 − 一步 delta）、`error_deg` 停在累积 lead 上，所以这三个量与 `present` 不能横向比较。CSV 与 sidecar 没有锚点列，只能靠 stdout 那行 `note: anchor=command: …` 区分模式，归档时 stdout 必须与 CSV 一起存。物理风险：`command` 下 Gate E 仍按 `\|delta\| × steps <= 20.0` 判，`--steps 20 --delta-deg 1.0` 合法、lead 可积到 20°，静摩擦一旦破开，整段 lead 可能一次性释放；首跑用 3–5 步 |
 | `--steps` | 先 `5`，成功后再说 | `\|delta\| × steps` 必须不超过 20.0°；默认 20 步、每步 1.0° 正好顶在上限；`--delta-deg` 传负值时上限按绝对值算，符号不影响上限 |
 | `--control-hz` | `50.0`（默认） | 两条命令最小间隔 1/50 s = 20 ms；必须有限且不小于 1，`inf`/`nan` 被拒 |
@@ -1296,11 +1296,11 @@ run 7.1-tracking env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pcoffeep
 | `--settle-timeout-s` | `2.0` | 默认 `1.0` s，20 ms 命令节奏下每步预算偏紧 |
 | `--timeout-s` | `60` | 默认 `30` s 对多步加 settle 偏紧，中途超时会以 exit 1 结束 |
 
-`--delta-deg` 的幅度上限与 stdout 表现：常量 `MAX_STEP_DELTA_DEG = 1.0`（`benchmarks/alohamini_io/measure_latency.py:498`），`resolve_delta_deg`（`:2075-2083`）的实现是 `min(max(delta, -MAX_STEP_DELTA_DEG), MAX_STEP_DELTA_DEG)`——**钳的是幅度，不钳符号**。请求 `--delta-deg 2.0` 时按 1.0 执行，请求 `-2.0` 时按 -1.0 执行，请求 `-1.0` 时原样执行。report 首部把实际值与请求值都打印出来，原文形如 `delta_deg=1.000 (requested 2.000)`（打印在 `measure_latency.py:3291-3292`）。要凑更大总行程，只能改成「1° × 更多步」，加大 `--delta-deg` 的幅度无效。
+`--delta-deg` 的幅度上限与 stdout 表现：常量 `MAX_STEP_DELTA_DEG = 1.0`（`benchmarks/alohamini_io/measure_latency.py:504`），`resolve_delta_deg`（`:2118-2126`）的实现是 `min(max(delta, -MAX_STEP_DELTA_DEG), MAX_STEP_DELTA_DEG)`——**钳的是幅度，不钳符号**。请求 `--delta-deg 2.0` 时按 1.0 执行，请求 `-2.0` 时按 -1.0 执行，请求 `-1.0` 时原样执行。report 首部把实际值与请求值都打印出来，原文形如 `delta_deg=1.000 (requested 2.000)`（打印在 `measure_latency.py:3369-3370`）。要凑更大总行程，只能改成「1° × 更多步」，加大 `--delta-deg` 的幅度无效。
 
-横幅里那句 `note: settle tolerance <X> deg >= 0.1 * delta (<Y> deg)`（`:3349-3353`）有一处既有文案瑕疵：标签写的是 `0.1 * delta`，括号里的 `<Y>` 打印的却是 **`delta` 本身**。判读时按 `delta` 本身读那个数，不要把它当成「0.1 × delta 的下限值」。该瑕疵已登记在 `TODO.md`。
+横幅里那句 `note: settle tolerance <X> deg >= 0.1 * delta (<Y> deg)`（`:3427-3431`）有一处既有文案瑕疵：标签写的是 `0.1 * delta`，括号里的 `<Y>` 打印的却是 **`delta` 本身**。判读时按 `delta` 本身读那个数，不要把它当成「0.1 × delta 的下限值」。该瑕疵已登记在 `TODO.md`。
 
-负值合法这条与退出码的关系：`--delta-deg 0` 才是用法错误（exit 2，stderr 原文 `--delta-deg must be a finite and non-zero number (got 0.0); negative steps are legal, a zero step commands nothing`，判据在 `:1755`）；`--delta-deg -1` 一路过到 connect，本地实测主环境无 `lerobot` 时以 exit 3 结束，不是 2。
+负值合法这条与退出码的关系：`--delta-deg 0` 才是用法错误（exit 2，stderr 原文 `--delta-deg must be a finite and non-zero number (got 0.0); negative steps are legal, a zero step commands nothing`，判据在 `:1798`）；`--delta-deg -1` 一路过到 connect，本地实测主环境无 `lerobot` 时以 exit 3 结束，不是 2。
 
 关于 `rise_90_time_s` 为空：源码的说法是这一列 can be empty，即**可能**为空。是否为空取决于该关节是否在同一次轮询里越过 90% 线；容差取小未必空，取大也未必不空。
 
@@ -1334,7 +1334,7 @@ run 7.1b-gatec-reverse env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pc
 | 分支 | 现象 | 结论与记录 |
 | --- | --- | --- |
 | ① 真机主支（2026-11-06 实测） | exit **6**；stderr 原文四行：厂商客户端先打 `ERROR:root:Error processing observation data, serving last observation: Host robot_model does not match the client configuration`，随后本库打 `Gate B refused: 'arm_left_shoulder_pan.pos' is not part of the connected state schema.`（`available: forward, wrist_right`）与 `Check --joint and --robot-model against the host side; nothing was commanded.`；无 CSV（`ls` 报 `No such file or directory`） | 记 Gate B 反向拒绝成立：厂商客户端先按 `robot_model` 把观测 schema 降级成只剩相机键，本库的键存在性检查先拦下，命令一次没下发 |
-| ② 不可达 | Gate C 文案 `Gate C refused: the host reports robot_model='alohamini2pro' but --robot-model='alohamini2' was requested.`（`benchmarks/alohamini_io/measure_latency.py:2349-2353`） | **真机链路不可达**：Gate B 在它之前就拒了。Gate C 的零命令拒绝只能由离线测试锁定（见下） |
+| ② 不可达 | Gate C 文案 `Gate C refused: the host reports robot_model='alohamini2pro' but --robot-model='alohamini2' was requested.`（`benchmarks/alohamini_io/measure_latency.py:2392-2396`） | **真机链路不可达**：Gate B 在它之前就拒了。Gate C 的零命令拒绝只能由离线测试锁定（见下） |
 
 机理：厂商客户端解每一帧观测时拿 metadata 的 `robot_model` 与自己的配置比对，不一致就打一条 ERROR 并退回上一帧观测（`serving last observation`），此时状态 schema 里已没有关节键；本库的键存在性检查（Gate B）按 `--joint` 找不到键，直接以 `6` 退出，Gate C 的模型名比对根本没走到。**这是厂商行为，不改 vendor，也不为凑 Gate C 去改本库代码。** Gate B 同样是有效的「零命令」证据。
 
@@ -1492,7 +1492,7 @@ run 8.2b-host-verify ssh "$PI" 'pgrep -af "alohamini_host|lerobot"; ss -ltnp | g
 
 ### 退出码 2 的全部触发点
 
-参数解析失败，一律 `2`，不经过任何 `EXIT_*` 常量；所有判定都在打开任何 socket 与调用 `client_factory(...)` 之前完成。`measure`（rtt 与 tracking 共用同一个 `parse_args`，rtt 也查这些旋钮）：argparse 自身产生的用法错误 —— 未知选项、缺少 `--host`、`--mode` 不在 `rtt`/`tracking`、`--anchor` 不在 `{present,command}`（stderr 原文 `measure_latency.py: error: argument --anchor: invalid choice: 'bogus' (choose from present, command)`，`--mode rtt` 接受该参数并忽略）、任一 `type=` 转换失败（`--port` / `--samples` / `--request-window` / `--steps` 非整数，或任一 `type=float` 选项不是可解析的数值文本；`--csv` 的 `type=Path` 对命令行字符串不会抛，不在此列）；整数下界 3 项 —— `--samples < 1`、`--request-window < 1`、`--steps <= 0`；「有限且带符号」同查 7 项 —— `--rate-hz`（有限且 `> 0`）、`--control-hz`（有限且 `>= 1`）、`--host-loop-hz`（有限且 `> 0`）、`--timeout-s`（有限且 `> 0`）、`--settle-timeout-s`（有限且 `> 0`）、`--settle-tolerance-deg`（有限且 `>= 0`，`0` 合法即最严格设置）、`--delta-deg`（有限且**非零**，`0` 与 `-0.0` 都落 `2`，负值合法；判据 `measure_latency.py:1755`），非有限值（`nan` / `inf`，含 `float()` 后变成 `inf` 的 `1e400`）与不满足符号条件的值都落 `2`；交叉校验 1 项 —— `--settle-tolerance-deg >= abs(resolve_delta_deg(args))`（与钳到 1.0° 幅度上限之后的**有效 delta 的绝对值**比较，`measure_latency.py:1769-1774`；实测 stderr 原文 `must be below the effective --delta-deg magnitude`）。`capture` 的数值校验只有 2 项 —— `--samples < 1`、`--timeout-s` 有限且 `> 0`（不查 `--rate-hz` / `--control-hz` 之类），另加同一形状的 argparse 用法错误（未知选项、缺少 `--host`、`--port` 非整数）。以上为 `2` 的全部触发点。幅度钳位本身不产生 `2`：超过 `1.0°` 的 `--delta-deg` 由 `resolve_delta_deg` 静默钳（`measure_latency.py:1741-1750` 的注释写明这是有意的），只有 `0` 才拒。合法预算在运行中到期不走 `2`：`capture` 落 `4`，`measure` 的 rtt 落 `7`、tracking 落 `1`
+参数解析失败，一律 `2`，不经过任何 `EXIT_*` 常量；所有判定都在打开任何 socket 与调用 `client_factory(...)` 之前完成。`measure`（rtt 与 tracking 共用同一个 `parse_args`，rtt 也查这些旋钮）：argparse 自身产生的用法错误 —— 未知选项、缺少 `--host`、`--mode` 不在 `rtt`/`tracking`、`--anchor` 不在 `{present,command}`（stderr 原文 `measure_latency.py: error: argument --anchor: invalid choice: 'bogus' (choose from present, command)`，`--mode rtt` 接受该参数并忽略）、任一 `type=` 转换失败（`--port` / `--samples` / `--request-window` / `--steps` 非整数，或任一 `type=float` 选项不是可解析的数值文本；`--csv` 的 `type=Path` 对命令行字符串不会抛，不在此列）；整数下界 3 项 —— `--samples < 1`、`--request-window < 1`、`--steps <= 0`；「有限且带符号」同查 7 项 —— `--rate-hz`（有限且 `> 0`）、`--control-hz`（有限且 `>= 1`）、`--host-loop-hz`（有限且 `> 0`）、`--timeout-s`（有限且 `> 0`）、`--settle-timeout-s`（有限且 `> 0`）、`--settle-tolerance-deg`（有限且 `>= 0`，`0` 合法即最严格设置）、`--delta-deg`（有限且**非零**，`0` 与 `-0.0` 都落 `2`，负值合法；判据 `measure_latency.py:1798`），非有限值（`nan` / `inf`，含 `float()` 后变成 `inf` 的 `1e400`）与不满足符号条件的值都落 `2`；交叉校验 1 项 —— `--settle-tolerance-deg >= abs(resolve_delta_deg(args))`（与钳到 1.0° 幅度上限之后的**有效 delta 的绝对值**比较，`measure_latency.py:1812-1817`；实测 stderr 原文 `must be below the effective --delta-deg magnitude`）。`capture` 的数值校验只有 2 项 —— `--samples < 1`、`--timeout-s` 有限且 `> 0`（不查 `--rate-hz` / `--control-hz` 之类），另加同一形状的 argparse 用法错误（未知选项、缺少 `--host`、`--port` 非整数）。以上为 `2` 的全部触发点。幅度钳位本身不产生 `2`：超过 `1.0°` 的 `--delta-deg` 由 `resolve_delta_deg` 静默钳（`measure_latency.py:1784-1793` 的注释写明这是有意的），只有 `0` 才拒。合法预算在运行中到期不走 `2`：`capture` 落 `4`，`measure` 的 rtt 落 `7`、tracking 落 `1`
 
 ### 退出码 `9` 的三种形态
 
@@ -1565,7 +1565,7 @@ python examples/alohamini/teleoperate_bi.py \
 
 步骤：
 
-1. 发一条整轮命令：`--steps 10` + `--delta-deg 1.0`，即 10 步 × 1°，走的是第 7.1 节已跑通的连续路径。关节取 `arm_left_shoulder_pan` 或 `arm_left_shoulder_lift`。**不要试图用 `--delta-deg 10` 一次下发 10°**：常量 `MAX_STEP_DELTA_DEG = 1.0`（`benchmarks/alohamini_io/measure_latency.py:498`）把幅度钳回 1.0°，`--delta-deg 10` 只会按 1.0° 执行。
+1. 发一条整轮命令：`--steps 10` + `--delta-deg 1.0`，即 10 步 × 1°，走的是第 7.1 节已跑通的连续路径。关节取 `arm_left_shoulder_pan` 或 `arm_left_shoulder_lift`。**不要试图用 `--delta-deg 10` 一次下发 10°**：常量 `MAX_STEP_DELTA_DEG = 1.0`（`benchmarks/alohamini_io/measure_latency.py:504`）把幅度钳回 1.0°，`--delta-deg 10` 只会按 1.0° 执行。
 
    ```bash
    run 10.5-m1 env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python benchmarks/alohamini_io/measure_latency.py --host "$PI_HOST" --mode tracking --enable-motion --joint arm_left_shoulder_pan.pos --delta-deg 1.0 --steps 10 --control-hz 50.0 --settle-tolerance-deg 0.05 --settle-timeout-s 2.0 --timeout-s 60 --csv "$S4DIR/tracking/tracking-10.5-m1-$STAMP.csv"
@@ -1577,7 +1577,7 @@ python examples/alohamini/teleoperate_bi.py \
    run 10.5-m1-kill ssh "$PI" 'sleep 3; kill -9 <PID>; echo kill_exit=$?'
    ```
 
-   `<PID>` 取第 3.2 节 `3.2-host-procs` 读到的 Host 进程号。为什么用固定墙钟而不是「等 `.log` 里出现某一行」：`--mode tracking` 在跑动期间不打印逐步进度（`benchmarks/alohamini_io/measure_latency.py` 全文无 `flush=True`，跑动期只有 `:3340-3343` 的横幅，明细要等 `:3465` 的报告），而第 2 节的 `run` 把 stdout 重定向进 `.log` 并在命令返回后才 `cat`，所以 `.log` 不是活的监视面。时间预算：`--steps 10`、每步 settle 上限 `2.0 s`，整轮最长约 `20 s`，`sleep 3` 时一定还在跑。若现场改小了 `--settle-timeout-s`，把 `sleep` 按同一比例改小，保持「不超过整轮预算的 1/3」。
+   `<PID>` 取第 3.2 节 `3.2-host-procs` 读到的 Host 进程号。为什么用固定墙钟而不是「等 `.log` 里出现某一行」：`--mode tracking` 在跑动期间不打印逐步进度（`benchmarks/alohamini_io/measure_latency.py` 全文无 `flush=True`，跑动期只有 `:3418-3421` 的横幅，明细要等 `:3555` 的报告），而第 2 节的 `run` 把 stdout 重定向进 `.log` 并在命令返回后才 `cat`，所以 `.log` 不是活的监视面。时间预算：`--steps 10`、每步 settle 上限 `2.0 s`，整轮最长约 `20 s`，`sleep 3` 时一定还在跑。若现场改小了 `--settle-timeout-s`，把 `sleep` 按同一比例改小，保持「不超过整轮预算的 1/3」。
 
 3. 立刻读寄存器（Host 已死，串口空闲），读法沿用第 4.2 节的只读脚本范式（同一套 `run` 包装、同一套脚本副本落 `$S4DIR/stdout/` 的纪律）。
 
@@ -1591,7 +1591,7 @@ python examples/alohamini/teleoperate_bi.py \
 
 要读的六个寄存器（左总线 ID1 / ID2 / ID6 各一遍）：`Torque_Enable`、`Goal_Position`、`Present_Position`、`Status`、`Present_Temperature`、`Present_Voltage`。
 
-阈值（以下这一组数是默认 `--anchor present` 的口径）：`--steps 10` 整轮 10° 时，每步目标是「当前反馈 + 1°」（约 `measure_latency.py:3149-3167` 每步都重读 `baseline_units` 再 `+delta_deg`），前一步没走到位的部分不带进下一步，因此**最后一步的 `Goal_Position − Present_Position` ≈ 11 tick**（1° ÷ 0.0879°/tick = 11.375，M0 取整 11 tick），**不是累积 110 tick**。`--anchor command` 是另一条下发路径：目标锚在上一步发出的 target 上、lead 跨步累积，同一个读数变成 `steps × \|delta\|` 量级（`--steps 10 --delta-deg 1.0` 时约 110 tick）。读寄存器前先确认这次 run 用的哪个锚点：stdout 有 `note: anchor=command` 那行就是 `command`，没有这行就是默认 `present`（这行只在 `command` 模式打）。
+阈值（以下这一组数是默认 `--anchor present` 的口径）：`--steps 10` 整轮 10° 时，每步目标是「当前反馈 + 1°」（约 `measure_latency.py:3149-3168` 每步都重读 `baseline_units` 再 `+delta_deg`），前一步没走到位的部分不带进下一步，因此**最后一步的 `Goal_Position − Present_Position` ≈ 11 tick**（1° ÷ 0.0879°/tick = 11.375，M0 取整 11 tick），**不是累积 110 tick**。`--anchor command` 是另一条下发路径：目标锚在上一步发出的 target 上、lead 跨步累积，同一个读数变成 `steps × \|delta\|` 量级（`--steps 10 --delta-deg 1.0` 时约 110 tick）。读寄存器前先确认这次 run 用的哪个锚点：stdout 有 `note: anchor=command` 那行就是 `command`，没有这行就是默认 `present`（这行只在 `command` 模式打）。
 
 **看门狗会改写 `Goal_Position`，让分支③ 假命中。** Host 在最后一条合法命令之后超过 `watchdog_timeout_ms`（默认 1000 ms）仍没收到新命令时，会把 `last_observation` 的 `*.pos` 当保持位重新下发，并把 `target_source` 置 `watchdog`。此时读到的 `Goal_Position − Present_Position` ≈ 1 tick，远小于 11 tick，**分支③「写没到总线」会假命中**。机理依据：判定式与保持位构造（`hold_action` 取 `last_observation` 的 `.pos`）在 `alohamini_host.py:348-362`、`:357` 置 `target_source`；默认超时 `1000` 在 `config_alohamini.py:122`（本地 fork `ec65318f` 只读核对；Pi 副本 `6aee1f81` 行号差 +33）。现场告警原文两行 `WARNING:root:Host command watchdog expired; stopping motion` 在 `stdout/site-host-20261106T074049Z.log` 第 16–17 行，**属 07:40:49Z 起的那个 Host 会话**（装的是 07:40 腕部轮与 07:46 pan 轮），不是「客户端先死」的专用证据。
 
@@ -1612,7 +1612,7 @@ python examples/alohamini/teleoperate_bi.py \
 
    判据：最后那条 `awk` 空输出 → 过了这一关；打印出任何 `sample_sequence` → 说明该客户端当时还在采样、却已 ≥1 s 没有发出被接受的命令（那几帧的 `target_source` 是 Host 的保持位改写），该轮读数**不能**用于分支③，改判「未落到分支」并重跑。两条实现要点：sidecar 是 CRLF 行尾，`tr -d '\r'` 不能省（不删 `\r` 时 `$9` 永远不等于 `watchdog`，检查会静默「通过」）；`$9` 是 `target_source`、`$2` 是 `sample_sequence`（列义见第 11 节）。
 
-   这一检查管不了「客户端先死」：sidecar 只记客户端收到的帧，客户端一断采样就不再落行（本仓库 `benchmarks/alohamini_io/measure_latency.py` 的 `_observe` 按新帧计快照，约 `:3058`），所以那种情形在本轮 sidecar 里根本看不到 `watchdog`——主判据只能靠第 1 步。首帧 `watchdog` 之所以也不算：它在第一条命令之前，是上一轮遗留（见上一段），与本轮客户端死活无关。
+   这一检查管不了「客户端先死」：sidecar 只记客户端收到的帧，客户端一断采样就不再落行（本仓库 `benchmarks/alohamini_io/measure_latency.py` 的 `_observe` 按新帧计快照，约 `:3120`），所以那种情形在本轮 sidecar 里根本看不到 `watchdog`——主判据只能靠第 1 步。首帧 `watchdog` 之所以也不算：它在第一条命令之前，是上一轮遗留（见上一段），与本轮客户端死活无关。
 3. **没有 sidecar 时以 Host 日志 + 时刻先后为准。** 按本节的跑动中 `kill -9` 流程（先杀 Host）时，客户端多半在收尾前就断了，`tracking/tracking-10.5-m1-$STAMP.csv` 与 sidecar 通常都不落盘——2026-11-06 的 07:26 那轮即是：`tracking/` 下没有任何 `tracking-10.5-m1-20261106T072606Z*`，该轮判读自记「无 CSV、无每步日志」（`stdout/10.5-m1-verdict-20261106T072606Z.md`「有效性质疑」段）。这种情况下第 2 步无从执行，判定只靠第 1 步的时刻先后，并查 Host 日志里有无 `Host command watchdog expired` 行（有则该轮视为目标被改写，不得当「写没到总线」的证据）。
 
 三分支判据：
@@ -1629,7 +1629,7 @@ python examples/alohamini/teleoperate_bi.py \
 
 做法：与 M1 逐项镜像，只改两处：
 
-- 加 `--delta-deg -1`（负值自 `321c348` 起合法，幅度仍钳 1°，符号在钳位后保留：`measure_latency.py:2075-2083`）；
+- 加 `--delta-deg -1`（负值自 `321c348` 起合法，幅度仍钳 1°，符号在钳位后保留：`measure_latency.py:2118-2126`）；
 - 产物名换成 `10.5-m2-*`。
 
 其余全同：同一关节、`--steps 10`、`--control-hz 50.0`、`--settle-tolerance-deg 0.05`、`--settle-timeout-s 2.0`、`--timeout-s 60`、同样在跑动中对 Host `kill -9`、同样读六个寄存器（ID1 / ID2 / ID6）、同样先满足「手臂放低位或有人承托」的硬前置。
@@ -1736,7 +1736,7 @@ $S4DIR/                       # = ~/pi-workspace/alohamini-cartesian-teleop/evid
 
 `--mode tracking` 除主 CSV 外还会写第二份文件：safety 快照 sidecar（贴着主文件写的副产物）。主 CSV 仍是 14 列、一行一步；sidecar 是长表，**每帧每电机一行**。安全面为何单独成册而不进 14 列，见 `docs/ADR.md` D18。
 
-**文件名规则**（`safety_csv_path`，`benchmarks/alohamini_io/measure_latency.py:1256`）：与主 CSV 同目录，主文件名去掉尾部 `.csv` 再加 `-safety.csv`。
+**文件名规则**（`safety_csv_path`，`benchmarks/alohamini_io/measure_latency.py:1289`）：与主 CSV 同目录，主文件名去掉尾部 `.csv` 再加 `-safety.csv`。
 
 | 主 CSV | 对应 sidecar |
 | --- | --- |
@@ -1746,7 +1746,7 @@ $S4DIR/                       # = ~/pi-workspace/alohamini-cartesian-teleop/evid
 
 **产生条件**：只在 `--mode tracking` 产生；`--mode rtt` 不产生（该模式不读 `latest_safety_status`）。
 
-**9 列**（`SAFETY_CSV_FIELDS`，`:606`，顺序固定）：
+**9 列**（`SAFETY_CSV_FIELDS`，`:626`，顺序固定）：
 
 | 列 | 含义 |
 | --- | --- |
@@ -1855,10 +1855,10 @@ sidecar 写盘失败（`OSError`）也只打一条自己的警告，**退出码�
 | `--host-loop-hz` | 否 | `50.0` | 必须有限且大于 0（否则 exit 2） | 宿主主循环频率，决定相位项与排队项 |
 | `--enable-motion` | 否 | 开关，默认关 | 无 | 代码 Gate A 的第一个条件 |
 | `--joint` | 否 | 无 | tracking 模式实质必填 | 要步进的关节；代码 Gate A 的第二个条件 |
-| `--delta-deg` | 否 | `1.0` | 必须有限且**非零**（`0` 落 exit 2）；幅度被钳到 `±1.0`、符号保留（`measure_latency.py:498`、`:2075-2083`） | 每步目标增量（度）；负值即朝反方向 |
-| `--steps` | 否 | `20` | 不小于 1（否则 exit 2） | 步数；`\|delta\| × steps` 受 20.0° 上限约束（`measure_latency.py:2371-2375`） |
+| `--delta-deg` | 否 | `1.0` | 必须有限且**非零**（`0` 落 exit 2）；幅度被钳到 `±1.0`、符号保留（`measure_latency.py:504`、`:2118-2126`） | 每步目标增量（度）；负值即朝反方向 |
+| `--steps` | 否 | `20` | 不小于 1（否则 exit 2） | 步数；`\|delta\| × steps` 受 20.0° 上限约束（`measure_latency.py:2414-2418`） |
 | `--settle-timeout-s` | 否 | `1.0` | 必须有限且大于 0（否则 exit 2） | 每步的稳定判定预算 |
-| `--settle-tolerance-deg` | 否 | `0.15` | 必须有限且不小于 0（`0` 合法）；且必须小于 clamp 后有效 delta 的**绝对值**；两者违规均 exit 2（`measure_latency.py:1769-1774`） | 稳定判定的容差（度） |
+| `--settle-tolerance-deg` | 否 | `0.15` | 必须有限且不小于 0（`0` 合法）；且必须小于 clamp 后有效 delta 的**绝对值**；两者违规均 exit 2（`measure_latency.py:1812-1817`） | 稳定判定的容差（度） |
 | `--anchor` | 否 | `present` | 只能取 `present` / `command`（其它值参数解析失败 exit 2）；只在 `--mode tracking` 生效，`--mode rtt` 接受该参数并忽略 | 每步目标的锚点：`present` 锚实测位置，lead 只有一步；`command` 锚上一步发出的 target（首步回落实测），lead 跨步累积 |
 
 `measure` 的 `--help` 用的是 `RawDescriptionHelpFormatter`，不打印默认值。上表默认值来自源码常量。

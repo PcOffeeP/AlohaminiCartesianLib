@@ -111,6 +111,8 @@ deg_per_unit = conversion.deg_per_unit
 
 控制层每帧有安全门禁：关节步长门禁（默认 `2.0°`/周期）与领先夹紧（lead clamp，限制解相对反馈的超前量），两者属安全门禁与截断，不是帧序列平滑，也不按 metadata 版本切换。
 
+速度流请用控制器持续 tick；**不要**每帧反复调 `move_by` 拼速度——`move_by` 每次锚定实测 FK，慢速下误差累积不足，重负载轴可能复现静摩擦失速（与 `measure_latency` 默认 `--anchor present` 的形态同构）。
+
 `control/api.py` 不含默认运行时：`connect` 未注入 `client_factory` 时抛 `RuntimeUnavailable`。真实连接由调用方自己构造运行时 client 传进来；参考实现见 `examples/robot_dry_run.py` 的 `build_client_factory()`——它返回一个 `(host, **kwargs) -> client` 的工厂，厂商 `AlohaMiniClient` 与 `AlohaMiniClientConfig` 的 import 落在最内层工厂函数体内（惰性导入，主环境没有 `lerobot` 也能 import 本模块），工厂再经 `connect(..., client_factory=...)` 注入。
 
 那份示例走的是 `dry_run=True`：读一次真观测、对升降轴下一条命令、断开，`send_action` 一次都不会被调用。无 adapter 的会话下运动命令按设计被拒——缺 kinematic adapter 时抛 `MotionNotEnabled("motion requires a kinematic adapter; ...")`，命令未进状态机；升降轴 dry-run 可以跑通（`dry_run=True` 下不下发）。结尾的零发送结论不是硬编码的 0，计数来自实测（`assert` 之外另有一道 `SystemExit`，`python -O` 下不会消失）。行级细节（哪几处 dry-run 分支生效、哪些门禁不可达）见示例文件头注释与 [examples/robot_dry_run.py](../examples/robot_dry_run.py)。

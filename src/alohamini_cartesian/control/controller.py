@@ -95,17 +95,29 @@ class CartesianController:
             it but never calls ``sender``.
         max_joint_step_deg: Maximum allowed joint-space step from the last
             accepted command (inclusive boundary).
-        max_joint_lead_deg: Reserved for future follow-error supervision;
-            required at construction but unused in this cycle.
-        follow_error_tolerance_deg: Reserved for future follow-error
-            supervision; required at construction but unused in this cycle.
-        follow_error_timeout_s: Reserved for future follow-error supervision;
-            required at construction but unused in this cycle.
+        max_joint_lead_deg: Per-joint bound on how far an IK solution may lead
+            the measured feedback ``q_seed`` (inclusive boundary).  Read by the
+            lead clamp (step 8), which only rewrites values strictly outside
+            ``q_seed ± max_joint_lead_deg``.
+        follow_error_tolerance_deg: How far the measured feedback may deviate
+            from the last accepted command before the follow-error clock starts
+            (step 4.5); the deviation is the max absolute value over the
+            joints of the arm.
+        follow_error_timeout_s: How long that deviation may stay above
+            ``follow_error_tolerance_deg`` before the tick stops with
+            ``FOLLOW_TIMEOUT`` and sends nothing (step 4.5).
         keepalive_interval_s: Optional keepalive interval in seconds.  When
             set, each actual send arms ``next_deadline`` to ``send_time +
             keepalive_interval_s``.  ``None`` disables the deadline.
         orientation_weight: Weight forwarded to ``arm_ik.solve`` for the soft
             orientation goal (default 0.01).
+
+    The lead clamp (step 8) runs after the step gate (step 7): it bounds the
+    solution by the measured feedback ``q_seed ± max_joint_lead_deg``, so it can
+    rewrite a solution back towards the feedback, and the rewritten value is not
+    put through the step gate again.  When the measured feedback lags the last
+    accepted command, the step of the command accepted and sent in this tick can
+    therefore exceed ``max_joint_step_deg`` against that reference.
     """
 
     def __init__(
