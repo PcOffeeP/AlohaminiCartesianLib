@@ -197,7 +197,7 @@ S3 要把旧仓库的 `control/` 与运动学搬进本库。旧代码在 `contro
 
 `docs/archive/migration-backlog.md` 原定把 `benchmarks/alohamini_io` 两个脚本推到 S4 现场，理由是「本机没有 Host，迁入后也只是一份跑不起来的代码」。v0.4.0 重新核查，这条依据对脚本成立，对配套测试不成立。
 
-两个脚本对 `lerobot` 的 import 全部在 `default_client_factory()` 函数体内（`capture_robot_fingerprint.py:140-141`、`measure_latency.py:847-848`），模块顶层只有标准库与 numpy。两个配套测试只用标准库与 pytest，用依赖注入的 fake client（假的客户端对象顶上真连接）与 fake clock，不碰 `lerobot`、`zmq`、`socket`、线程。
+两个脚本对 `lerobot` 的 import 全部在 `default_client_factory()` 函数体内（`capture_robot_fingerprint.py:140-141`、`measure_latency.py:1314-1315`），模块顶层只有标准库与 numpy。两个配套测试只用标准库与 pytest，用依赖注入的 fake client（假的客户端对象顶上真连接）与 fake clock，不碰 `lerobot`、`zmq`、`socket`、线程。
 
 它们在旧仓库原位跑不起来的唯一原因，是旧仓库根 `tests/conftest.py` 顶层 import `lerobot`；pytest 收集测试时必然加载这个文件。迁入本库后不再加载那个 conftest。
 
@@ -569,8 +569,8 @@ D1 把 `lerobot` 放在 optional extra `runtime` 里，并且有意只写名字�
 
 ### 决定
 
-1. **单独成 sidecar（贴着主文件写的副产物）**。`--mode tracking` 在同目录额外写一份 `<主文件名>-safety.csv`（`safety_csv_path`，`benchmarks/alohamini_io/measure_latency.py:1256`）：与主 CSV 同目录，主文件名去掉尾部 `.csv` 再加 `-safety.csv`；名字里的点保留（`a.b.csv` → `a.b-safety.csv`），不以 `.csv` 结尾的名字也照加。主 CSV 仍是 14 列，`--mode rtt` 不产生 sidecar。
-2. **9 列，顺序固定**（`SAFETY_CSV_FIELDS`，`:606`）：`step_index`、`sample_sequence`、`t_monotonic_s`、`motor`、`current_ma`、`requested_target`、`accepted_target`、`hold_active`、`target_source`。`target_source` 是末列，追加在 `hold_active` 之后；原有 8 列的顺序与含义一字未动（主 CSV 与既有证据文件按位置读，只有 sidecar 长了这一列）。加这一列的理由：`hold_active` 在钉住的 vendor 客户端上**结构上恒为 `False`**（`_joint_hold_goal` 只有 `alohamini.py:298` 的初始化与 `:985`/`:1076`/`:1088`/`:1128`/`:1131` 的读取/pop，无写入点，故 `joint_holds` 恒为 `{}`），因此它答不了「肩部是否被扣住」；判「是否被扣住」以 `target_source`（`none` / `command` / `watchdog` / `protection`）与 `current_ma` 的走势为准。取值口径：`target_source` 是**整帧属性**（`face["target_source"]`，不是逐电机属性），同一帧的每一行填同一个值；缺失、读不出、或值不是这四个字符串之一（非字符串、`bool`、数字、列表、未知字符串一律算）时记 `None`，即空单元格——不猜、不补默认值、不写空串。空格是「这帧没说到」，`none` 是「这帧说没有层产出目标」，两者不得混读。降级行（`currents_ma` 无电机表 → 唯一 `motor=None` 行）也填帧值，因为它不是逐电机属性。
+1. **单独成 sidecar（贴着主文件写的副产物）**。`--mode tracking` 在同目录额外写一份 `<主文件名>-safety.csv`（`safety_csv_path`，`benchmarks/alohamini_io/measure_latency.py:1289`）：与主 CSV 同目录，主文件名去掉尾部 `.csv` 再加 `-safety.csv`；名字里的点保留（`a.b.csv` → `a.b-safety.csv`），不以 `.csv` 结尾的名字也照加。主 CSV 仍是 14 列，`--mode rtt` 不产生 sidecar。
+2. **9 列，顺序固定**（`SAFETY_CSV_FIELDS`，`:626`）：`step_index`、`sample_sequence`、`t_monotonic_s`、`motor`、`current_ma`、`requested_target`、`accepted_target`、`hold_active`、`target_source`。`target_source` 是末列，追加在 `hold_active` 之后；原有 8 列的顺序与含义一字未动（主 CSV 与既有证据文件按位置读，只有 sidecar 长了这一列）。加这一列的理由：`hold_active` 在钉住的 vendor 客户端上**结构上恒为 `False`**（`_joint_hold_goal` 只有 `alohamini.py:298` 的初始化与 `:985`/`:1076`/`:1088`/`:1128`/`:1131` 的读取/pop，无写入点，故 `joint_holds` 恒为 `{}`），因此它答不了「肩部是否被扣住」；判「是否被扣住」以 `target_source`（`none` / `command` / `watchdog` / `protection`）与 `current_ma` 的走势为准。取值口径：`target_source` 是**整帧属性**（`face["target_source"]`，不是逐电机属性），同一帧的每一行填同一个值；缺失、读不出、或值不是这四个字符串之一（非字符串、`bool`、数字、列表、未知字符串一律算）时记 `None`，即空单元格——不猜、不补默认值、不写空串。空格是「这帧没说到」，`none` 是「这帧说没有层产出目标」，两者不得混读。降级行（`currents_ma` 无电机表 → 唯一 `motor=None` 行）也填帧值，因为它不是逐电机属性。
 3. **长表，一帧一电机一行**，不摊成宽表。理由：厂商帧的电机集合由帧自己决定（`safety_frame_rows` 按 `face["currents_ma"]` 的键集合出行），宽表得预先知道列名；帧只带 3 个电机时宽表要么留空列、要么改表头。代价对比：
 
    | 形态 | 行数 | 加一个电机的代价 | 加一个指标的代价 | 本库的选择 |
@@ -581,7 +581,7 @@ D1 把 `lerobot` 放在 optional extra `runtime` 里，并且有意只写名字�
    9 列不是「每个电机 9 列」：其中 3 列是帧级列（`step_index` / `sample_sequence` / `t_monotonic_s`，宽表里也只有这一组，不随电机增加）、1 列是电机名列（`motor`，宽表里进列名、不单独占列）、`target_source` 也是帧级列（整帧同值，宽表里同样只占一列），真正随电机增加的只有 `current_ma` / `requested_target` / `accepted_target` / `hold_active` 这 4 个值列。所以宽表加一个电机是加 4 列；加一个指标才是每个电机各加一列（18 电机 = 18 列）。
 
 4. **只记新帧**：sidecar 复用 tracking 既有的陈旧检测，只在该次观测的 `observation_sequence` 增长时记行，缓存重复帧不重复记；`_run_tracking_mode` 正式跑之前那次 preflight 观测（读序号取基线）不计行。取舍是「不引入第二套去重判据」——代价是 sidecar 的帧数定义跟着主循环走，主循环判陈旧的口径变了，sidecar 的帧数也跟着变。
-5. **时间列**：`t_monotonic_s` 优先取该帧到达时刻（`latest_request_timing["received_monotonic_s"]`，`_arrival_monotonic_s`，`:2429`），取不到回落到该次观测的轮询时钟读数；不新增时钟读取，所以节拍、settle 预算与达成率仍用改动前那几次读数计算。
+5. **时间列**：`t_monotonic_s` 优先取该帧到达时刻（`latest_request_timing["received_monotonic_s"]`，`_arrival_monotonic_s`，`:2498`），取不到回落到该次观测的轮询时钟读数；不新增时钟读取，所以节拍、settle 预算与达成率仍用改动前那几次读数计算。
 6. **键空间差异**：`currents_ma` / `joint_holds` 的键是裸电机名，`requested_targets` / `accepted_targets` 的键是 `<motor>.pos`（两者分别由 `_arm_goal_positions` / `_arm_sent_positions` 填入，`alohamini.py:987-988`）。`_safety_target`（`:2502`）两种形状都认；同一电机两键并存时**裸名优先**，因为 `motor` 列打的就是裸名，行要由它自己的名字描述。`motor` 已带 `.pos` 时不再二次加后缀。
 7. **空单元格，不补 0**：`current_ma` / `requested_target` / `accepted_target` 只在能转成有限数值时写数值，否则留空；`bool` 不算数值（`float(True) == 1.0` 会凭空写出一条 1 mA 的电流）。`0 mA` 读起来像「测到的零电流」、`0` 目标读起来像「Host 采纳过 0」，两者都是伪观测，所以拒绝填充。
 8. **降级判据用整轮计数**，不用「开局探一次」：能力缺失（分支 A，点名缺的属性）与内容不完整（分支 B，点名 `latest_safety_status` 并带 `frames=<int>, frames_with_motor_table=<int>`）两个分支互斥，所以**降级**警告一次运行最多一条（sidecar 写盘失败的警告是另一件事实，见第 9 条，它会在降级警告之外再加一条）；退出码不变，sidecar 照写。理由：部署的客户端属性一直存在（初值 `{}`），只会内容为空，所以「某一时刻探一次」看不到「4 帧里坏 3 帧」这种形态；整轮计数把坏帧数点出来。
@@ -596,7 +596,7 @@ D1 把 `lerobot` 放在 optional extra `runtime` 里，并且有意只写名字�
 **已知代价**
 
 1. **无真机验证**：sidecar 只有离线测试覆盖（`tests/benchmarks/test_measure_latency_safety.py`，假 client），真机上的帧形态、`motor` 空行占比与行数从未观测。
-2. **Pi 上 `t_monotonic_s` 是轮询时刻，不是到达时刻**：厂商客户端只有 `latest_host_timing`、没有 `latest_request_timing`（`docs/ADR.md` D12），`_arrival_monotonic_s` 取不到到达戳，回落到该次观测的轮询时钟。回落已在 stderr 点名（第 11 条），但触发有条件：Pi 的 vendor 没有 `latest_request_timing`，所以**只要这轮至少记录到一帧，这条提示就会出现**。`timestamp_fallback` 的置位有两处，两处都在 `run_tracking_steps` 里：由 **sidecar 行**触发的那一支只在新帧分支里走（条件 `sequence > last_sequence` 在 `measure_latency.py:3020`，置位在 `:3029-3031`）；另一支在 90% 交叉点（交叉点判定在 `:3142`，置位在 `:3146-3148`），与 `observation_sequence` 无关，陈旧帧上也会走到。因此「在记录到任何新帧之前就中止 → 不会打这条提示」只在**不含交叉点置位**的路径上成立，不是无条件结论。它说明的是「这一列是什么」，不是「这次运行有问题」，不要按故障处理。
+2. **Pi 上 `t_monotonic_s` 是轮询时刻，不是到达时刻**：厂商客户端只有 `latest_host_timing`、没有 `latest_request_timing`（`docs/ADR.md` D12），`_arrival_monotonic_s` 取不到到达戳，回落到该次观测的轮询时钟。回落已在 stderr 点名（第 11 条），但触发有条件：Pi 的 vendor 没有 `latest_request_timing`，所以**只要这轮至少记录到一帧，这条提示就会出现**。`timestamp_fallback` 的置位有两处，两处都在 `run_tracking_steps` 里：由 **sidecar 行**触发的那一支只在新帧分支里走（条件 `sequence > last_sequence` 在 `measure_latency.py:3108`，置位在 `:3118-3119`）；另一支在 90% 交叉点（交叉点判定在 `:3246`，置位在 `:3251-3252`），与 `observation_sequence` 无关，陈旧帧上也会走到。因此「在记录到任何新帧之前就中止 → 不会打这条提示」只在**不含交叉点置位**的路径上成立，不是无条件结论。它说明的是「这一列是什么」，不是「这次运行有问题」，不要按故障处理。
 3. **`hold_active` 在现场恒 `False`**：钉住的 vendor（本地 fork HEAD `ec65318f`）里 `_joint_hold_goal` 没有写入点（`alohamini.py:298` 初始化，`:985`/`:1076`/`:1088`/`:1128`/`:1131` 只读或 pop），`joint_holds` 恒为 `{}`。`False` 的诚实含义是「可读的 hold 表没列这个电机」，**不是**「确认没被扣过」；因此该列不能用来判「肩部目标是否被过流 hold 扣住」，全列 `False` 不得读成「没被扣」。替代判据是 `target_source`（`protection` 即保护路径接管）与 `current_ma` 的逐帧走势，再加 `requested_target` 与 `accepted_target` 是否相等。
 4. **整轮计数会把单帧偶发损坏也打成一条警告**：一帧坏、其余全好也告警，可能被读成噪音。
 5. **内存与 CSV 体量随「帧数 × 电机数」增长**：行数 = 记录帧数 × 电机数（18 电机即 ×18），帧数随 `--steps`、`--settle-timeout-s`、`--control-hz` 增长；行在内存里攒到跑完再写盘，与主 CSV 同构。按 50 Hz × 每步 1 s 的 settle 预算算术推算，20 步约 1000 帧 × 18 电机 ≈ 1.8 万行（推算，非实测）。
