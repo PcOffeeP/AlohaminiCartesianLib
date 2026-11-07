@@ -128,6 +128,12 @@ a goal put on the wire is ``baseline_units + delta_deg / deg_per_unit``
 ``--delta-deg`` may be negative (the same step taken the other way), and the
 sign survives both the ``MAX_STEP_DELTA_DEG`` clamp and that conversion: only
 the magnitude is capped, and only the limits are compared against ``abs()``.
+``--anchor`` picks what that goal is laid on: ``present`` (the default) re-reads
+that ``baseline_units`` from the measurement on every step, so the lead never
+exceeds one delta and an error cannot accumulate, while ``command`` replaces
+``baseline_units`` with the target the previous step sent (the first step falls
+back to the measurement), so the lead accumulates across steps.  The row keeps
+``baseline_deg`` / ``measured_deg`` as measurements either way.
 
 The factor comes from the calibration the host publishes in its robot metadata
 (``motors.<motor>.range_min`` / ``range_max`` / ``resolution``).  A run that
@@ -501,6 +507,16 @@ MAX_STEP_DELTA_DEG = 1.0
 HOST_LOOP_HZ_UPPER_BOUND = 50.0
 # Product of the per-step and per-run caps: a tracking run may travel this far.
 MAX_TOTAL_TRAVEL_DEG = 20.0
+# What a tracking step lays its goal on.  ``present`` re-reads the measured
+# position every step and drives ``delta_deg`` above it, so the lead never
+# exceeds one step and an error cannot accumulate over steps; ``command``
+# anchors on the target the previous step sent (the first step falls back to the
+# measured position), so the lead accumulates and reproduces the
+# error-accumulating shape of a teleoperated run.
+ANCHOR_PRESENT = "present"
+ANCHOR_COMMAND = "command"
+ANCHOR_CHOICES = (ANCHOR_PRESENT, ANCHOR_COMMAND)
+DEFAULT_ANCHOR = ANCHOR_PRESENT
 # Consecutive ``get_observation`` calls whose ``observation_sequence`` did not
 # grow before a tracking run gives up on the link.  The client answers a timed
 # out observation with its cached frame instead of raising, so growth of that
@@ -885,6 +901,19 @@ def _checked_unit_scale(scale: Any) -> float:
             f"unit conversion unavailable: deg per unit must be finite and positive, got {scale!r}"
         )
     return number
+
+
+def _checked_anchor(anchor: Any) -> str:
+    """``anchor`` as one of ``ANCHOR_CHOICES``.
+
+    Checked before the first observation and the first command of a tracking run:
+    a run whose aim cannot be honoured may not spend a request window on it, and a
+    robot that received one command of an unknown-shape run is exactly the case
+    this refuses.
+    """
+    if anchor not in ANCHOR_CHOICES:
+        raise ValueError(f"anchor must be one of {ANCHOR_CHOICES} (got {anchor!r})")
+    return str(anchor)
 
 
 def deg_per_unit(metadata: Any, joint_key: str) -> float:
@@ -1670,6 +1699,20 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=float,
         default=DEFAULT_SETTLE_TOLERANCE_DEG,
         help="A step counts as settled when the feedback is this many DEGREES from the target",
+    )
+    parser.add_argument(
+        "--anchor",
+        choices=ANCHOR_CHOICES,
+        default=DEFAULT_ANCHOR,
+        help=(
+            "What a tracking step lays its goal on; only --mode tracking reads it (--mode rtt "
+            "accepts the flag and ignores it). present (the default, and the behaviour "
+            "every earlier run had) re-reads the measured position every step and drives "
+            "delta_deg above it, so the lead is always one single step and never accumulates; "
+            "command anchors on the target the previous step sent (the first step falls back "
+            "to the measured position), so the lead accumulates across steps and reproduces "
+            "the error-accumulating shape of a teleoperated run"
+        ),
     )
     args = parser.parse_args(argv)
     # A nonsense run shape is a usage error (2), not a connect failure (3): the
@@ -2845,6 +2888,7 @@ def run_tracking_steps(
     clock: Callable[[], float] | None = None,
     record: dict[str, Any] | None = None,
     deg_per_unit: float = 1.0,
+    anchor: str = DEFAULT_ANCHOR,
 ) -> dict[str, Any]:
     """Step one joint and measure the response (real robot motion, Gate A-F passed).
 
@@ -2861,6 +2905,16 @@ def run_tracking_steps(
     converted: the goal is ``baseline_units + delta_deg / deg_per_unit``
     (``cmd_units``) while every ``*_deg`` column and the report stay degrees.
     The default ``1.0`` keeps a caller that already works in degrees exact.
+
+    ``anchor`` picks what that goal is laid on.  ``ANCHOR_PRESENT`` (the default)
+    lays it on the measurement of this step, so the lead never exceeds one delta
+    and an error cannot accumulate; ``ANCHOR_COMMAND`` lays it on the target the
+    previous step sent (the first step falls back to the measurement), so the goal
+    walks away from a joint that does not follow and the lead accumulates.  Only
+    the anchor moves: ``baseline_deg`` / ``measured_deg`` stay measurements,
+    ``error_deg`` stays ``target - measured``, and the ``MAX_STEP_DELTA_DEG``
+    clamp and the ``MAX_TOTAL_TRAVEL_DEG`` cap are untouched.  An unknown value
+    raises ``ValueError`` before anything is read or commanded.
 
     Feedback liveness is checked on every poll: the client answers a timed out
     observation with its cached frame instead of raising, so
@@ -2951,6 +3005,9 @@ def run_tracking_steps(
             f"control_hz must be a finite number > 0 (got {control_hz!r}); "
             "a non-finite or non-positive rate would disable the command pacing"
         )
+    # Same rule for the aim of the run, and in the same place: before the first
+    # ``get_observation``, the first ``send_action`` and the safety-face probe.
+    anchor = _checked_anchor(anchor)
     scale = _checked_unit_scale(deg_per_unit)
     period_s = 1.0 / rate_hz if rate_hz > 0 else 0.0
     # Minimum spacing between two commands.  Finite and positive by the check
@@ -2963,6 +3020,11 @@ def run_tracking_steps(
     hold_state: dict[str, float] = {}
     hold_action: dict[str, float] = {}
     hold_error: str | None = None
+    # The target of the last accepted command: the anchor of the next step in
+    # ``ANCHOR_COMMAND`` mode.  ``None`` until one command was accepted, so the
+    # first step (and a run whose first step never reaches the wire) falls back to
+    # the measured position.
+    last_target_units: float | None = None
     last_sequence = _observation_sequence(client) or 0
     stale_polls = 0
     # Counted for the report: they are what shows that the pacing worked and how
@@ -3090,8 +3152,20 @@ def run_tracking_steps(
                 break
 
             baseline_deg = deg_from_units(baseline_units, scale)
-            target_units = baseline_units + units_from_deg(delta_deg, scale)
-            target_deg = baseline_deg + delta_deg
+            # ``baseline_units`` / ``baseline_deg`` stay measurements: the anchor is
+            # what the goal is laid on, and it is the measurement itself in
+            # ``ANCHOR_PRESENT`` mode and the target of the previous step in
+            # ``ANCHOR_COMMAND`` mode.  The default mode therefore does exactly the
+            # arithmetic it always did, while the command mode lifts the one-step
+            # lead so an error can accumulate.
+            anchor_units = (
+                baseline_units
+                if anchor == ANCHOR_PRESENT or last_target_units is None
+                else last_target_units
+            )
+            anchor_deg = deg_from_units(anchor_units, scale)
+            target_units = anchor_units + units_from_deg(delta_deg, scale)
+            target_deg = anchor_deg + delta_deg
             # Paced before the row exists, so ``t_send_s`` is the stamp of the
             # write itself: a pacing pause may not inflate ``rise_90_time_s``.
             t_send_s = _pace_command(clock_fn())
@@ -3125,6 +3199,10 @@ def run_tracking_steps(
                     row["note"] = f"aborted: {abort_reason}"
                     break
                 row["cmd_echo_deg"] = _echoed_deg(echo, joint_key, scale)
+                # The command reached the wire: in ``ANCHOR_COMMAND`` mode it becomes
+                # the anchor of the next step.  Recorded after the accepted
+                # ``send_action``, so a rejected step leaves the anchor where it was.
+                last_target_units = target_units
 
                 measured_deg = baseline_deg
                 peak_travel_deg = 0.0
@@ -3351,6 +3429,17 @@ def _run_tracking_mode(client: Any, args: argparse.Namespace) -> int:
             f"({delta_deg:.3f} deg): the 90 % crossing may never be observed, "
             "so rise_90 can be empty"
         )
+    if args.anchor == ANCHOR_COMMAND:
+        # Only for this mode: ``present`` is the shape every earlier run had, so its
+        # stdout stays exactly what it was.
+        print(
+            "note: anchor=command: each step anchors on the previous target, so the lead "
+            "accumulates across steps (present re-anchors on the measured position every step); "
+            "rise_90_time_s, overshoot_deg and error_deg are not comparable between the two "
+            "anchors: a step can close a lead spanning several deltas, so rise_90 is booked "
+            "early, overshoot_deg becomes (travel - one delta) and error_deg settles at the "
+            "accumulated lead instead of at one step's error"
+        )
 
     try:
         observation = client.get_observation(include_cameras=False)
@@ -3384,6 +3473,7 @@ def _run_tracking_mode(client: Any, args: argparse.Namespace) -> int:
             control_hz=args.control_hz,
             record=record,
             deg_per_unit=scale,
+            anchor=args.anchor,
         )
     except KeyboardInterrupt:
         # The stop command was issued by ``run_tracking_steps``' ``finally`` block
