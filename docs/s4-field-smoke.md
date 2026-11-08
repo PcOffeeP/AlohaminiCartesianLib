@@ -1462,7 +1462,13 @@ Gate C 本身的零命令拒绝由离线测试锁住（现场拿不到就以它�
 
 背景：2026-10-25 五次运行都是左臂单关节、每步 1°：腕部 `arm_left_wrist_roll` 达成 87.9%（两步 `settled=True`），肩部 `arm_left_shoulder_pan` 与 `arm_left_shoulder_lift` 5.9%–13.2%、全部 `settled=False`。完整数字见 `docs/field-results.md`。本步要判的是：这两轴的停滞发生在 Host 侧还是 Host 下游。
 
-达成率口径：指令行程 = Σ（每步 `cmd_deg` − 该步 `baseline_deg`）；实测净行程 = 末步 `measured_deg` − 首步 `baseline_deg`；达成率 = 实测净行程 ÷ 指令行程。`cmd_deg` 是每步的绝对目标角，各步起点不同，分母按逐步差求和，不用「步数 × 1°」。
+达成率口径（`docs/ADR.md` D20）：分母统一取命令行给的名义指令行程 `abs(--delta-deg) × --steps`；实测净行程 = 末步 `measured_deg` − 首步 `baseline_deg`；达成率 = 实测净行程 ÷ 名义指令行程。
+
+为什么不再用 `Σ(cmd_deg − baseline_deg)`：`--anchor command` 下每步的 `cmd_deg − baseline_deg` 含跨步累积的 lead，逐步求和会把同一段行程重复计入（2026-11-08 路 A：同一份数据用该分母得左 `43.0108%` / 右 `48.6417%`，用名义分母得左 `79.1209%` / 右 `82.6374%`）。
+
+**例外**：`--anchor present` 且逐步实际命令增量与 `--delta-deg` 不等时（腕部已记录的形态：每步实际只下 `0.879120879°`，`delta=1.0°`），分母改用 `Σ(cmd_deg − baseline_deg)`，并在记录里写明这一次用的是哪个分母。原因见 `docs/field-results.md` 2026-11-06 节「腕部同参数对照」与 `TODO.md` 的「腕与肩的 deg→units 换算不自洽」条。
+
+残余门槛同样见 D20：肩类（`shoulder_pan` / `shoulder_lift`）按 `≤2°` 判，其余轴按 `≤2 tick（0.1758°）` 判。
 
 主依据三项，全部来自 sidecar（列定义见第 11 节）：
 
@@ -1552,7 +1558,7 @@ run 8.2b-host-verify ssh "$PI" 'pgrep -af "alohamini_host|lerobot"; ss -ltnp | g
 | --- | --- | --- | --- |
 | P0 曾广播 v1（已关闭） | 只核对，不回退、不重跑 v1 拒绝路径 | `capture` exit 0 且 `robot_metadata.schema_version == 2` | `capture/fingerprint-*.json` |
 | Gate F 第二段不可达 | 不制造记录，只记「未触发」；禁止改标定文件造记录 | 无拒绝记录即为正确结果 | `stdout/4.1b-probe-*`（历史同类产物 `stdout/5.1-probe21-*`） |
-| 肩部两轴不跟随 | 试动后取 sidecar 与 `[HOST TRACKING]`（后者因日志级别压制不打，改用 sidecar，见第 6.1 节）：判据三项里 `requested == accepted` 零例外、运动帧 `target_source` 全 `command`，结论落到「① 目标被接受，停滞在伺服或机械侧」 | 达成率 ≥50% 且该步步末残余 ≤2 tick（0.1758°）；若用 `settled=True` 口径，容差必须 ≥1 LSB（0.0879°）（理由见 `docs/acceptance-baseline.md` V01 行）。若两轴仍不跟随，按 §10.5 的 teleop oracle → M1 → M2 定性，结论落到硬件不可修时按 `docs/acceptance-baseline.md` §2.1 记「受阻」 | sidecar CSV + `stdout/7.2-*` |
+| 肩部两轴不跟随 | 试动后取 sidecar 与 `[HOST TRACKING]`（后者因日志级别压制不打，改用 sidecar，见第 6.1 节）：判据三项里 `requested == accepted` 零例外、运动帧 `target_source` 全 `command`，结论落到「① 目标被接受，停滞在伺服或机械侧」 | 达成率 `≥50%`（分母 `abs(delta) × steps`）且该步步末残余按关节类别分级：肩类 `≤2°`、其余轴 `≤2 tick（0.1758°）`；若用 `settled=True` 口径，容差必须 ≥1 LSB（0.0879°）（口径见 `docs/ADR.md` D20 与 `docs/acceptance-baseline.md` V01 行）。若两轴仍不跟随，按 §10.5 的 teleop oracle → M1 → M2 定性，结论落到硬件不可修时按 `docs/acceptance-baseline.md` §2.1 记「受阻」 | sidecar CSV + `stdout/7.2-*` |
 | 已判：臂总线电流不能判负载 | 静止基线与运动窗口的读数全部低于 20 mA 门槛（数字见 `docs/field-results.md` 2026-11-05 节），结论：臂总线电流不能判负载，依赖电流的判断降级为「无电流证据」 | 已判：门槛 20 mA（3 个 raw 刻度），不能判读 | `stdout/6.1*-`、`stdout/6.2*-`、`stdout/6.2b-analysis-*`、`stdout/7.2-analysis-*` |
 | `Torque_Enable=1` 写入者未识别 | 只记录，不主动改扭矩寄存器 | 寄存器读数原文落盘 | `stdout/4.2-*` |
 | 左夹爪 51 tick（D14 暂不重标定） | 只读 ID7 限位 | 是否 `2021` / `2072` | `stdout/4.2-*` |

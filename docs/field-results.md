@@ -3,6 +3,7 @@
 按时间倒序。每行一条结论，数字可在「证据文件」里核对。证据文件都在仓库外的证据目录：
 
 - 2026-11-08 节：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261107/`（目录名按授权所取，实际 UTC 日期 11-08）
+- 2026-11-08 节的第二段（路 A 复核）：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261108/`（目录名与实际 UTC 日期一致，与上一行的 `s4-20261107/` 不同）
 - 2026-11-06 节：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261106/`
 - 2026-11-05 节：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261104/`
 - 2026-10-25 及更早：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261025/`（索引 [evidence/s4-20261025/README.md](file:///Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261025/README.md)）
@@ -31,11 +32,70 @@
 | B3 全 18 电机静态体检（停 Host 后只读） | 18/18 `Model_Number` 与配置型号对上（`sts3250=2825`、`sts3095=2569`，无 `sts3215`）；`Status` 全 `0`；`Present_Voltage` 原始值 min `116` / max `119`（源码侧已核：地址 62、1 字节、无符号、全链无换算，读到什么就是什么；`11.6–11.9 V` 用 `0.1 V/单位` 的比例算，该比例来自 Feetech 手册、源码不提供，故换算值只作相对比较，不得当标定或实测证据）；18 只 `Torque_Enable` 全 `0`（与 `kill -INT` 释放扭矩一致） | 左总线 11 只 + 右总线 7 只，两份日志均 `EXIT_CODE: 0` | `stdout/4.2-all18-{left,right}-20261108T125734Z.{log,exit,cmd,py}` |
 | Host 收尾路径与 11-06 一致 | `kill -INT 1985`、`kill_exit=0`；`pgrep`/`ss` 无 LISTEN；Host 日志末两行 `Keyboard interrupt received. Exiting...` / `Shutting down AlohaMini Host.` | `13:08:29Z` 停，`13:08:31Z`、`13:08:43Z` 两次复核 | `stdout/8-host-stop-20261108T125734Z.log`、`stdout/8.1-host-stopped-20261108T125734Z.log` |
 
+### 路 A：V01 残余支与达成率分母复核（STAMP 20261108T141936Z）
+
+条件：与本节上一段同一台机（`robot_model=alohamini2pro`、18 个电机、Pi 上 lerobot `0.6.1`）；用户在机器人旁，可按断电开关；本段**有运动命令**：左右 `shoulder_pan` 各跑一轮 `--mode tracking --anchor command --delta-deg 1.0 --steps 5 --control-hz 50.0 --settle-tolerance-deg 0.05 --settle-timeout-s 15`（settle 窗 15 s、容差 `0.05°`）。STAMP `20261108T141936Z`。证据目录（仓库外）为 `/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261108/`，本节表格「证据文件」列都是这个目录下的相对路径。
+
+#### 表 1：B1 位置组首判「断电无滑移」
+
+基线 = 上一场停 Host 前的断电前指纹 `s4-20261107/capture/fingerprint-postpower-20261108T125734Z.json`（`captured_utc=2026-11-08T13:08:18+00:00`）；今天 = 本场运动前的开机后指纹 `capture/fingerprint-postpower-20261108T141936Z.4.1c-preserved.json`（`captured_utc=2026-11-08T14:20:35+00:00`）。判据形态：两次上电之间隔了一整次断电，期间没有运动，位置若没滑移即成立——这是**第一份不受「期间有运动」污染的 B1 判据**（11-08 上一场那份的基线之后有 11-06 六轮运动，只能归因、不能作判据）。
+
+| 电机 | `baseline_tick` | `today_tick` | `delta`（tick） |
+| --- | --- | --- | --- |
+| `arm_left_elbow_flex` | `2097` | `2097` | `+0` |
+| `arm_left_gripper` | `2047` | `2047` | `+0` |
+| `arm_left_shoulder_lift` | `1323` | `1323` | `+0` |
+| `arm_left_shoulder_pan` | `2187` | `2186` | `-1` |
+| `arm_left_wrist_flex` | `3048` | `3048` | `+0` |
+| `arm_left_wrist_roll` | `1906` | `1906` | `+0` |
+| `arm_left_wrist_yaw` | `2096` | `2096` | `+0` |
+| `arm_right_elbow_flex` | `2222` | `2222` | `+0` |
+| `arm_right_gripper` | `2010` | `2010` | `+0` |
+| `arm_right_shoulder_lift` | `1034` | `1034` | `+0` |
+| `arm_right_shoulder_pan` | `2378` | `2378` | `+0` |
+| `arm_right_wrist_flex` | `3090` | `3090` | `+0` |
+| `arm_right_wrist_roll` | `2231` | `2231` | `+0` |
+| `arm_right_wrist_yaw` | `2019` | `2019` | `+0` |
+
+结果：`CALIB_FIELD_DIFFS: 0`；14 只位置电机 `delta` 全部 `+0`，**只有** `arm_left_shoulder_pan` 为 `-1` tick；`POSITION_MOTORS_OVER_3_TICK: 0`。同一份文件的 C 组（`lift_axis.height_mm: 0.0 -> 0.0` 等）原样比、不折 tick。证据文件 `stdout/4.1c-postpower-diff-20261108T141936Z.txt`。
+
+#### 表 2：15 s 窗实测（路 A 主跑）
+
+| 侧 | 关节 | 净行程 | 步末残余 `deg` | 残余 tick | `settled` | `rise_90` 非空步数 | 达成率（分母 `abs(delta)×steps = 5.0`） | 达成率（旧分母 `Σ(cmd−baseline)`） | 按 D20 判定 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 左 | `arm_left_shoulder_pan` | `3.956044°` | `1.043956°` | `11.88` | `0/5` | `3/5` | `79.1209%` | `43.0108%`（分母 `9.197802`） | 过 |
+| 右 | `arm_right_shoulder_pan` | `4.131868°` | `0.868132°` | `9.88` | `0/5` | `4/5` | `82.6374%` | `48.6417%`（分母 `8.494505`） | 过 |
+
+两侧 `steps_completed=5`、`abort_reason=None`、`.exit` 均 `0`；`settled=False` 的 `note` 全为 `settle budget exhausted`。换算常数 `1 tick = 360/4096° = 0.087890625°`；本轮 stdout 给的 `1 unit`：左 `1.1868131868131868 deg`、右 `1.0971428571428572 deg`。运行量：左 `commands=3009 observations=3008 over 75.289 s`、右 `commands=2957 observations=2956 over 75.287 s`。证据文件 `tracking/tracking-v01residual-{left,right}-anchor-command-20261108T141936Z.csv`、`stdout/7.1-tracking-{left,right}-shoulder-v01residual-20261108T141936Z.{log,exit}`、`stdout/7.2-analysis-{left,right}-20261108T141936Z.txt`。
+
+#### 表 3：sidecar 判读
+
+| 侧 | 数据行 | 帧数 | 运动窗口（`sample_sequence >= 3`）`target_source` | `requested_target == accepted_target` | `hold_active` | `current_ma` max | `>= 20 mA` 样本 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 左 | `54144` | `3008`（每帧 18 行） | `3007` 帧全 `command` | `42098/42098 = 100.0000%` | 全 `False`（`54144/54144`） | `104.0` | `700` |
+| 右 | `53208` | `2956`（每帧 18 行） | `2955` 帧全 `command` | `41384/41384 = 100.0000%` | 全 `False` | `71.5` | `153` |
+
+`requested == accepted` 一列数的是 `requested_target` 与 `accepted_target` 双非空的行（其余是底盘三轮与升降轴，Host 侧本就没有目标表项）。右侧 `sample_sequence=2` 那一帧为上一轮遗留的 `watchdog`（不计入本轮；左侧同一帧为 `none`）。两侧判读都落入 `docs/s4-field-smoke.md` §7.2 结论①：**目标已被 Host 采纳，残余在 Host 下游的伺服／机械静摩擦侧**。证据文件 `tracking/tracking-v01residual-{left,right}-anchor-command-20261108T141936Z-safety.csv`、`stdout/7.2-analysis-{left,right}-20261108T141936Z.txt`。
+
+**机理与结论**：厂商写 `P_Coefficient=16` / `I_Coefficient=0`（`alohamini.py:537`/`:539` 左、`:564`/`:565` 右），没有积分项，位置环只能靠力平衡收尾，稳态残余必然留下、延长 settle 窗也消不掉。残余只有 `0.87–1.04°`（`9.88–11.88 tick`），两侧同量级，**「动作慢 / 跟不上」这个解释被排除**。残余支的处置定为分级口径，见 `docs/ADR.md` D20。
+
+#### 指纹三份
+
+| 文件 | `captured_utc` | 用途 |
+| --- | --- | --- |
+| `capture/fingerprint-20261108T141936Z.json` | `2026-11-08T14:20:21+00:00` | 本场开机后 §4.1 过程指纹 |
+| `capture/fingerprint-postpower-20261108T141936Z.4.1c-preserved.json` | `2026-11-08T14:20:35+00:00` | §4.1c 对比用的那一份（表 1 的「今天」） |
+| `capture/fingerprint-postpower-20261108T141936Z.json` | `2026-11-08T14:28:12+00:00` | 运动后、停 Host 前的收尾指纹 |
+
+**同名冲突如实记**：收尾那份（`14:28:12`）与 §4.1c 用的是同一个文件名 `fingerprint-postpower-20261108T141936Z.json`，把 `14:20:35` 那份覆盖了，靠 `.4.1c-preserved.json` 另存才留下。因此 `4.1c-postpower-diff-20261108T141936Z.txt` 头部记的 `today` 路径现存内容是 `14:28:12` 那份，表 1 对比实际用的字节在 `.4.1c-preserved.json` 里（该 txt 头部记的 `captured_utc=2026-11-08T14:20:35+00:00` 与之对应）。同名冲突的处置与 `TODO.md` 已登记的那条一致，本场再次发生。收尾指纹的事实行见 `stdout/8-fingerprint-facts-20261108T141936Z.log`：`robot_model alohamini2pro`、`lerobot_version 0.6.1`、`observation_state_keys 18`、`captured_utc 2026-11-08T14:28:12+00:00`。
+
+**收尾留痕**：`14:28:31Z` 执行 `kill -INT 2758`、`kill_int_exit=0`（`stdout/8-host-stop-20261108T141936Z.log`）；`14:28:40Z` 复核：`pgrep -af "alohamini_host|lerobot"` 只命中复核命令自身那一行（自匹配，无宿主进程），`ss -ltnp` 配 `grep -E ":5555|:5556"` 零命中（无监听）；`---` 之后是 Host 日志末三行原文 `WARNING:root:Host command watchdog expired; stopping motion` / `Keyboard interrupt received. Exiting...` / `Shutting down AlohaMini Host.`（`stdout/8.1-host-stopped-20261108T141936Z.log`）。
+
 ### 未取到 / 未验证
 
 | 项目 | 状态 |
 | --- | --- |
-| V01 主表「步末残余 ≤2 tick」支 | **不过**。`--anchor command` 下两侧步末残余 `1.131868°`（`12.9 tick`）、5/5 步 `settled=False`；达成率支（≥50%）已满足。是否改门槛或加跑法未决，见 `TODO.md` §4 |
+| V01 主表「步末残余 ≤2 tick」支 | **已按 `docs/ADR.md` D20 处置**：残余支改为按关节类别分级（肩类 `≤2°`、其余 `≤2 tick`），达成率分母统一 `abs(delta) × steps`；11-08 路 A 双侧按新口径全支过，V01 收口为「通过」。口径出处 `docs/ADR.md` D20。 |
 | 左 `shoulder_pan` 位置差 `−11.4` tick 的归因算式 | **未验证**。证据目录只有 delta 列（`4.1c-postpower-diff-*.txt`），没有逐只归因表；`−11.4` 是现场报告转述，未落原文 |
 | `Present_Voltage` 的 0.1 V/单位 | **源码侧已核**：地址 62、1 字节、无符号、全链无换算（vendor fork `ec65318f`：`src/lerobot/motors/feetech/tables.py:86` / `:140` 均为 `(62, 1)`，编码表 `:210-219` 无该项，`src/lerobot/motors/motors_bus.py:1014-1025` 只做地址取址 + 1 字节读 + 符号解码 + 位置归一化，`src/lerobot/robots/alohamini/` 内零命中）；**但「0.1 V/单位」这个比例源码不提供**，来自 Feetech 手册，故 `116–119` → `11.6–11.9 V` 只在手册口径下成立，换算后的电压值不得当标定或实测证据使用，读数只作相对比较 |
 | 两项安全前置（手臂低位、断电开关在手边）在 B2 开跑前的复核 | **未复核**。只有 P1 阶段 `stdout/scope-20261108T125734Z.md` 的用户口述记录（非仪器证据）；`stdout/7.1-checklist-20261108T125734Z.md` 第 6、7 条同口径 |

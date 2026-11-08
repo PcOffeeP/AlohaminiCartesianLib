@@ -8,7 +8,7 @@
 
 | 编号 | 要求（一句话） | 软件证据（本库现状） | 实机证据（现状） | 判据（什么算过） |
 | --- | --- | --- | --- | --- |
-| V01 | 脱离遥操作主臂，纯 PC 侧控制 | 无「主臂」专项用例，本库代码里没有 leader 分支。间接证据两条：`tests/test_examples_and_configs.py` 契约 A 的 5 条用例（`test_example_script_exits_zero`、`test_example_script_reports_zero_send_action_calls` 等）用 PC 侧假 transport 把会话整环跑通；`tests/test_control_api.py::test_default_client_factory_without_runtime_raises_runtime_unavailable` 钉住运行时只能由调用方注入 | 部分。2026-10-25 真机受控试动（Mode B，左臂单关节、每步 1°，证据目录 `tracking/` 下五份 CSV）：腕部 `arm_left_wrist_roll` 经 PC 侧命令走出净行程 `+1.758°`（指令 2.0°），达成率 `87.9%`，两步 `settled=True`，误差 `0.121°`；肩部未跟随：首次试动 `arm_left_shoulder_pan`（1°×3 步）`5.9%`，随后同一轴 `8.8%`（1°×3 步）与 `8.8%`（1°×2 步），`arm_left_shoulder_lift` `13.2%`，全部 `settled=False`，原因排查中。达成率 = 净行程 ÷ 指令行程，口径见 `docs/s4-field-smoke.md` 第 7 节。判据里「不接主臂的 `connect` 成功记录」本轮未单独留存 | `uv run --no-sync python -m pytest tests/test_examples_and_configs.py` 全绿，示例 exit 0 且 stdout 含 `0 次发送`；真机侧：每关节**达成率 ≥50%，且该步步末残余 ≤2 tick（2 × 0.0879° = 0.1758°）**；若改用 `settled=True` 口径，则**容差必须 ≥1 LSB（0.0879°）**；另需一次不接主臂的 `connect` 成功记录。判据如此限定的理由：容差 `0.05°` 比 1 LSB 还小，任一步都判不成 `settled`，旧判据「达成率 ≥50% 且 `settled=True`」在这种容差下不可达，问题出在判据本身而不是硬件。实测数字：`docs/field-results.md` 的 2026-11-05 节「达成率三轴只有腕部接近指令」一行。**11-08 补证**：`--anchor command` 5 步 × 1° 双侧达成率均 `77.36%`（见 §2.5.1），但步末残余 `12.9 tick`、`settled=False`——「残余 ≤2 tick 或 settled」支仍未满足，A 阶段维持受阻；V01 状态字不变。 |
+| V01 | 脱离遥操作主臂，纯 PC 侧控制 | 无「主臂」专项用例，本库代码里没有 leader 分支。间接证据两条：`tests/test_examples_and_configs.py` 契约 A 的 5 条用例（`test_example_script_exits_zero`、`test_example_script_reports_zero_send_action_calls` 等）用 PC 侧假 transport 把会话整环跑通；`tests/test_control_api.py::test_default_client_factory_without_runtime_raises_runtime_unavailable` 钉住运行时只能由调用方注入 | **通过**。2026-10-25 真机受控试动（Mode B，左臂单关节、每步 1°，证据目录 `tracking/` 下五份 CSV）：腕部 `arm_left_wrist_roll` 经 PC 侧命令走出净行程 `+1.758°`（指令 2.0°），达成率 `87.9%`，两步 `settled=True`，误差 `0.121°`；肩部未跟随：首次试动 `arm_left_shoulder_pan`（1°×3 步）`5.9%`，随后同一轴 `8.8%`（1°×3 步）与 `8.8%`（1°×2 步），`arm_left_shoulder_lift` `13.2%`，全部 `settled=False`，原因排查中。达成率 = 净行程 ÷ 指令行程，口径见 `docs/s4-field-smoke.md` 第 7 节。判据里「不接主臂的 `connect` 成功记录」本轮未单独留存。**11-08 双轮补证**：`--anchor command` 两轮（STAMP `20261108T125734Z` 见 §2.5.1；STAMP `20261108T141936Z` 见 `docs/field-results.md` 2026-11-08 节「路 A」小节）：左 `arm_left_shoulder_pan` 净走 `3.956044°`、残余 `1.043956°`（`11.88 tick`）、达成率 `79.1209%`；右 `arm_right_shoulder_pan` 净走 `4.131868°`、残余 `0.868132°`（`9.88 tick`）、达成率 `82.6374%`；两侧 `steps_completed=5`、`abort_reason=None`、`.exit` `0`。证据目录（仓库外）`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261108/`，路径 `tracking/tracking-v01residual-{left,right}-anchor-command-20261108T141936Z.csv`、`...-safety.csv`、`stdout/7.1-tracking-{left,right}-shoulder-v01residual-20261108T141936Z.{log,exit}`、`stdout/7.2-analysis-{left,right}-20261108T141936Z.txt` | `uv run --no-sync python -m pytest tests/test_examples_and_configs.py` 全绿，示例 exit 0 且 stdout 含 `0 次发送`；真机侧：每关节**达成率 ≥50%**，分母为 `abs(--delta-deg) × --steps`（`--anchor present` 且逐步实际命令增量与 `--delta-deg` 不等时改用 `Σ(cmd_deg − baseline_deg)`，并在记录里写明用的是哪个分母）；**步末残余按关节类别分级**：肩类（`shoulder_pan` / `shoulder_lift`）`≤2°`，其余轴 `≤2 tick（0.1758°）`；若改用 `settled=True` 口径，则**容差必须 ≥1 LSB（0.0879°）**；另需一次不接主臂的 `connect` 成功记录。判据如此限定的理由：容差 `0.05°` 比 1 LSB 还小，任一步都判不成 `settled`，旧判据「达成率 ≥50% 且 `settled=True`」在这种容差下不可达，问题出在判据本身而不是硬件。实测数字：`docs/field-results.md` 的 2026-11-05 节「达成率三轴只有腕部接近指令」一行。**11-08 补证**：`--anchor command` 5 步 × 1° 双侧达成率均 `77.36%`（见 §2.5.1），但步末残余 `12.9 tick`、`settled=False`——按旧门槛 `2 tick` 不过，按本条的分级门槛（肩类 `≤2°`）判为过，V01 据此收口为「通过」。分级与分母口径的出处是 `docs/ADR.md` D20。 |
 | V02 | 双臂与夹爪独立控制，无对侧串值 | `tests/test_control_api.py::test_red_b3_left_move_sends_only_left_arm_keys_and_never_solves_right_ik`、`::test_red_b3_right_move_sends_only_right_arm_keys_and_never_solves_left_ik`、`::test_red_b19_right_gripper_is_side_isolated`；`tests/test_kinematics_adapter.py::test_t_b1_interference_keys_gripper_base_other_arm_do_not_leak`、`::test_t_b8_d_corrupt_other_side_entries_do_not_affect_clean_side` | 未取。2026-10-25 本轮只动左臂，右臂未测，对侧串值未验证。夹爪侧另受左夹爪行程 4.48° 限制（`docs/field-results.md`「离线核对」节），重标定前不足以验证夹爪控制，见 `docs/ADR.md` D14 | 上述用例通过；真机侧动左臂时右臂的观测值与动作键不变，同一份记录里能读到两侧各自的键 |
 | V03 | 机械臂与底盘/升降分阶段互锁 | `tests/test_control_commands.py::test_b21_active_arm_cross_stage_base_request_blocks`、`::test_b22_active_base_lift_cross_stage_arm_request_blocks`；`tests/test_control_controller.py::test_t_c6_1_active_arm_receiving_base_target_blocks_with_zero_send`、`::test_t_c6_3_active_base_lift_receiving_arm_target_blocks_with_zero_send`、`::test_t_c6_4_interlock_is_recoverable_via_state_machine_release_and_settle`；`tests/test_control_api.py::test_red_b17_base_drive_refused_during_arm_motion`、`::test_red_b17_lift_move_to_refused_during_arm_motion` | 未取 | 跨阶段请求被拒，当拍 `send_action` 为 0；释放并等到静止后可恢复 |
 | V04 | 停止优先与条件恢复 | `tests/test_control_commands.py::test_b31_stop_command_targets_standby_from_every_state`、`::test_b32_same_tick_motion_and_stop_resolves_to_standby`、`::test_b33_motion_after_stop_command_is_refused_until_resume`、`::test_b91_stop_dominates_resume_and_motion_in_same_tick_batch`、`::test_b92_resume_command_in_standby_runs_unlock_gate` | 未取 | 上述用例通过。语义是：停止命令在任一状态把状态机带到 standby；同一拍内运动与停止并存时结果为 standby；未执行 resume 前再接运动命令被拒 |
@@ -34,9 +34,9 @@
 
 **Gate A–E 归档为什么不作准入记录（已决）**：Gate 系统连同设计规范 D018 定下的归档 JSON 格式（`docs/alohamini-control/gates/<side>-gate-<letter>.json`，`schema_version` 1，`tools/alohamini_gate_record.py` 校验）已删除。归档工具不再存在，归档格式无法产出，所以 Gate A–E 不能作为准入记录使用，由本基线（V01–V13）替代。这是已决结论，出处 `docs/ADR.md` D17，不是暂定项。
 
-**本基线未覆盖的缺口：按臂资格档案**：V01–V13 里没有「哪条臂已通过受控试动」的按臂档案。现状是左臂部分通过、右臂完全未测。左臂的数字见 V01 行的原值：`arm_left_wrist_roll` 达成 `87.9%`、`settled=True`；`arm_left_shoulder_pan` `5.9%` 与 `8.8%`、`arm_left_shoulder_lift` `13.2%`，全部 `settled=False`；右臂未测（V02 行同样记「未取」）。若将来需要按臂资格判定，应另立条目，而不是复活 Gate 归档格式。这个缺口不占 V 编号，也不预留占位编号。
+**本基线未覆盖的缺口：按臂资格档案**：V01–V13 里没有「哪条臂已通过受控试动」的按臂档案。现状是**左臂 V01 已通过**（2026-10-25 腕部 `arm_left_wrist_roll` `87.9%`、`settled=True`；2026-11-08 `arm_left_shoulder_pan` 达成 `79.1209%`、残余 `1.043956°`，按 `docs/ADR.md` D20 判过），**右臂只有一轴** `arm_right_shoulder_pan` 的跟随记录（2026-11-08 路 A：达成 `82.6374%`、残余 `0.868132°`），右臂其余关节未测；V02 的「动一侧时另一侧不串值」仍未取（V02 行同样记「未取」）。若将来需要按臂资格判定，应另立条目，而不是复活 Gate 归档格式。这个缺口不占 V 编号，也不预留占位编号。
 
-**A 阶段的降级出口（受阻 ≠ 完成）**：「受阻」= **当前无法推进**（A 阶段这里是肩部 `arm_left_shoulder_pan` / `arm_left_shoulder_lift` 两轴未跟随），记录时必须写明缺哪个动作——现在是缺 `docs/s4-field-smoke.md` §10.5 的 teleop oracle 与 M1（需人员到场）。经 M1 / teleop 定性为**硬件不可修**之后**仍记「受阻」**（不改成别的状态），并追加「按臂 / 关节资格档案降级推进 B」这条出口：已取得跟随证据的关节按已取记录进档案，未跟随的关节资格为空，不继承、不推断。两种情形都**不得记「完成」**，V01 的实机证据保持「未取」、**不因降级而算通过**。这条口径的取舍与红线见 `docs/ADR.md` D19（红线 4）。它替代旧的逃逸口——旧写法允许把「在手册里写明结构性原因」当作 A 阶段的交差方式，这不成立。
+**A 阶段的降级出口（受阻 ≠ 完成）**：「受阻」= **当前无法推进**（A 阶段这里是肩部 `arm_left_shoulder_pan` / `arm_left_shoulder_lift` 两轴未跟随），记录时必须写明缺哪个动作——现在是缺 `docs/s4-field-smoke.md` §10.5 的 teleop oracle 与 M1（需人员到场）。经 M1 / teleop 定性为**硬件不可修**之后**仍记「受阻」**（不改成别的状态），并追加「按臂 / 关节资格档案降级推进 B」这条出口：已取得跟随证据的关节按已取记录进档案，未跟随的关节资格为空，不继承、不推断。两种情形都**不得记「完成」**，V01 的实机证据保持「未取」、**不因降级而算通过**。这条口径的取舍与红线见 `docs/ADR.md` D19（红线 4）。它替代旧的逃逸口——旧写法允许把「在手册里写明结构性原因」当作 A 阶段的交差方式，这不成立。**限定（2026-11-08 起）**：A 阶段自 2026-11-08 起不再受阻（V01 已按 `docs/ADR.md` D20 收口为「通过」），本段的定义与红线不因这一点失效，对后续阶段仍适用。
 
 ### 2.2 什么时候算关闭
 
@@ -55,7 +55,7 @@
 | 维度 | 有证据 | 部分 | 不适用 | 未取 | 合计 |
 | --- | --- | --- | --- | --- | --- |
 | 软件侧 | 10 条（V02、V03、V04、V05、V07、V08、V09、V10、V12、V13） | 3 条（V01、V06、V11） | 0 条 | 0 条 | 13 |
-| 实机侧 | 1 条（V12） | 2 条（V01、V10） | 1 条（V09） | 9 条 | 13 |
+| 实机侧 | 2 条（V01、V12） | 1 条（V10） | 1 条（V09） | 9 条 | 13 |
 
 「部分」的含义：有专项用例或现场记录，但只覆盖该条要求的一部分，缺口在对应格子里写明了。
 
@@ -63,9 +63,9 @@
 
 V11 仍是「部分」，缺口已由 `docs/ADR.md` D15 收口——帧平滑回退不做，软件侧判据为「v1 能解析 + 换算可回落 + 缺字段填 `None` 并点名」，三款均有用例锁定；仍算「部分」的原因是**实机侧未取**：本库没有对 v1 宿主跑过整环，Pi 升级后只广播 schema 2，这条只能靠离线用例覆盖。
 
-实机侧已取的三条中 V12 已全实，V01、V10 仍只是部分：
+实机侧已取的三条中 V01、V12 已全实，V10 仍只是部分：
 
-- V01 取到的是腕部一个关节的跟随证据（`arm_left_wrist_roll` 达成 `87.9%`，两步 `settled=True`）。肩部两轴未跟随（首次试动 `arm_left_shoulder_pan` `5.9%`，随后同一轴 `8.8%`、`arm_left_shoulder_lift` `13.2%`，全部 `settled=False`），原因排查中；判据里「不接主臂的 `connect` 成功记录」本轮未单独留存。补证跑法与判据见 §2.5。
+- V01 已收口为「通过」：2026-10-25 腕部 `arm_left_wrist_roll` 达成 `87.9%`、两步 `settled=True`（2026-10-25 那轮走默认锚点，语义等同 `--anchor present`；`--anchor` 旋钮 2026-11-08 才落地）；2026-11-08 两轮 `--anchor command` 肩部双侧过支（达成率 `77.3626%` / `79.1209%` / `82.6374%`，残余按 D20 分级 `≤2°`），A 阶段不再受这条阻塞。判据与分母口径见 `docs/ADR.md` D20，数字见 §2.5.1 与 `docs/field-results.md` 2026-11-08 节「路 A」小节。
 - V10 取到的是 Gate F 第一段的拒绝记录（v1 宿主，退出码 `6`、零命令）。v2 宿主下第二段（换算字段不全时的拒绝）未触发、未验证，理由是 18/18 电机字段齐全，第二段不会拒。拒绝路径实机证据已取：2026-11-06 真机 exit 6 落 Gate B（厂商先降级 schema），零命令 + 无产物；Gate C 专属文案由离线测试锁定，真机链路不可达。
 - V12 已核对（离线，盘上真机数据）：`tools/verify_unit_consistency.py` 逐电机比对 18/18 两侧 `range_min`/`range_max` 完全相等（`homing_offset`/`id`/`drive_mode` 亦逐项相等），差异 0 个、退出码 `0`；`resolution` 全部 4096，`delta_deg` 列全为 `0.000`（它是两侧 range 相等的算术后果，不是第二重证据）。判据里「用它算出的 `deg_per_unit` 与标定文件 range 一致」这一条据此关闭。限定：本条只证明「两侧单位口径一致」，不含 URDF 限位交集；`deg_per_unit` 的绝对正确性无法用两份离线文件互证（`resolution` 只有指纹一个来源）。
 
@@ -79,7 +79,7 @@ V04（停止优先与条件恢复）、V05（反馈异常拦截与时效守护�
 
 ### 2.5 V01 的实机证据补充：验证跑法（预写）
 
-V01 现在的实机证据只有一个腕部关节的跟随（`arm_left_wrist_roll` 达成 `87.9%`，两步 `settled=True`），肩部两轴未跟随，见 §2.3。本节写补证的跑法，**不改变 V01 当前状态**：跑完并拿到本节末尾的产物之后，才按 §2.2 把 V01 的实机证据列改成记录路径、并改 §2.3 的汇总数。
+V01 收口前的实机证据只有一个腕部关节的跟随（`arm_left_wrist_roll` 达成 `87.9%`，两步 `settled=True`），肩部两轴未跟随（补证前的状态），见 §2.3。本节写补证的跑法；补证已跑完（结果见 §2.5.1 与 `docs/field-results.md` 2026-11-08 节「路 A」小节），V01 已据此收口为「通过」，判据口径见 `docs/ADR.md` D20。
 
 **硬前置（缺一不跑）**：
 
@@ -108,9 +108,9 @@ V01 现在的实机证据只有一个腕部关节的跟随（`arm_left_wrist_rol
 
 达成率口径沿用 `docs/s4-field-smoke.md` 第 7 节（净行程 ÷ 指令行程）。`--anchor command` 下指令行程按 `abs(delta_deg) × steps` 算成立；`--anchor present` 下相邻 target 的间距会被跟随误差吃掉，不能用 `delta_deg × steps` 当分母（见 `TODO.md` §4 的换算条目）。
 
-上表基线的三个百分数是**10 步 × 1°、settle 2 s 窗、容差 0.05°** 那一场的口径（`docs/field-results.md:79`），与单步 15 s 长窗的 `17.582%`（`:81`）不是同一个窗口，不要混成一个区间。对端量级参照只有口述：用户口述 vendor 遥操作同链路能带动肩部，量级约 100%（**口述，未取仪器证据**，见 `docs/field-results.md` 2026-11-06 节；本轮未跑 teleop oracle）。
+上表基线的三个百分数是**10 步 × 1°、settle 2 s 窗、容差 0.05°** 那一场的口径（`docs/field-results.md:139`），与单步 15 s 长窗的 `17.582%`（`:141`）不是同一个窗口，不要混成一个区间。对端量级参照只有口述：用户口述 vendor 遥操作同链路能带动肩部，量级约 100%（**口述，未取仪器证据**，见 `docs/field-results.md` 2026-11-06 节；本轮未跑 teleop oracle）。
 
-`70%` 与 A 阶段的 **≥50%** 不同源，不是同一场的同一门槛：A 阶段判据是 `--anchor present` + 10 步、门槛 `≥50%` 且步末残余 ≤2 tick（`TODO.md` §3.1、本文件 V01 行），本节是 `--anchor command` + 5 步、门槛 `≥70%`。
+`70%` 与 A 阶段的 **≥50%** 不同源，不是同一场的同一门槛：A 阶段判据以 `TODO.md` §2 与本文件 V01 行为准（D20 口径：达成率 `≥50%`，分母 `abs(delta) × steps`；步末残余按关节类别分级，肩类 `≤2°`、其余轴 `≤2 tick`），本节是 `--anchor command` + 5 步、门槛 `≥70%`。
 
 **证据清单**：
 
@@ -121,7 +121,7 @@ V01 现在的实机证据只有一个腕部关节的跟随（`arm_left_wrist_rol
 | stdout note | `note: anchor=command` 那行 | 自证本轮锚点，避免与 `present` 的读数混比 |
 | scope 记录 | 步末 `Goal_Position − Present_Position` | 与 stdout 的 target 对账 |
 
-跑完拿到上表所列产物才改 V01 的实机证据列，否则 V01 维持现状。
+上表产物齐备才改 V01 的实机证据列；本轮产物齐备，已按此改。
 
 #### 2.5.1 补证结果（2026-11-08 实测，`anchor=command` 形态）
 
@@ -142,4 +142,4 @@ V01 现在的实机证据只有一个腕部关节的跟随（`arm_left_wrist_rol
 
 **V01 §2.5 补证状态：通过（`anchor=command` 形态）。**
 
-边界（不改主表门槛）：两侧每步 `settled=False`、步末残余 `1.131868°`（`12.9 tick`），远大于主表的 `2 tick`。本轮满足的是本节门槛（达成率 ≥70%），**不是**主表「达成率 ≥50% 且步末残余 ≤2 tick」这一条；主表门槛是否调整见 `TODO.md` §4「V01 主表残余支」。
+**边界（门槛已由 D20 调整）**：两侧每步 `settled=False`、步末残余 `1.131868°`（`12.9 tick`），在旧门槛 `2 tick` 下不过；按 `docs/ADR.md` D20 的分级门槛（肩类 `≤2°`）判为过。本节门槛（达成率 ≥70%）与主表门槛（≥50%）不同源，见上文。
