@@ -428,6 +428,8 @@ PY
 run 4.1c-capture uv run --no-sync python benchmarks/alohamini_io/capture_robot_fingerprint.py --host "$PI_HOST" --out "$S4DIR/capture/fingerprint-postpower-$STAMP.json"
 ```
 
+命名口径：过程指纹固定 `fingerprint-$STAMP.json`，收尾断电前固定 `fingerprint-postpower-$STAMP.json`，两者后缀不同、互不覆盖；同一 STAMP 下还要采 §4.1c 的一份时，另存 `fingerprint-postpower-$STAMP.4.1c-preserved.json` 并在台账点名（2026-11-08 现场即此情形）。
+
 判据：exit 0，`robot_metadata.schema_version` 为 `2`。**本节故意不传 `--lerobot-version`**：那个变量由 §4.1b-lerobot-version 导出，而本节常被当成「上电后第一件事」跑；传空串会被 `capture_robot_fingerprint.py:310-315` 以 exit 2 拒（原文 `--lerobot-version must not be empty`）。本节只判 `schema_version`，不判版本字段，所以整条标志省掉最稳；`lerobot_version` 记成 `null` 是诚实缺失，不是失败（口径同 §4.1）。
 若主环境没有 `lerobot` 而以 **exit 3** 结束，改用第 4.1 节「capture 在 Pi 侧跑」的同一形态（Pi 侧解释器 + `PYTHONPATH=/home/pi5/lerobot_alohamini/src`），产物再用 `scp` 取回 `$S4DIR/capture/`。拿到 exit 2 说明命令本身写错了（多半是给了一个空变量），先修命令，别当成设备问题。
 

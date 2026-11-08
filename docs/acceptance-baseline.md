@@ -8,7 +8,7 @@
 
 | 编号 | 要求（一句话） | 软件证据（本库现状） | 实机证据（现状） | 判据（什么算过） |
 | --- | --- | --- | --- | --- |
-| V01 | 脱离遥操作主臂，纯 PC 侧控制 | 无「主臂」专项用例，本库代码里没有 leader 分支。间接证据两条：`tests/test_examples_and_configs.py` 契约 A 的 5 条用例（`test_example_script_exits_zero`、`test_example_script_reports_zero_send_action_calls` 等）用 PC 侧假 transport 把会话整环跑通；`tests/test_control_api.py::test_default_client_factory_without_runtime_raises_runtime_unavailable` 钉住运行时只能由调用方注入 | 部分。2026-10-25 真机受控试动（Mode B，左臂单关节、每步 1°，证据目录 `tracking/` 下五份 CSV）：腕部 `arm_left_wrist_roll` 经 PC 侧命令走出净行程 `+1.758°`（指令 2.0°），达成率 `87.9%`，两步 `settled=True`，误差 `0.121°`；肩部未跟随：首次试动 `arm_left_shoulder_pan`（1°×3 步）`5.9%`，随后同一轴 `8.8%`（1°×3 步）与 `8.8%`（1°×2 步），`arm_left_shoulder_lift` `13.2%`，全部 `settled=False`，原因排查中。达成率 = 净行程 ÷ 指令行程，口径见 `docs/s4-field-smoke.md` 第 7 节。判据里「不接主臂的 `connect` 成功记录」本轮未单独留存 | `uv run --no-sync python -m pytest tests/test_examples_and_configs.py` 全绿，示例 exit 0 且 stdout 含 `0 次发送`；真机侧：每关节**达成率 ≥50%，且该步步末残余 ≤2 tick（2 × 0.0879° = 0.1758°）**；若改用 `settled=True` 口径，则**容差必须 ≥1 LSB（0.0879°）**；另需一次不接主臂的 `connect` 成功记录。判据如此限定的理由：容差 `0.05°` 比 1 LSB 还小，任一步都判不成 `settled`，旧判据「达成率 ≥50% 且 `settled=True`」在这种容差下不可达，问题出在判据本身而不是硬件。实测数字：`docs/field-results.md` 的 2026-11-05 节「达成率三轴只有腕部接近指令」一行 |
+| V01 | 脱离遥操作主臂，纯 PC 侧控制 | 无「主臂」专项用例，本库代码里没有 leader 分支。间接证据两条：`tests/test_examples_and_configs.py` 契约 A 的 5 条用例（`test_example_script_exits_zero`、`test_example_script_reports_zero_send_action_calls` 等）用 PC 侧假 transport 把会话整环跑通；`tests/test_control_api.py::test_default_client_factory_without_runtime_raises_runtime_unavailable` 钉住运行时只能由调用方注入 | 部分。2026-10-25 真机受控试动（Mode B，左臂单关节、每步 1°，证据目录 `tracking/` 下五份 CSV）：腕部 `arm_left_wrist_roll` 经 PC 侧命令走出净行程 `+1.758°`（指令 2.0°），达成率 `87.9%`，两步 `settled=True`，误差 `0.121°`；肩部未跟随：首次试动 `arm_left_shoulder_pan`（1°×3 步）`5.9%`，随后同一轴 `8.8%`（1°×3 步）与 `8.8%`（1°×2 步），`arm_left_shoulder_lift` `13.2%`，全部 `settled=False`，原因排查中。达成率 = 净行程 ÷ 指令行程，口径见 `docs/s4-field-smoke.md` 第 7 节。判据里「不接主臂的 `connect` 成功记录」本轮未单独留存 | `uv run --no-sync python -m pytest tests/test_examples_and_configs.py` 全绿，示例 exit 0 且 stdout 含 `0 次发送`；真机侧：每关节**达成率 ≥50%，且该步步末残余 ≤2 tick（2 × 0.0879° = 0.1758°）**；若改用 `settled=True` 口径，则**容差必须 ≥1 LSB（0.0879°）**；另需一次不接主臂的 `connect` 成功记录。判据如此限定的理由：容差 `0.05°` 比 1 LSB 还小，任一步都判不成 `settled`，旧判据「达成率 ≥50% 且 `settled=True`」在这种容差下不可达，问题出在判据本身而不是硬件。实测数字：`docs/field-results.md` 的 2026-11-05 节「达成率三轴只有腕部接近指令」一行。**11-08 补证**：`--anchor command` 5 步 × 1° 双侧达成率均 `77.36%`（见 §2.5.1），但步末残余 `12.9 tick`、`settled=False`——「残余 ≤2 tick 或 settled」支仍未满足，A 阶段维持受阻；V01 状态字不变。 |
 | V02 | 双臂与夹爪独立控制，无对侧串值 | `tests/test_control_api.py::test_red_b3_left_move_sends_only_left_arm_keys_and_never_solves_right_ik`、`::test_red_b3_right_move_sends_only_right_arm_keys_and_never_solves_left_ik`、`::test_red_b19_right_gripper_is_side_isolated`；`tests/test_kinematics_adapter.py::test_t_b1_interference_keys_gripper_base_other_arm_do_not_leak`、`::test_t_b8_d_corrupt_other_side_entries_do_not_affect_clean_side` | 未取。2026-10-25 本轮只动左臂，右臂未测，对侧串值未验证。夹爪侧另受左夹爪行程 4.48° 限制（`docs/field-results.md`「离线核对」节），重标定前不足以验证夹爪控制，见 `docs/ADR.md` D14 | 上述用例通过；真机侧动左臂时右臂的观测值与动作键不变，同一份记录里能读到两侧各自的键 |
 | V03 | 机械臂与底盘/升降分阶段互锁 | `tests/test_control_commands.py::test_b21_active_arm_cross_stage_base_request_blocks`、`::test_b22_active_base_lift_cross_stage_arm_request_blocks`；`tests/test_control_controller.py::test_t_c6_1_active_arm_receiving_base_target_blocks_with_zero_send`、`::test_t_c6_3_active_base_lift_receiving_arm_target_blocks_with_zero_send`、`::test_t_c6_4_interlock_is_recoverable_via_state_machine_release_and_settle`；`tests/test_control_api.py::test_red_b17_base_drive_refused_during_arm_motion`、`::test_red_b17_lift_move_to_refused_during_arm_motion` | 未取 | 跨阶段请求被拒，当拍 `send_action` 为 0；释放并等到静止后可恢复 |
 | V04 | 停止优先与条件恢复 | `tests/test_control_commands.py::test_b31_stop_command_targets_standby_from_every_state`、`::test_b32_same_tick_motion_and_stop_resolves_to_standby`、`::test_b33_motion_after_stop_command_is_refused_until_resume`、`::test_b91_stop_dominates_resume_and_motion_in_same_tick_batch`、`::test_b92_resume_command_in_standby_runs_unlock_gate` | 未取 | 上述用例通过。语义是：停止命令在任一状态把状态机带到 standby；同一拍内运动与停止并存时结果为 standby；未执行 resume 前再接运动命令被拒 |
@@ -122,3 +122,24 @@ V01 现在的实机证据只有一个腕部关节的跟随（`arm_left_wrist_rol
 | scope 记录 | 步末 `Goal_Position − Present_Position` | 与 stdout 的 target 对账 |
 
 跑完拿到上表所列产物才改 V01 的实机证据列，否则 V01 维持现状。
+
+#### 2.5.1 补证结果（2026-11-08 实测，`anchor=command` 形态）
+
+| 判据 | 门槛 | 实测 | 结论 |
+| --- | --- | --- | --- |
+| ① 运动帧 `requested_target == accepted_target` 占比 | `100%` | 左 `6258/6258`（`100.00%`）、右 `6174/6174`（`100.00%`） | 过 |
+| ② 每关节达成率 | `≥ 70%` | 左 `77.3626%`、右 `77.3626%`（各净走 `3.868132°` / 指令 `5.0°`） | 过 |
+| ③ 左右任一侧不过 → 整轮不过 | — | 左右同值，无一侧不过 | 过 |
+
+证据目录（仓库外）`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261107/`，STAMP `20261108T125734Z`：
+
+| 产物 | 路径 |
+| --- | --- |
+| 主 CSV（左右各一份） | `tracking/tracking-2.5-{left,right}-anchor-command-20261108T125734Z.csv` |
+| sidecar | `tracking/tracking-2.5-{left,right}-anchor-command-20261108T125734Z-safety.csv` |
+| stdout | `stdout/7.1-tracking-{left,right}-shoulder-anchor-command-20261108T125734Z.{log,exit}`（含 `note: anchor=command`、`steps_completed=5`、exit `0`） |
+| scope | `stdout/scope-20261108T125734Z.md`、`stdout/7.1-checklist-20261108T125734Z.md`、`stdout/scope-append-20261108T125734Z.md` |
+
+**V01 §2.5 补证状态：通过（`anchor=command` 形态）。**
+
+边界（不改主表门槛）：两侧每步 `settled=False`、步末残余 `1.131868°`（`12.9 tick`），远大于主表的 `2 tick`。本轮满足的是本节门槛（达成率 ≥70%），**不是**主表「达成率 ≥50% 且步末残余 ≤2 tick」这一条；主表门槛是否调整见 `TODO.md` §4「V01 主表残余支」。
