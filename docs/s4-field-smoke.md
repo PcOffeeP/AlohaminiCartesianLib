@@ -2,7 +2,7 @@
 
 这份文档是一次现场窗口的执行手册，从到场核对写到收尾，每一节给命令、判据与产物。现场由 Agent 通过 SSH 连上 Pi，照着逐条取数、执行，不靠临时决策补缺失的信息。
 
-实测边界：第 3、4.1、4.3、5、7.1 节的命令在 2026-10-25 对 `pi5@10.34.170.98` 跑过一轮，产物在证据目录 `evidence/s4-20261025/`，数字汇总见 `docs/field-results.md`。第 4.2、5.3、6.1、6.2、7.2 节原定为本轮新增、未在现场执行过；2026-11-05 的现场会话（远程 SSH，Pi 运行时 HEAD `6aee1f81`、lerobot `0.6.1`）已把这五节与 §4.1 的 Pi 侧 capture 跑过一轮，命令与本文原写法不同之处已在对应小节写明，数字汇总见 `docs/field-results.md` 的 2026-11-05 节。首跑若输出形态与本文不符，按实际输出修正，并回写到本文档。2026-11-05 之后新增的 §4.1c、§4.2 的「全 18 电机静态体检」、§4.4、§7.1b 已在 2026-11-06 的现场窗口跑过（证据目录 `evidence/s4-20261106/`，数字汇总见 `docs/field-results.md` 的 2026-11-06 节）；§4.5 只跑过 ssh 连通性检查，`stash list` / `reflog` / `status --porcelain` 三份原文未取；改写后的 §10.5 仍未在任何现场跑过：命令形式在本地验过（`--help`、`--delta-deg` 的负值与零值行为、位置比对脚本的自检与变异自检），现场输出形态以首次执行为准。
+实测边界：第 3、4.1、4.3、5、7.1 节的命令在 2026-10-25 对 `pi5@10.34.170.98` 跑过一轮，产物在证据目录 `evidence/s4-20261025/`，数字汇总见 `docs/field-results.md`。第 4.2、5.3、6.1、6.2、7.2 节原定为本轮新增、未在现场执行过；2026-11-05 的现场会话（远程 SSH，Pi 运行时 HEAD `6aee1f81`、lerobot `0.6.1`）已把这五节与 §4.1 的 Pi 侧 capture 跑过一轮，命令与本文原写法不同之处已在对应小节写明，数字汇总见 `docs/field-results.md` 的 2026-11-05 节。首跑若输出形态与本文不符，按实际输出修正，并回写到本文档。2026-11-05 之后新增的 §4.1c、§4.2 的「全 18 电机静态体检」、§4.4、§7.1b 已在 2026-11-06 的现场窗口跑过（证据目录 `evidence/s4-20261106/`，数字汇总见 `docs/field-results.md` 的 2026-11-06 节）；§4.5 只跑过 ssh 连通性检查，`stash list` / `reflog` / `status --porcelain` 三份原文未取；改写后的 §10.5 仍未在任何现场跑过：命令形式在本地验过（`--help`、`--delta-deg` 的负值与零值行为、位置比对脚本的自检与变异自检），现场输出形态以首次执行为准。**§10.6 与 §10.7 同样一次现场都没跑过**：§10.6 只有一次离线复现（假 client，无设备无网络），§10.7 只有 ①b 的离线 `--dry-run` 在本机验过。
 
 ## 0 这份文档怎么用
 
@@ -41,6 +41,7 @@
 | 启停 Host 进程 | 第 6.1、6.2、7、10.5 节 | 现场授权（会中断机器人的常驻主程序） | 只在 Host 已运行时取数，不重启 |
 | `kill -9` 强杀 Host 进程（M1 / M2 的读数就靠它） | 第 10.5 节 | 现场授权，且必须是「强杀、不做失力」这一类；同一行要写明谁承托手臂 | 停，只做 teleop oracle |
 | 真机受控试动 | 第 6.2、7.1 节 | 明确的运动授权：哪个关节、多少度、谁在旁、断电开关在手 | 停，只做到第 6.1 节 |
+| 真机受控试动 | 第 10.7 节（②③） | 运动授权 + 断电开关在人手上 | 停，只做 ①a/①b |
 | 断电与上电 | 第 3、8 节 | 现场授权 | 停止 |
 | 跨机 RTT（PC → Pi 真实网段） | 第 5.3 节 | 网络访问授权 | 只记「未测」 |
 
@@ -1768,6 +1769,958 @@ run 10.5-m2 env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pcoffeep/pi-w
 - 每步必须有 `.cmd` / `.log` / `.exit` 三件套，写法同第 2 节的 `run` 包装。
 - 每条结论必须落到本节的分支之一（teleop 的二分、M1 的三分支、M2 的三种形态），并把对应的寄存器原文或 CSV 行号写进记录；没落到分支的记录不算结论。
 - 现场若拿到与本文不符的输出形态，按实际输出修正并回写到本小节（沿用本文档原有的回写约定）。
+
+## 10.6 ik 通路与 Gate D：`measure_latency.py` 没有 ik 模式（预写，未真机执行）
+
+本节是跑法预写，一次真机记录都还没有，判据与预期值未经现场校验。
+
+本节接 §10.5 之后，回答两件事：`measure_latency.py` 里有没有「ik 模式」（结论：没有），以及 Gate D（baseline 反馈缺失或非有限即拒绝）在真机上唯一可能的触发形态、取证边界与替代证据。
+
+### 本轮 brief 的假设与代码不符：`--mode` 只有两个取值
+
+本次写稿的 brief（任务说明）原本假设脚本里有 `ik` 模式。核对源码后没有：`--mode` 的取值集合是写死的二元组（源码原文）：
+
+```python
+    parser.add_argument(
+        "--mode",
+        choices=("rtt", "tracking"),
+        default=DEFAULT_MODE,
+        help="rtt: request-age only, zero motion; tracking: real robot motion",
+    )
+```
+
+（`benchmarks/alohamini_io/measure_latency.py:1591-1596`，取值集合就在 `benchmarks/alohamini_io/measure_latency.py:1593`）
+
+| `--mode` 取值 | 一句话人话 | 动机器人 | 走哪套门禁 |
+| --- | --- | --- | --- |
+| `rtt`（默认） | 只测请求年龄 | 否 | 无运动门禁，Gate A–F 不执行 |
+| `tracking` | 单关节阶跃响应 | 是 | Gate A–F（§7.1 的表） |
+| `ik`（**不存在**） | — | — | 传进来即参数解析失败，退出码 `2` |
+
+附录 A 的 measure 参数表里 `--mode` 一行也只写 `rtt` 或 `tracking`，与源码一致。结论：「`measure_latency.py --mode ik`」这种写法不存在；现场照 brief 字面去试，拿到的是 argparse 的用法错误（退出码 `2`，不连设备、不开 socket，触发点清单见 §10 的「退出码 2 的全部触发点」）。
+
+### Gate D 的定义、唯一触发路径与三处限制
+
+Gate D 判的是 baseline（基线，即第一帧观测里该关节的实测值）是不是一个有限数。判断式与文案（源码原文）：
+
+```python
+    if _finite_or_none(observation.get(joint_key)) is None:
+        return None, (
+            f"Gate D refused: baseline feedback for {joint_key!r} is missing or non-finite; "
+            "nothing was commanded."
+        )
+```
+
+（`benchmarks/alohamini_io/measure_latency.py:2399-2403`；文案本身在 `benchmarks/alohamini_io/measure_latency.py:2401`）模板是 `Gate D refused: baseline feedback for {joint_key!r} is missing or non-finite; nothing was commanded.`，`{joint_key!r}` 会带单引号，现场 stderr 形如：
+
+```
+Gate D refused: baseline feedback for 'arm_left_shoulder_pan.pos' is missing or non-finite; nothing was commanded.
+```
+
+三处限制，缺一条都触发不到这道门：
+
+| # | 限制 | 依据 |
+| --- | --- | --- |
+| 1 | 只在 `--mode tracking`：`_tracking_preflight` 只由 tracking 路径调用一次，`rtt` 路径不调 | 定义在 `benchmarks/alohamini_io/measure_latency.py:2353`，唯一调用点在 `benchmarks/alohamini_io/measure_latency.py:3450` |
+| 2 | 该关节键必须**在首帧观测里存在**；键不在观测里时，更早的 Gate B 先拒，走不到 D | `benchmarks/alohamini_io/measure_latency.py:2373-2379` |
+| 3 | 值必须**不可用**：`float()` 抛 `TypeError` / `ValueError`，或 `not math.isfinite(...)`，都判「缺失或非有限」 | `_finite_or_none` 定义在 `benchmarks/alohamini_io/measure_latency.py:726` |
+
+三种观测形态各落哪道门：
+
+| 首帧观测里 `joint_key` | 值 | 落哪道门 | 退出码 |
+| --- | --- | --- | --- |
+| 不存在 | — | Gate B（`joint_key not in observation`） | `6` |
+| 存在 | 有限数 | 过 D，继续 E / F | — |
+| 存在 | `nan` / `inf` / 非数值文本 | **Gate D** | `6` |
+| 存在 | `None` | **Gate D**（`float(None)` 抛 `TypeError`） | `6` |
+
+退出码常量是 `EXIT_MOTION_GATE_REFUSED = 6`（`benchmarks/alohamini_io/measure_latency.py:472`），与 §10 的「measure 6 = 代码 Gate A–F 拒绝」同一格。
+
+离线复现（本轮实测，一次性探针落 `/tmp`，不入库）：把步进关节的反馈改成 `nan`（键仍在观测里；元数据照 `_TrackingFake` 的形状：`schema_version` 2 加该关节的 `range_min` / `range_max` / `resolution`）、跑一次 `--mode tracking`。
+
+探针原文（整段存成 `/tmp/probe_gate_d.py`，在仓库根执行；下文输出与这份原文同源）：
+
+```python
+#!/usr/bin/env python3
+"""Gate D 离线复现探针（一次性，落 /tmp，不入库；在仓库根执行）。"""
+
+from __future__ import annotations
+
+import contextlib
+import importlib.util
+import io
+import tempfile
+from pathlib import Path
+
+SCRIPT = Path("benchmarks/alohamini_io/measure_latency.py").resolve()
+spec = importlib.util.spec_from_file_location("bench_measure_latency", SCRIPT)
+latency = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(latency)
+
+
+class NanBaselineFake:
+    """步进关节的键仍在观测里，但基线反馈是 nan。"""
+
+    def __init__(self) -> None:
+        self.sent_actions: list[dict] = []
+        self.latest_robot_metadata = {
+            "schema_version": 2,
+            "robot_model": "alohamini2pro",
+            "motors": {
+                "arm_left_shoulder_pan": {"range_min": 1000, "range_max": 3000, "resolution": 4096}
+            },
+        }
+
+    def connect(self) -> None:
+        pass
+
+    def disconnect(self) -> None:
+        pass
+
+    def get_observation(self, include_cameras: bool = True) -> dict:
+        return {"arm_left_shoulder_pan.pos": float("nan")}
+
+    def send_action(self, action: dict) -> dict:
+        self.sent_actions.append(dict(action))
+        return dict(action)
+
+
+def main() -> int:
+    """跑一次 --mode tracking，打印退出码、发送次数、CSV 与 stderr。"""
+    client = NanBaselineFake()
+    csv_path = Path(tempfile.mkdtemp()) / "gate-d.csv"
+    argv = [
+        "--host",
+        "127.0.0.1",
+        "--mode",
+        "tracking",
+        "--enable-motion",
+        "--joint",
+        "arm_left_shoulder_pan",
+        "--steps",
+        "1",
+        "--csv",
+        str(csv_path),
+    ]
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
+        code = latency.main(argv, client_factory=lambda host, port, model, window: client)
+    print(f"exit code: {code}")
+    print(f"EXIT_MOTION_GATE_REFUSED: {latency.EXIT_MOTION_GATE_REFUSED}")
+    print(f"send_action 次数: {len(client.sent_actions)}")
+    print(f"csv 是否落盘: {csv_path.exists()}")
+    print("stderr 原文:")
+    print(stderr.getvalue().strip())
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+```
+
+命令与输出原文：
+
+```bash
+uv run --no-sync python /tmp/probe_gate_d.py
+```
+
+```
+exit code: 6
+EXIT_MOTION_GATE_REFUSED: 6
+send_action 次数: 0
+csv 是否落盘: False
+stderr 原文:
+Gate D refused: baseline feedback for 'arm_left_shoulder_pan.pos' is missing or non-finite; nothing was commanded.
+```
+
+这组数字是**离线**结果（假 client、无设备、无网络），不是现场形态。
+
+### 怎么造成 baseline 缺失：没有现成注入路径
+
+要问的是：能不能人为制造 baseline 缺失，好在现场「顺便」把 Gate D 取到。先查代码有没有注入或降级路径：
+
+```bash
+grep -n "os.environ\|getenv" benchmarks/alohamini_io/measure_latency.py
+grep -n "dry.run\|dry_run" benchmarks/alohamini_io/measure_latency.py
+```
+
+两条都零命中（无输出、`exit 1`）。逐项核对：
+
+| 可能的注入路径 | 是否存在 | 依据 |
+| --- | --- | --- |
+| 一个 `ik` 或 `gate-d` 之类的模式开关 | 无 | `--mode` 只有 `rtt` / `tracking`（`benchmarks/alohamini_io/measure_latency.py:1593`） |
+| 环境变量降级 | 无 | 全文件 `os.environ` / `getenv` 零命中 |
+| `--dry-run` 之类的干跑开关 | 无 | 全文件 `dry_run` 零命中 |
+| 把 `--joint` 指向不存在的键 | 有，但落 Gate B，不是 D | `benchmarks/alohamini_io/measure_latency.py:2373-2379` |
+
+结论：现场唯一合法触发方式是真机 Host 返回该关节的非有限反馈，**不可人为制造**。因此这条门禁的现场形态**只能被动等待**；不得为了触发它去改代码、改脚本或注入假值。等到就记原文（stderr 逐字、退出码、有无 CSV），等不到就写「未触发」，不得写成「通过」或「失败」。
+
+离线证据现状（本轮核查，修正 brief 的一处说法）：仓库里**没有**专门用例断言 Gate D 的拒绝文案。
+
+```bash
+grep -rn "Gate D" tests/ --include=*.py
+grep -rn "baseline feedback" tests/ --include=*.py
+```
+
+第一条命中两处、均为注释或 docstring、无断言锁定该文案：`tests/benchmarks/test_measure_latency.py:33` 是模块 docstring 把 Gate D 列在「覆盖对象」清单里，`tests/test_arm_ik.py:1247` 是一条行内注释（提到「Gate D 2.0 deg metric」）；第二条零命中。所以「Gate D 的拒绝文案已由离线用例锁定」这一说法本轮核查**不成立**，记为遗留项：要锁定得补一条用例（`_TrackingFake` 的该关节取 `nan`，断言退出码 `6` + `send_action` 为 0 + stderr 含 `Gate D`），本轮不改 `tests/`。对照：Gate B / C / E / F 都有专门用例（同文件里的 `test_main_should_refuse_tracking_when_the_joint_is_not_in_the_state_schema`、`test_main_should_refuse_tracking_when_the_host_reports_another_robot_model` 等）。
+
+顺带澄清一处易混：同一套措辞在运行中的另一条路径也出现——每步取基线失败时的中止理由是 `baseline feedback for {joint_key} is missing or non-finite`（`benchmarks/alohamini_io/measure_latency.py:3151`），那属运行时中止（退出码 `1`），不是 Gate D 的 `6`，两者不得互相替代。
+
+### ik 通路怎么验：不在 `measure_latency.py` 里
+
+`measure_latency.py` 全文没有 IK：没有 `placo`、没有 `ArmIK`、没有正向运动学。它的每步目标是「锚点角度 + `--delta-deg`」的算术（`benchmarks/alohamini_io/measure_latency.py:3155-3168`），一次只动一个关节。
+
+「笛卡尔目标 → IK → 六关节角 → 下发」这一段在库侧：`ArmHandle.move_to`（`src/alohamini_cartesian/control/api.py:214`）。要验这一段只能走库 API，跑法见 §10.7。两条通路的对照：
+
+| 项 | `measure_latency --mode tracking` | `ArmHandle.move_to` |
+| --- | --- | --- |
+| 输入 | 单关节名 + 每步角度增量 | 笛卡尔目标 `(x, y, z)`，姿态恒为单位矩阵 |
+| 解算 | 无 IK，直接加减角度 | 每周期 `ArmIK.solve`（`placo`）解六关节 |
+| 目标关节数 | 1 | 6 |
+| 门禁来源 | `benchmarks/alohamini_io/measure_latency.py` 的 Gate A–F | 库内 step gate、lead 钳位、`JOINT_LIMIT`、follow-error 监督、`move_to` 超时 |
+| 产物 | `tracking-*.csv` 与其 sidecar | 调用方自己留痕（§10.7 的脚本写 JSON） |
+
+**两套门禁不同名、不同源，不得互相替代为证据**：tracking 的记录证明不了 `move_to` 的门禁，`move_to` 的记录也证明不了 Gate A–F。
+
+### 安全：本节不动电机
+
+| 动作 | 是否动机器人 | 前置 |
+| --- | --- | --- |
+| 离线 IK / 预检求解（含 §10.7 的 `--dry-run`） | 否，纯数值 | 无 |
+| `measure_latency --mode rtt` | 否 | 现场网络与登录授权 |
+| `measure_latency --mode tracking` | **是** | 运动档：`--enable-motion` + §7.1 的开跑勾选单 + 现场运动授权 |
+| `ArmHandle.move_to` 真跑 | **是** | 见 §10.7 的「安全前置」 |
+
+本节自身不引入任何运动命令；若现场为取证 Gate D 而跑 `--mode tracking`，按 §7.1 的既有前置与授权走，不另立口径。
+
+### 现场确认项（§10.6）
+
+| # | 确认项 | 怎么确认 | 确认不了怎么办 |
+| --- | --- | --- | --- |
+| 1 | 不要照 brief 字面试 `--mode ik` | 只要拿到退出码 `2` 就是预设形态，不是故障 | 记「未试」；不要改脚本加模式 |
+| 2 | Gate D 的现场形态只能被动等待（无注入路径） | 现场 stderr 出现 `Gate D refused:` 即触发 | 等不到就记「未触发」，判据不因此作废 |
+| 3 | Gate D 文案没有离线用例锁定（遗留项） | `grep -rn "Gate D" tests/ --include=*.py` 命中两处，均为注释或 docstring，无断言 | 不在现场补测；交回仓库侧处理 |
+| 4 | 真触发到 Gate D 时证据要齐 | stderr 原文 + 退出码 + 是否落 CSV，三件一起存 | 缺任一件则该次不算证据 |
+| 5 | tracking 的记录不能当 `move_to` 的证据 | 对照本节「ik 通路怎么验」的表 | 需要 `move_to` 证据时按 §10.7 跑 |
+
+## 10.7 `move_to` 与笛卡尔路径：手册内嵌驱动脚本（预写，未真机执行）
+
+本节是跑法预写，一次真机记录都还没有，判据与预期值未经现场校验。
+
+本节接 §10.6：ik 通路只有库 API 这一条路，所以这里给的是「怎么把库 API 跑起来」的完整跑法，而不是某个现成脚本的参数表。
+
+**硬前置（先满足再动手）：本节 ①a / ② / ③ 三条命令的前置当前不满足。** 这三条都强制 `--signs-json` / `--zeros-json`，而 `signs`（六关节 ±1）/ `zeros`（六关节零点，度）**没有产出流程**——仓库与手册都没有：`tools/` 只有 `verify_unit_consistency.py`（离线核对指纹与标定的单位口径），`benchmarks/` 下两个脚本不产出它们，仓库内的 `.py` 文件对 `signs-json` / `zeros-json` 零命中（`grep -rn "signs-json\|zeros-json" --include=*.py .` 无输出，只有本手册提到这两个选项名）；`examples/robot_dry_run.py:46` 自述「`JointKinematicAdapter` 需要每侧六关节完整的 `signs`/`zeros`，现场没有标定值」。因此：
+
+| 档 | 可执行性 | 依据 |
+| --- | --- | --- |
+| ①b（纯离线 `--dry-run`） | **可执行**：只用 URDF 与 seed，不读 `signs` / `zeros` | `_run_dry` 只调 `_build_ik` / `_urdf_limits_deg`，不建 adapter、不建 client |
+| ①a / ② / ③ | **暂不可执行**：缺 `signs` / `zeros` 就直接按 `15` 退出 | `_load_side_json` 的 `path is None` 分支 |
+
+在 `signs` / `zeros` 的产出流程落地前，这三条记为「**暂不可执行**」，且**不得为了让命令跑起来去手写或猜 `signs` / `zeros`**（那是伪标定，违反 `AGENTS.md` 第 3 节的证据纪律）。本节其余内容（判据表、预期值表、安全前置、现场确认项）仍按预写保留，等前置落地后照原样执行。
+
+### 调用途径判定：仓库里没有现成入口
+
+| 候选入口 | 有什么 | 能不能下发 `move_to` |
+| --- | --- | --- |
+| `benchmarks/alohamini_io/measure_latency.py` | `--mode rtt` / `--mode tracking` | 不能：两个模式都不碰 IK（§10.6） |
+| `tools/` | 只有 `verify_unit_consistency.py`（离线核对指纹与标定的单位口径，只读两个 JSON） | 不能 |
+| `examples/minimal_dry_run.py` | 内存假 transport 演示 `move_by` 全链路 | 不能：不连设备 |
+| `examples/robot_dry_run.py` | 真 client 注入 + 零发送 dry-run | 不能：不注入 adapter 与 IK 工厂，命令在状态机之前就被拒 |
+| `connect(...)` + `ArmHandle.move_to` | 唯一真下发路径 | 能，但仓库里没有调用方脚本 |
+
+结论：最小改动路径 = 本节内嵌的 Python 驱动脚本，落 `/tmp`（照 §4.2「脚本副本落 `$S4DIR/stdout/`」的同一套纪律，不新建仓库文件）。写法照 `examples/robot_dry_run.py` 的姿势：厂商客户端由 `client_factory` 注入，`lerobot` 的 import 只发生在最内层工厂函数体内。「`src/` 不许 import `lerobot`」那条边界只约束 `src/`；驱动脚本作为手册内嵌代码，按 `examples/` 的既有写法注入。
+
+### 环境前置：两个 venv 都不够用（本轮实测）
+
+| 环境 | `lerobot` | `placo` | 能跑哪档 |
+| --- | --- | --- | --- |
+| 主 `.venv`（`uv run --no-sync python`） | 无 | 有（0.10.1） | ①b 的 `--dry-run`（纯离线） |
+| `.venvs/alohamini-lerobot` | `0.6.1` | **无** | 跑不了 ①a / ② / ③（IK 要 `placo`） |
+
+本轮实测命令与输出：
+
+```bash
+uv run --no-sync python -c "import importlib.util as u; print('lerobot:', u.find_spec('lerobot'))"
+.venvs/alohamini-lerobot/bin/python -c "import placo"
+```
+
+```
+lerobot: None
+ModuleNotFoundError: No module named 'placo'
+```
+
+补 `placo` 的两条路，任选一条并留痕（`stdout/10.7-env-*`）：
+
+| 路 | 命令 | 风险与判据 |
+| --- | --- | --- |
+| A（首选） | `uv pip install --python .venvs/alohamini-lerobot/bin/python "placo==0.10.1"` | 可能挪 `numpy`（该环境现为 `2.2.6`，主 `.venv` 是 `2.3.5`）。装前装后各存一份 `uv pip list`；判据：`import lerobot` 与 `import placo` 同时成功且差异只在预期内，否则回退 |
+| B（隔离） | `cp -a .venvs/alohamini-lerobot .venvs/s4-move-to` 后在副本里装 `placo` | vendor 环境零改动；代价是多一份同量级副本（§5.3 记录过 875 M 这一量级） |
+
+两条都不改仓库文件，也不改 Pi 上的部署。
+
+### 驱动脚本草案（内嵌，不新建文件）
+
+把下面整段存成 `/tmp/s10-7-move-to.py`，后面三条命令都用它。三档：`--dry-run`（纯离线）、`--limits-only`（只读限位窗口）、默认（真跑，必须显式给 `--enable-motion`）。
+
+**留存一份脚本本体**：`/tmp` 不归档，证据目录里只留得住输出、留不住脚本。第一次跑本节前先把它另存一份到证据目录（与 §4.2 / §4.2c 的脚本副本纪律一致）：
+
+```bash
+mkdir -p "$S4DIR/stdout" && cp -p /tmp/s10-7-move-to.py "$S4DIR/stdout/10.7-script-$STAMP.py"
+```
+
+此后每次改了 `/tmp` 里的脚本都要重新覆盖这一份，使 `10.7-script-$STAMP.py` 与当次 `10.7-*.json` 产物同源。判据：该文件在盘，且与 `/tmp/s10-7-move-to.py` 的 `sha256` 相同（`shasum -a 256` 两份对比，两个字串一致）。
+
+- 为什么不造假标定：`signs` / `zeros` 必须来自真实标定，缺文件就按 `15` 退出，脚本不补默认值（见 `AGENTS.md` 第 3 节的证据纪律）。
+- 为什么 `--dry-run` 是「构造上零发送」：它不建客户端、不开 socket、不进 `connect`，只做 IK 与预检算术。
+- 预检那段是 `_precheck_straight_path`（`src/alohamini_cartesian/control/api.py:158-201`）的**复算**（同样的 1 mm 采样、同样的软姿态权重），不是调用库内私有函数。
+
+```python
+#!/usr/bin/env python3
+"""§10.7 驱动脚本草案（预写，未真机执行）。
+
+手册 docs/s4-field-smoke.md §10.7 内嵌这份脚本，仓库里不新建文件。三种跑法：
+
+  --dry-run       纯离线：读 URDF 限位、解 IK、逐毫米预检；不建客户端、零网络、零发送
+  --limits-only   只读：连真机读 metadata，打印两侧有效限位窗口；dry_run=True，零发送
+  默认（真跑）     笛卡尔移动：按 --points 分点调用 ArmHandle.move_by
+
+退出码：0 成功；2 参数解析失败（argparse 自身，或本脚本对 --points / --dz / --timeout-s 的
+入参校验，同 §10 既有口径）；10 预检/IK 拒绝；
+11 move_to 超时；12 反馈失联；13 运动被阻断；14 运动未启用，或缺 `lerobot`（`ImportError`）；
+15 前置缺失（`--signs-json` / `--zeros-json`）。URDF 路径错与 `RuntimeUnavailable` 本脚本
+不接，见手册 (a) 表下的两条补充。
+10 以上为本节新增、脚本自定义，与既有 0–9 不冲突。
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import sys
+import time
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+from alohamini_cartesian.control import (
+    FeedbackLost,
+    MotionBlocked,
+    MotionNotEnabled,
+    MotionTimeout,
+    OutOfRange,
+    connect,
+)
+from alohamini_cartesian.control.arm_ik import ArmIK, ArmKinematicProfile
+from alohamini_cartesian.kinematics.joint_adapter import (
+    JOINT_ORDER,
+    URDF_JOINT_NAMES,
+    JointKinematicAdapter,
+)
+
+_EXIT_OK = 0
+_EXIT_USAGE = 2
+_EXIT_PRECHECK = 10
+_EXIT_TIMEOUT = 11
+_EXIT_FEEDBACK = 12
+_EXIT_BLOCKED = 13
+_EXIT_NOT_ENABLED = 14
+_EXIT_PREREQ = 15
+
+_URDF_REL = "src/alohamini_cartesian/kinematics/assets/am_arm200/kinematics.urdf"
+_TARGET_FRAME = "left_Fixed_Jaw"
+# 离线核算用的 seed（tests/test_arm_ik.py 的 SOLVE_SEED_Q）；这是假设，不是真机位姿。
+_OFFLINE_SEED_DEG = (10.0, -20.0, 30.0, -40.0, 20.0, -10.0)
+_ORIENTATION_WEIGHT = 0.01
+_PRECHECK_STEP_M = 0.001
+
+
+def _error(message: str) -> None:
+    """把一条说明打到 stderr。"""
+    print(message, file=sys.stderr)
+
+
+def _prereq_error(message: str) -> None:
+    """前置缺失：打 stderr 并以 15 退出（不猜、不补默认值）。"""
+    _error(message)
+    raise SystemExit(_EXIT_PREREQ)
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """解析命令行参数。"""
+    parser = argparse.ArgumentParser(description="§10.7 move_to 驱动脚本（预写，未真机执行）")
+    parser.add_argument("--host", default="127.0.0.1", help="机器人 Pi 的 IP/主机名")
+    parser.add_argument("--robot-model", default="alohamini2pro", help="必须与 Host 侧一致")
+    parser.add_argument("--observation-request-window", type=int, default=3)
+    parser.add_argument(
+        "--side",
+        default="left",
+        choices=("left", "right"),
+        help="哪侧臂；右臂复用左臂 URDF 是库的假设（joint_adapter.py:76-82），不得用左臂值顶替右臂",
+    )
+    parser.add_argument("--dz", type=float, default=0.09, help="总位移（米），默认 0.09")
+    parser.add_argument("--points", type=int, default=1, help="分几点走：1 = 单次 9 cm")
+    parser.add_argument("--timeout-s", type=float, default=10.0, help="每次 move_by 的超时")
+    parser.add_argument("--urdf", default=_URDF_REL, help="URDF 路径（相对仓库根）")
+    parser.add_argument("--q-seed-deg", type=float, nargs=6, default=None)
+    parser.add_argument("--signs-json", default=None, help="六关节 sign 的 JSON 文件")
+    parser.add_argument("--zeros-json", default=None, help="六关节 zero 的 JSON 文件")
+    parser.add_argument("--out", required=True, help="产物 JSON 路径（显式给）")
+    parser.add_argument("--dry-run", action="store_true", help="纯离线 IK 与预检，零发送")
+    parser.add_argument("--limits-only", action="store_true", help="只读打印真机限位窗口")
+    parser.add_argument("--enable-motion", action="store_true", help="真跑必须显式打开")
+    return parser.parse_args(argv)
+
+
+def _urdf_limits_deg(urdf_path: Path) -> dict[str, tuple[float, float]]:
+    """从 URDF 读六关节限位（弧度转度），键用 URDF 关节名，与 ArmIK.solve 同口径。"""
+    root = ET.parse(urdf_path).getroot()
+    limits: dict[str, tuple[float, float]] = {}
+    for joint in root.findall("joint"):
+        name = joint.get("name")
+        limit = joint.find("limit")
+        if name is None or limit is None:
+            continue
+        lower = math.degrees(float(limit.get("lower")))
+        upper = math.degrees(float(limit.get("upper")))
+        limits[name] = (lower, upper)
+    return limits
+
+
+def _build_ik(urdf_path: Path) -> ArmIK:
+    """按 am_arm200 左臂模型建 IK 缝（右臂复用同一份左臂模型）。"""
+    profile = ArmKinematicProfile(
+        urdf_path=str(urdf_path),
+        target_frame=_TARGET_FRAME,
+        joint_names=tuple(URDF_JOINT_NAMES[joint] for joint in JOINT_ORDER),
+    )
+    return ArmIK(profile)
+
+
+def _min_margin_deg(q_deg: np.ndarray, limits: dict[str, tuple[float, float]]) -> tuple[float, str]:
+    """返回「最小限位裕度」与那个关节名；裕度 = min(hi - q, q - lo)。"""
+    worst, worst_joint = float("inf"), ""
+    for index, joint in enumerate(JOINT_ORDER):
+        lo, hi = limits[URDF_JOINT_NAMES[joint]]
+        value = float(q_deg[index])
+        margin = min(hi - value, value - lo)
+        if margin < worst:
+            worst, worst_joint = margin, joint
+    return worst, worst_joint
+
+
+def _solve_row(
+    ik: ArmIK, seed: np.ndarray, target_pose: np.ndarray, limits: dict[str, tuple[float, float]]
+) -> dict[str, Any]:
+    """解一个目标位姿，返回可 JSON 化的行。"""
+    result = ik.solve(
+        q_current_deg=seed,
+        target_pose=target_pose,
+        joint_limits_deg=limits,
+        orientation_weight=_ORIENTATION_WEIGHT,
+    )
+    q = np.asarray(result.q_deg, dtype=float)
+    margin, margin_joint = _min_margin_deg(q, limits)
+    return {
+        "ok": bool(result.ok),
+        "reason": result.reason,
+        "residual_m": float(result.position_error_m),
+        "orientation_error_deg": float(result.orientation_error_deg),
+        "q_deg": [float(value) for value in q],
+        "min_margin_deg": margin,
+        "margin_joint": margin_joint,
+    }
+
+
+def _target(seed_translation: np.ndarray, dz: float) -> np.ndarray:
+    """move_to 构造的目标：单位姿态 + 平移量（姿态不是「保持当前姿态」）。"""
+    target = np.eye(4, dtype=float)
+    target[:3, 3] = np.asarray(seed_translation, dtype=float) + np.array([0.0, 0.0, float(dz)])
+    return target
+
+
+def _run_dry(
+    seed: np.ndarray, urdf_path: Path, dz: float, points: int
+) -> tuple[int, dict[str, Any]]:
+    """纯离线：解整段 9 cm 目标与分点表，并按 1 mm 采样复算预检（不 import 私有函数）。"""
+    ik = _build_ik(urdf_path)
+    limits = _urdf_limits_deg(urdf_path)
+    start = np.asarray(ik.fk(seed)[:3, 3], dtype=float)
+    target = _target(start, dz)
+    report: dict[str, Any] = {
+        "seed_q_deg": [float(v) for v in seed],
+        "seed_fk_xyz_m": [float(v) for v in start],
+        "target_xyz_m": [float(v) for v in target[:3, 3]],
+        "dz_m": float(dz),
+        "urdf_limits_deg": {name: [lo, hi] for name, (lo, hi) in limits.items()},
+        "single": _solve_row(ik, seed, target, limits),
+    }
+
+    end = np.asarray(target[:3, 3], dtype=float)
+    delta = end - start
+    distance = float(np.linalg.norm(delta))
+    n = max(1, math.ceil(distance / _PRECHECK_STEP_M))
+    first_failure = None
+    for i in range(1, n + 1):
+        waypoint = np.eye(4, dtype=float)
+        waypoint[0:3, 0:3] = target[0:3, 0:3]
+        waypoint[:3, 3] = start + (i / n) * delta
+        row = _solve_row(ik, seed, waypoint, limits)
+        if first_failure is None and not row["ok"]:
+            first_failure = {"i": i, "n": n, **row}
+    report["precheck"] = {
+        "n": n,
+        "step_m": _PRECHECK_STEP_M,
+        "distance_m": distance,
+        "first_failure": first_failure,
+    }
+
+    waypoints = []
+    for i in range(1, points + 1):
+        row = _solve_row(ik, seed, _target(start, dz * i / points), limits)
+        waypoints.append({"i": i, "t": i / points, **row})
+    report["waypoints"] = waypoints
+
+    print(f"[离线] URDF = {urdf_path}")
+    print(f"[离线] seed 关节角（度）= {report['seed_q_deg']}")
+    print(f"[离线] seed FK 末端（米）= {report['seed_fk_xyz_m']}")
+    print(f"[离线] 总位移 {dz:.4f} m，目标点（米）= {report['target_xyz_m']}")
+    single = report["single"]
+    print(
+        f"[离线] 整段目标：ok={single['ok']} reason={single['reason']} "
+        f"residual_m={single['residual_m']:.6f} 姿态误差={single['orientation_error_deg']:.2f}° "
+        f"最小裕度={single['min_margin_deg']:.2f}°（{single['margin_joint']}）"
+    )
+    print(f"[离线] 整段目标 q_deg = {[round(v, 4) for v in single['q_deg']]}")
+    pre = report["precheck"]
+    if pre["first_failure"] is None:
+        print(f"[离线] 预检 {pre['n']} 点（1 mm 步长）全部通过")
+    else:
+        failure = pre["first_failure"]
+        print(
+            f"[离线] 预检第 {failure['i']}/{failure['n']} 点起失败："
+            f"reason={failure['reason']} residual_m={failure['residual_m']:.6f}"
+        )
+    for row in waypoints:
+        print(
+            f"[离线] 点 {row['i']}/{points} t={row['t']:.4f} ok={row['ok']} "
+            f"reason={row['reason']} residual_m={row['residual_m']:.6f} "
+            f"最小裕度={row['min_margin_deg']:.2f}°（{row['margin_joint']}）"
+        )
+    if not single["ok"] or pre["first_failure"] is not None:
+        return _EXIT_PRECHECK, report
+    return _EXIT_OK, report
+
+
+def _load_side_json(path: str | None, field: str) -> dict[str, float]:
+    """读一个「关节名 → 数值」的 JSON（六关节必须齐全，缺一个就拒，不补默认值）。"""
+    if path is None:
+        _prereq_error(f"缺少 --{field}s-json：{field} 必须来自真实标定，脚本不造假值")
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    missing = [joint for joint in JOINT_ORDER if joint not in data]
+    if missing:
+        _prereq_error(f"{path} 缺关节 {missing}")
+    return {joint: float(data[joint]) for joint in JOINT_ORDER}
+
+
+def _build_adapter(
+    signs: dict[str, float], zeros: dict[str, float], urdf_path: Path
+) -> JointKinematicAdapter:
+    """建关节换算适配器：signs/zeros 来自标定，URDF 限位按侧注入。"""
+    urdf = _urdf_limits_deg(urdf_path)
+    limits_by_side = {
+        side: {joint: urdf[URDF_JOINT_NAMES[joint]] for joint in JOINT_ORDER}
+        for side in ("left", "right")
+    }
+    return JointKinematicAdapter(
+        signs={side: dict(signs) for side in ("left", "right")},
+        zeros={side: dict(zeros) for side in ("left", "right")},
+        urdf_limits=limits_by_side,
+    )
+
+
+def _build_client_factory(robot_model: str, window: int):
+    """厂商客户端的惰性工厂：lerobot 的 import 只发生在最内层工厂体内。"""
+
+    def factory(host: str, **kwargs: Any) -> Any:
+        """按 host 造一个已配置、未连接的 AlohaMiniClient。"""
+        from lerobot.robots.alohamini.alohamini_client import AlohaMiniClient
+        from lerobot.robots.alohamini.config_alohamini import AlohaMiniClientConfig
+
+        config = AlohaMiniClientConfig(
+            remote_ip=host, robot_model=robot_model, observation_request_window=window, **kwargs
+        )
+        return AlohaMiniClient(config)
+
+    return factory
+
+
+def _print_limits(session: Any, adapter: JointKinematicAdapter, side: str) -> dict[str, Any]:
+    """只读：打印有效限位窗口与 metadata 原文，不发任何动作。"""
+    feedback = session.client.get_observation(include_cameras=False)
+    metadata = feedback.get("_robot_metadata") or getattr(
+        session.client, "latest_robot_metadata", None
+    )
+    if metadata is None:
+        raise FeedbackLost("feedback carries no _robot_metadata")
+    motors = metadata.get("motors") or {}
+    raw = {
+        key: {
+            field: motors[key].get(field)
+            for field in ("normalization", "range_min", "range_max", "resolution")
+        }
+        for key in sorted(motors)
+        if str(key).startswith("arm_")
+    }
+    windows: dict[str, Any] = {}
+    for known in ("left", "right"):
+        try:
+            windows[known] = {
+                joint: list(window)
+                for joint, window in adapter.effective_limits_deg(known, metadata).items()
+            }
+        except Exception as exc:  # 该侧 metadata 不全就如实记下，不补值
+            windows[known] = {"error": f"{type(exc).__name__}: {exc}"}
+    print(f"[只读] side={side} 有效限位窗口（度）：")
+    for joint, window in windows[side].items():
+        print(f"[只读]   {joint}: {window}")
+    return {"motor_metadata": raw, "effective_limits_deg": windows}
+
+
+def _run_limits(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    """只读档：真机 metadata → 限位窗口，dry_run=True，零发送。"""
+    urdf_path = Path(args.urdf)
+    adapter = _build_adapter(
+        _load_side_json(args.signs_json, "sign"),
+        _load_side_json(args.zeros_json, "zero"),
+        urdf_path,
+    )
+    session = connect(
+        args.host,
+        dry_run=True,
+        client_factory=_build_client_factory(args.robot_model, args.observation_request_window),
+        # 库契约是 ik_factory(side)：两侧复用同一份左臂 URDF，故忽略 side
+        ik_factory=lambda _side: _build_ik(urdf_path),
+        adapter=adapter,
+        clock=time.monotonic,
+        sleeper=time.sleep,
+    )
+    try:
+        report = _print_limits(session, adapter, args.side)
+    finally:
+        session.disconnect()
+    return _EXIT_OK, report
+
+
+def _run_motion(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    """真跑档：先打印限位窗口，再按 --points 分点 move_by，逐点记 residual 与步数。"""
+    if not args.enable_motion:
+        _error("真跑必须显式给 --enable-motion")
+        return _EXIT_NOT_ENABLED, {}
+    urdf_path = Path(args.urdf)
+    adapter = _build_adapter(
+        _load_side_json(args.signs_json, "sign"),
+        _load_side_json(args.zeros_json, "zero"),
+        urdf_path,
+    )
+    session = connect(
+        args.host,
+        dry_run=False,
+        enable_motion=True,
+        client_factory=_build_client_factory(args.robot_model, args.observation_request_window),
+        # 库契约是 ik_factory(side)：两侧复用同一份左臂 URDF，故忽略 side
+        ik_factory=lambda _side: _build_ik(urdf_path),
+        adapter=adapter,
+        clock=time.monotonic,
+        sleeper=time.sleep,
+        move_timeout_s=args.timeout_s,
+    )
+    report: dict[str, Any] = {"dz_m": args.dz, "points": args.points, "moves": []}
+    code = _EXIT_OK
+    try:
+        report.update(_print_limits(session, adapter, args.side))
+        arm = session.left if args.side == "left" else session.right
+        step_m = args.dz / args.points
+        for i in range(1, args.points + 1):
+            started = time.monotonic()
+            try:
+                move = arm.move_by(dz=step_m, timeout_s=args.timeout_s)
+            except (MotionTimeout, OutOfRange, FeedbackLost, MotionBlocked) as exc:
+                if isinstance(exc, MotionTimeout):
+                    finish = _EXIT_TIMEOUT
+                elif isinstance(exc, OutOfRange):
+                    finish = _EXIT_PRECHECK
+                elif isinstance(exc, FeedbackLost):
+                    finish = _EXIT_FEEDBACK
+                else:
+                    finish = _EXIT_BLOCKED
+                row = {
+                    "i": i,
+                    "ok": False,
+                    "error": type(exc).__name__,
+                    "message": str(exc),
+                    "elapsed_s": time.monotonic() - started,
+                }
+                if isinstance(exc, MotionTimeout):
+                    row["moved_m"] = getattr(exc, "moved", None)
+                report["moves"].append(row)
+                print(f"[真跑] 点 {i}/{args.points} {type(exc).__name__}: {exc}")
+                code = finish
+                break
+            row = {
+                "i": i,
+                "ok": True,
+                "residual_m": float(move.residual_m),
+                "steps": len(move.steps),
+                "elapsed_s": time.monotonic() - started,
+            }
+            report["moves"].append(row)
+            print(
+                f"[真跑] 点 {i}/{args.points} 到位 residual_m={row['residual_m']:.4f} "
+                f"steps={row['steps']} 耗时={row['elapsed_s']:.2f} s"
+            )
+    finally:
+        session.disconnect()
+    return code, report
+
+
+def main(argv: list[str] | None = None) -> int:
+    """入口：按 --dry-run / --limits-only / 默认三档分流。"""
+    args = _parse_args(argv)
+    if args.points < 1 or not (math.isfinite(args.dz) and math.isfinite(args.timeout_s)):
+        _error("--points 必须 >= 1，--dz 与 --timeout-s 必须有限")
+        return _EXIT_USAGE
+
+    report: dict[str, Any] = {"argv": sys.argv[1:], "mode": ""}
+    try:
+        if args.dry_run:
+            if args.q_seed_deg is None:
+                print(
+                    "[离线] 未给 --q-seed-deg，使用离线核算的假设 seed "
+                    f"{list(_OFFLINE_SEED_DEG)}（不是真机位姿）"
+                )
+            seed = np.asarray(
+                _OFFLINE_SEED_DEG if args.q_seed_deg is None else args.q_seed_deg, dtype=float
+            )
+            report["mode"] = "dry-run"
+            code, dry = _run_dry(seed, Path(args.urdf), args.dz, args.points)
+            report["dry_run"] = dry
+        elif args.limits_only:
+            report["mode"] = "limits-only"
+            code, limits = _run_limits(args)
+            report["limits_only"] = limits
+        else:
+            report["mode"] = "motion"
+            code, motion = _run_motion(args)
+            report["motion"] = motion
+    except MotionNotEnabled as exc:
+        _error(f"MotionNotEnabled: {exc}")
+        code = _EXIT_NOT_ENABLED
+    except ImportError as exc:
+        _error(f"ImportError: {exc}（真机档需要 vendor 环境里的 lerobot，见 §10.7 前置）")
+        code = _EXIT_NOT_ENABLED
+    except FeedbackLost as exc:
+        _error(f"FeedbackLost: {exc}")
+        code = _EXIT_FEEDBACK
+
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    report["exit_code"] = code
+    Path(args.out).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[产物] {args.out}")
+    return code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+```
+
+脚本用到的库入口：`connect`（`src/alohamini_cartesian/control/api.py:969`）、`ArmHandle.move_to`（`src/alohamini_cartesian/control/api.py:214`）、`ArmHandle.move_by`（`src/alohamini_cartesian/control/api.py:440`）、`ArmIK.solve`（`src/alohamini_cartesian/control/arm_ik.py:280`）、`JointKinematicAdapter`（`src/alohamini_cartesian/kinematics/joint_adapter.py:127`）。
+
+### 命令（①b 逐字可抄；①a/②/③ 待前置落地）
+
+Host 起法见 §6.1（本节不重启 Host：只要它已在跑）。产物一律显式 `--out`，照 §3.8 的路径纪律。
+
+产物与输入都落 `$S4DIR/stdout/`（`scope-*` 同目录；§11 的五个子目录不变，本节不新增目录）。`signs` / `zeros` 两份 JSON 是**输入**，不是本节产物：它们是六关节的 sign（±1）与 zero（度）映射，只能来自真实标定，仓库与手册里都没有生成流程，来源见本节「现场确认项」第 6 条；缺文件时脚本按 `15` 退出、不跑、不造假值。
+
+三条真机档命令的 `PYTHONPATH` 比 §10.5 多一截 `:…/src`：本库没装进 vendor 环境（本轮实测 `find_spec('alohamini_cartesian')` 在该环境返回 `None`），而这三档都要 import `alohamini_cartesian`；`measure_latency.py` 只用标准库，所以 §7.1 / §10.5 的那些命令不需要这一截。
+
+**①a 只读：真机限位窗口（零发送）**
+
+做什么：连 Host 读一帧观测与 metadata，打印两侧「有效限位窗口」——标定刻度窗口与 URDF 限位的交集（换算口径见 `JointKinematicAdapter.effective_limits_deg`，`src/alohamini_cartesian/kinematics/joint_adapter.py:443`）。
+为什么先做：`move_to` 的限位门用的是**标定窗口**，不是 URDF 的 `±179.9087°`（URDF 只是乐观上界），离线推不出真机窗口。
+
+```bash
+run 10.7-limits env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:/Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python /tmp/s10-7-move-to.py --host "$PI_HOST" --limits-only --signs-json "$S4DIR/stdout/10.7-signs-$STAMP.json" --zeros-json "$S4DIR/stdout/10.7-zeros-$STAMP.json" --out "$S4DIR/stdout/10.7-limits-$STAMP.json"
+```
+
+判据：退出码 `0`；日志里含 `wrist_roll` 的那一行（打印键是 URDF 名 `left_wrist_roll` / `right_wrist_roll`）把 `-163.7°` 包住；两侧六个关节都有窗口（出现 `error:` 即该侧 metadata 不全）。产物：`stdout/10.7-limits-$STAMP.json`，含每台臂电机的 `normalization` / `range_min` / `range_max` / `resolution` 原文。
+
+**①b 离线：IK 解与预检（零网络、零发送）**
+
+```bash
+run 10.7-dryrun uv run --no-sync python /tmp/s10-7-move-to.py --dry-run --points 7 --out "$S4DIR/stdout/10.7-dryrun-$STAMP.json"
+```
+
+判据：退出码 `0`（整段目标 `ok=True` 且 90 点预检全过）；`整段目标 q_deg` 与本节「预期值表」identity 那行一致。不传 `--q-seed-deg` 时脚本用离线假设 seed（会打印一行提示，明写「不是真机位姿」）；要对齐真机，显式传真机实测的六关节角。产物：`stdout/10.7-dryrun-$STAMP.json`。
+
+**② 9 cm 单次 `move_to`**
+
+标签叫 `move_to`，脚本实际调 `ArmHandle.move_by`（内部算出增量目标后转给 `move_to`，`src/alohamini_cartesian/control/api.py:440` 的文档串写明「The resulting target is then passed to :meth:`move_to`」，`move_to` 在 `:214`）——**`move_by` → `move_to` 同一入口**，两者语义等价。
+
+```bash
+run 10.7-single env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:/Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python /tmp/s10-7-move-to.py --host "$PI_HOST" --enable-motion --points 1 --timeout-s 10.0 --signs-json "$S4DIR/stdout/10.7-signs-$STAMP.json" --zeros-json "$S4DIR/stdout/10.7-zeros-$STAMP.json" --out "$S4DIR/stdout/10.7-single-$STAMP.json"
+```
+
+**③ 7 点路径**
+
+```bash
+run 10.7-path env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:/Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python /tmp/s10-7-move-to.py --host "$PI_HOST" --enable-motion --points 7 --timeout-s 10.0 --signs-json "$S4DIR/stdout/10.7-signs-$STAMP.json" --zeros-json "$S4DIR/stdout/10.7-zeros-$STAMP.json" --out "$S4DIR/stdout/10.7-path-$STAMP.json"
+```
+
+②③ 的判据见下面的判据表、安全前置与预期值表；最可能先落到「超时 + `moves` 无成功行」，那是预期形态之一，读法见判据表 (b) 的说明。
+
+### 判据表
+
+**(a) 退出码**：`10` 以上本节新增、脚本自定义，与 §10 的 `0`–`9` 不冲突。
+
+| 码 | 含义 | 对应异常 / 来源 | 是否可能已下发 |
+| --- | --- | --- | --- |
+| `0` | 到位（离线档为判据全过） | — | 离线档为零发送 |
+| `2` | 参数解析失败 | argparse 自身，或本脚本对 `--points` / `--dz` / `--timeout-s` 的入参校验（`_EXIT_USAGE`），同 §10 既有口径 | 否 |
+| `10` | 预检 / IK 拒绝 | `OutOfRange`（`src/alohamini_cartesian/control/api.py:199-201`） | 否 |
+| `11` | `move_to` 超时 | `MotionTimeout`（`src/alohamini_cartesian/control/api.py:299-302`） | 可能（视 step gate 是否放行过某些周期） |
+| `12` | 反馈失联 | `FeedbackLost`（`src/alohamini_cartesian/control/api.py:324-327`） | 可能 |
+| `13` | 运动被阻断 | `MotionBlocked`，含 adapter 连续 3 次失败（`src/alohamini_cartesian/control/api.py:387-391`） | 可能 |
+| `14` | 运动未启用，或缺 `lerobot` | `MotionNotEnabled`（`src/alohamini_cartesian/control/api.py:1019-1020`）、`ImportError`（vendor 环境无 `lerobot`） | 否 |
+| `15` | 前置缺失（`--signs-json` / `--zeros-json` 未给或缺关节） | 脚本自身（`_load_side_json` → `_prereq_error`） | 否 |
+
+两条**不在本表**的逃逸形态（脚本没写 `try/except`，按 Python 默认行为）：
+
+| 形态 | 实际发生什么 | 现场怎么认 |
+| --- | --- | --- |
+| URDF 路径错（`--urdf` 指错） | 未捕获的 `FileNotFoundError` → traceback + 退出码 **`1`**（`_urdf_limits_deg` 的 `ET.parse`，或 `ArmIK` 构造时报 `URDF not found`） | stderr 有 traceback；**不要**当成 `15` 前置缺失 |
+| 未注入 `client_factory`（`RuntimeUnavailable`） | 同样 traceback + 退出码 **`1`**（`src/alohamini_cartesian/control/api.py:962`） | 本脚本总是注入，正常路径不会出现 |
+
+**(b) stdout 与异常特征串**（逐条 grep 过源码原文，不确认的不写）
+
+| 特征串 | 源码位置 | 何时出现 | 现场怎么读 |
+| --- | --- | --- | --- |
+| `move_to timed out after ` | `src/alohamini_cartesian/control/api.py:300` | 到 `timeout_s` 仍未满足到达条件 | 最常见形态；配合 JSON 里 `moves[].moved_m` 一起读 |
+| `no new feedback for ` | `src/alohamini_cartesian/control/api.py:325` | 超过 `feedback_timeout_s` 没有新样本 | 链路问题，不是运动问题 |
+| `precheck failed at waypoint ` | `src/alohamini_cartesian/control/api.py:200` | 预检发现不可达或越限 | IK 不可达 → 零下发 |
+| `adapter failed (` | `src/alohamini_cartesian/control/api.py:391` | 控制器连续 3 个周期报 `ADAPTER_FAILED` | 先查 `signs` / `zeros` 与 metadata |
+| `STEP_LIMIT` / `JOINT_LIMIT` / `FOLLOW_TIMEOUT` / `RESIDUAL` / `IK_FAILED` | `src/alohamini_cartesian/control/controller.py:48-57` | 控制器每周期判 | **不会出现在 stdout**：`move_to` 只把 `ADAPTER_FAILED` 转成异常，其余 `error_code` 不向外传（`src/alohamini_cartesian/control/api.py:387-391`），现场只能从「超时 + 无成功行」反推 |
+| `MotionTimeout` / `OutOfRange` / `FeedbackLost` | 异常类（`src/alohamini_cartesian/control/api.py:75-97`） | 见 (a) | 脚本把类名写进 JSON 的 `moves[].error` |
+| `MotionBlocked` | 异常类（`src/alohamini_cartesian/control/commands.py:52`） | 见 (a) | 同上：`moves[].error` 写类名 |
+
+**(c) 默认值与到门口径**
+
+| 参数 | 默认值 | 出处 |
+| --- | --- | --- |
+| `move_timeout_s` | `10.0` s | `src/alohamini_cartesian/control/api.py:608`、`src/alohamini_cartesian/control/api.py:981` |
+| `feedback_timeout_s` | `1.0` s | `src/alohamini_cartesian/control/api.py:610`、`src/alohamini_cartesian/control/api.py:982` |
+| `arrival_tolerance_m` | `0.005` m | `src/alohamini_cartesian/control/api.py:607`、`src/alohamini_cartesian/control/api.py:980` |
+| `precheck_step_m` | `0.001` m | `src/alohamini_cartesian/control/api.py:51`、`src/alohamini_cartesian/control/api.py:609` |
+| `control_period_s` | `1/30` s | `src/alohamini_cartesian/control/api.py:606` |
+| 到达判定 | `residual <= 0.005` 且 `settled` 且 `valid` | `src/alohamini_cartesian/control/api.py:408-414` |
+| step gate（关节步长门禁） | `2.0°` / 周期 | `src/alohamini_cartesian/control/controller.py:133`、`src/alohamini_cartesian/control/controller.py:535-543` |
+| lead 钳位 | `30.0°` | `src/alohamini_cartesian/control/api.py:668-670` |
+| follow-error 监督 | 容差 `1.0°`、超时 `1.0` s | `src/alohamini_cartesian/control/api.py:668-670`、`src/alohamini_cartesian/control/controller.py:464-480` |
+
+**(d) Gate A–F 在 `move_to` 路径上不生效**
+
+Gate A–F 是 `measure_latency.py` 里的运行时门禁（§7.1 的表），`move_to` 一个都不经过：两者在不同文件、不同入口。`move_to` 路径上的替代物：
+
+| Gate A–F | `move_to` 路径上的对应物 | 依据 |
+| --- | --- | --- |
+| A 运动开关 + 关节名 | `connect(dry_run=False)` 必须同时 `enable_motion=True`；没有 adapter 时运动命令抛 `MotionNotEnabled` | `src/alohamini_cartesian/control/api.py:1019-1020` |
+| B 关节在首帧观测里 | adapter 要求六个关节键齐全且有限，缺一个就抛；`move_to` 把它吞成 `q_current=None`，随后预检被跳过、控制器逐周期报 `ADAPTER_FAILED` | `src/alohamini_cartesian/control/api.py:336-345` |
+| C `robot_model` 比对 | **无对应物**：本库不拿宿主 `robot_model` 与任何入参比对 | `grep -rn validate_robot_model src/` 只命中 `model_specs.py` 里的定义与一处内部调用，运动路径上没有调用点 |
+| D 基线反馈有限 | 无同名门；非有限反馈在 adapter 的 `observation_to_kinematic_deg` 内就抛：缺键与非有限各一条 `ValueError` → 走 B 行那条路 | `src/alohamini_cartesian/kinematics/joint_adapter.py:511-515`（缺键在 `:511-512`、非有限在 `:514-515`；函数入口 `:469`） |
+| E 步长 / 行程上限 | step gate `2.0°` / 周期 + IK 结果的 `JOINT_LIMIT` | `src/alohamini_cartesian/control/controller.py:535-543`、`src/alohamini_cartesian/control/arm_ik.py:471` |
+| F 单位换算可用 | adapter 的 metadata 校验分两段：① `schema_version` 必须是整数 `2`；② 六个关节条目必须齐全（逐关节逐个取，缺一个就抛） | ① `src/alohamini_cartesian/kinematics/joint_adapter.py:275-287`（判据在 `:282-283`）；② `effective_limits_deg` 的 `for joint in JOINT_ORDER` 循环 `src/alohamini_cartesian/kinematics/joint_adapter.py:462-467`（循环头在 `:462`），缺条目由 `_motor_entry` 抛，`src/alohamini_cartesian/kinematics/joint_adapter.py:342-343` |
+
+### 安全前置（真实运动档）
+
+真跑前逐条勾选，勾不全不开跑。本节只列 `move_to` 额外的几条，其余与 §7.1 的开跑勾选单并行使用：
+
+- [ ] 现场运动授权到手，写明「哪一侧臂、沿 +Z 9 cm、谁在旁、断电开关在谁手上」，落进 §3.9 的 `scope-*`
+- [ ] **手臂低位或有承托**：`move_to` 的姿态目标是单位矩阵（不是保持当前姿态），末端姿态会朝 identity 大幅转
+- [ ] 有能按断电开关的人站在机器人旁；远程无人在场时**不跑** ② 与 ③
+- [ ] 空场、无负载、另一臂不参与
+- [ ] 先跑 ①a（只读）与 ①b（离线 dry-run），两者都过再谈真跑
+- [ ] ①a 打印的 `wrist_roll` 窗口覆盖 `-163.7°`；不覆盖就**停**（见 `wrist_roll` 那条）
+- [ ] 行程几何核验：工作区范围**不在** `site.yaml`。该文件的键集合由 `src/alohamini_cartesian/config/overlay.py:40` 的 `SETTINGS_FIELDS` 定死（只有 `robot_model`、两个端口、`cameras`、三个运行时参数），未知键直接 `ConfigError`（`src/alohamini_cartesian/config/overlay.py:171-173`），所以离线无法据配置判断目标是否在位形空间内；离线只能给 URDF 几何 + IK 数值收敛，物理上会不会撞桌撞物只能现场目视
+- [ ] `wrist_roll ≈ -163.7°` 单独判一次：identity 姿态形态下 7 个点都要求该关节跑到 `-163.6…-163.7°`；离线只有 URDF 的 `±179.9087°` 可用，**真机真实限位来自标定窗口**，离线拿不到。若真机窗口更窄，第一次真跑会直接落 `JOINT_LIMIT`（IK 结果里判，`src/alohamini_cartesian/control/arm_ik.py:471`），所以第一次真跑前必须先只读取一次真机限位窗口（①a）
+
+### 点位从哪来：不是 `site.yaml` 的数值
+
+| 项 | 事实 |
+| --- | --- |
+| 起点 | **真机当前末端位姿**：`move_by` 每周期用反馈换算关节角、再算 FK，把增量加在实测位姿上（`src/alohamini_cartesian/control/api.py:467-476`） |
+| 方向与幅度 | 沿 `+Z` 位移 `0.09 m` 等分 7 点（每点 `0.012857 m`） |
+| `+Z` 的方向语义 | `move_by` 的增量先按 `session._r_body_to_arm[side]` 旋转再加到实测位姿；该矩阵默认是单位矩阵（`src/alohamini_cartesian/control/api.py:644-650`），所以默认就是「基座系 +Z」。`site.yaml` 里没有任何坐标系或工作区字段，机身实际朝向与基座系是否同向只能现场确认 |
+| 离线核算用的起点 | 假设 seed 关节角 `(10, -20, 30, -40, 20, -10)°`（`tests/test_arm_ik.py:682` 的 `SOLVE_UNREACHABLE_SEED_Q`，经 `tests/test_arm_ik.py:918` 的 `SOLVE_SEED_Q` 引用），FK 末端 `(-0.054681, -0.184418, 0.285184) m`，距基座原点 `0.343991 m`。**这是假设，不是真机位姿** |
+| 姿态 | `move_to` 构造的目标是 `np.eye(4)` 再只写平移分量（`src/alohamini_cartesian/control/api.py:267-270`）→ 下发 **identity 姿态**，不是「保持当前姿态」 |
+
+轴的选择理由：`+Z` 与「基座原点 → seed 末端」方向的夹角是六个基座系轴里最小的（34.0°），且 URDF 已剥掉 collision mesh、`placo` 无自碰撞与桌面约束，向上位移在物理上最不容易撞桌。**这是选择理由，不是安全证明。**
+
+### 预期值表（两种形态）
+
+`move_to` 实际用 identity 形态，**现场预期看 identity 那一组**；姿态保持那组只作对照，说明「换成保持姿态会好很多」。本节的脚本只产出 identity 那组（目标姿态写死单位矩阵）。
+
+单点（`+Z` 9 cm）：
+
+| 形态 | `ok` | 残差 (m) | 姿态误差 | 最小限位裕度 | 最紧关节 | 六关节角（度） |
+| --- | --- | --- | --- | --- | --- | --- |
+| 姿态保持（对照，非 `move_to` 形态） | True | 0.000692 | 0.0° | 115.54° | `elbow_flex` | `[10.0001, -34.1125, 64.3720, -19.7404, 19.9999, -9.9999]` |
+| **identity（`move_to` 实际形态）** | True | **0.000913** | 0.02° | **16.23°** | **`wrist_roll`** | `[16.3162, -48.7143, 61.4876, -77.2437, -0.0134, -163.6820]` |
+
+其它轴向 9 cm（identity 形态）：
+
+| 轴向 | `ok` | 残差 (m) | 最小裕度 | 备注 |
+| --- | --- | --- | --- | --- |
+| `+X` | **False** | 0.144103 | — | `RESIDUAL`；`shoulder_pan` 与 `wrist_yaw` 顶在 `+179.9087°` 面；预检第 78 点起连续失败 13 点 |
+| `-X` | True | 0.002478 | 37.96° | — |
+| `+Y` | True | 0.000254 | 29.50° | — |
+| `-Y` | True | 0.002168 | 11.11° | 裕度最小的一侧 |
+| `-Z` | True | 0.004311 | 17.29° | 残差占 `residual_limit_m = 0.005` 的 86% |
+| `+Z` | True | 0.000913 | 16.23° | 本节选的轴 |
+
+7 点路径（沿 `+Z` 等分 9 cm，`t = i/7`；identity 形态）：
+
+| 点 | t | `ok` | 残差 (m) | 最小裕度 | 最紧关节 | 六关节角（度） |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 0.1429 | True | 0.001153 | 16.29° | `wrist_roll` | `[16.3844, -48.2625, 38.7114, -99.4800, -0.0281, -163.6230]` |
+| 2 | 0.2857 | True | 0.001099 | 16.27° | `wrist_roll` | `[16.3628, -47.3334, 41.8074, -95.4861, -0.0233, -163.6414]` |
+| 3 | 0.4286 | True | 0.001047 | 16.25° | `wrist_roll` | `[16.3470, -46.8508, 45.1971, -91.6352, -0.0198, -163.6550]` |
+| 4 | 0.5714 | True | 0.001000 | 16.24° | `wrist_roll` | `[16.3354, -46.7784, 48.8662, -87.9083, -0.0173, -163.6650]` |
+| 5 | 0.7143 | True | 0.000961 | 16.24° | `wrist_roll` | `[16.3269, -47.0828, 52.8057, -84.2833, -0.0155, -163.6725]` |
+| 6 | 0.8571 | True | 0.000931 | 16.23° | `wrist_roll` | `[16.3206, -47.7355, 57.0118, -80.7365, -0.0143, -163.6780]` |
+| 7 | 1.0000 | True | 0.000913 | 16.23° | `wrist_roll` | `[16.3162, -48.7143, 61.4876, -77.2437, -0.0134, -163.6820]` |
+
+姿态保持形态的 7 点（对照）：7/7 收敛，最大残差 `0.004427 m`（第 4 点，占 `residual_limit_m = 0.005` 的 89%），最小裕度 `115.54°`（出现在第 7 点、关节 `elbow_flex`，与上面的姿态保持单点行同值：路径越往后越紧，终点最紧；7 点逐个为 `143.03°` / `141.32°` / `137.02°` / `132.72°` / `126.26°` / `121.00°` / `115.54°`）。
+
+生产预检网格（1 mm 步长、`n = 90`）：`+Z` 0 点失败；`+X` 第 78 点起连续失败 13 点、终点 `ok=False`。
+
+占位与假设要标清：seed 位姿是**假设**；URDF 的 `±179.9087°` 是**乐观上界**；真机窗口只能由 ①a 取。
+
+**现场最可能的形态（离线可推、未实测）**：identity 形态下第一个点就要把 `wrist_roll` 从 seed 的 `-10°` 跨到 `-163.6°`，跨 `153.6°`；而 step gate 上限是 `2.0°` / 周期（`src/alohamini_cartesian/control/controller.py:133`、`src/alohamini_cartesian/control/controller.py:535-543`）。若真机位姿接近这个假设 seed，②③ 会在第一个周期就被 step gate 拒发、逐周期重复，最后走满 `--timeout-s` 抛 `MotionTimeout`（`src/alohamini_cartesian/control/api.py:300`），JSON 里 `moves` 没有成功行——**这是预期形态，不是故障**。反过来，若真机位姿与假设差很远（例如 `wrist_roll` 本来就在 `-163°` 附近），第一次真跑可能真的动起来。两种结果都要按本节留痕，并按「现场确认项」第 8 条判。
+
+### 现场确认项（§10.7）
+
+| # | 确认项 | 怎么确认 | 确认不了怎么办 |
+| --- | --- | --- | --- |
+| 1 | 真机当前位姿（六关节角与末端 xyz） | ①a 的 metadata 与 ①b 的 seed 对照；或按 §4.4 的只读观测取 | 拿到后替换 `--q-seed-deg`，离线表才算对真机成立 |
+| 2 | 真机真实关节限位窗口（尤其 `wrist_roll` 是否覆盖 `-163.7°`） | ①a 打印的 `effective_limits_deg` | 不覆盖就停，不跑 ②③；记为「形态不可达」 |
+| 3 | 工作区范围 | 配置里没有（`site.yaml` 七个键，见 `src/alohamini_cartesian/config/overlay.py:40`） | 只能现场目视与询问；离线不给结论 |
+| 4 | `+Z` 向上 9 cm 物理上是否撞物 / 撞桌 | 目视；注意 `placo` 模型已剥掉 collision mesh、无自碰撞与桌面约束 | 有碰撞风险就停，或减小 `--dz` |
+| 5 | 9 cm 在 `2.0°` / 周期 step gate 下要走多少周期、能否在 `10 s` 内到位 | 用 ①b 的最大单关节跨度 ÷ `2.0°` × `1/30 s` 估算（identity 形态的 `wrist_roll` 约 `153.6°` → 约 77 个周期 ≈ `2.6 s`，前提是第一步就能被接受） | 估算不能替实测；现场以 `moves[].elapsed_s` 与是否超时为准 |
+| 6 | `signs` / `zeros` 的产出流程（**当前不存在，阻塞 ①a / ② / ③**） | 无离线推导法：只能来自真实标定，仓库与手册都没有产出脚本（见本节节首硬前置）；另：右臂复用同一份左臂 URDF 模型（`src/alohamini_cartesian/kinematics/joint_adapter.py:76-82` 的注释写明这是库的假设） | 产出流程落地前这三档记为「暂不可执行」；**不得**手写或猜这两份 JSON，也不得用左臂值顶替右臂 |
+| 7 | Gate D 的现场触发形态 | 见 §10.6 的「现场确认项」 | 同 §10.6：等不到就记「未触发」 |
+| 8 | 7 点路径每周期关节步长是否触发 step gate 拒发 | 看 `moves` 是否出现「超时且无成功行」 | 触发了即预期形态；要真正走完需另议分点策略，不在本节范围内 |
 
 ## 11 产物与归档
 

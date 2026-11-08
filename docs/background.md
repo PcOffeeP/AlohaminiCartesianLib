@@ -39,7 +39,7 @@
 | 测试 | 当前测试数见 `docs/changelog.md` |
 | 跳过的两条 | `tests/test_control_api_lerobot_parity.py`、`tests/test_kinematics_lerobot_parity.py`，需要对 vendor fork（`liyiteng/lerobot_alohamini`）做差分对照；**不等于全部通过** |
 | 核心依赖与 `lerobot` 引用位置 | 核心只依赖 numpy；`src/` 内**任何**文件（含 `adapter/protocol.py`）都不 import `lerobot`，由 `tests/test_capability.py` 的 AST 断言守着 |
-| 决策记录 | `docs/ADR.md` 现有 D1–D19 |
+| 决策记录 | `docs/ADR.md` 现有 D1–D20 |
 
 ### 4.2 已实现能力
 
@@ -111,7 +111,7 @@
 | 文档 | 管什么 | 冲突时谁优先 |
 | --- | --- | --- |
 | 设计规范：`/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini-cartesian-teleop/docs/alohamini-control/Alohamini-control-design.md`（自标 SSOT，位于已退役仓库，未迁入本库） | 历史设计来源：接口契约、状态机、决策 D001–D018；Gate A–E 已归档，不再是现行验收口径 | 不参与优先级：历史设计来源与溯源参考 |
-| `docs/ADR.md` | 本库落地时的取舍与代价（D1–D19） | 与本库代码冲突时以它为准；与设计规范冲突时以本库为准，差异记入 `docs/ADR.md`（D17） |
+| `docs/ADR.md` | 本库落地时的取舍与代价（D1–D20） | 与本库代码冲突时以它为准；与设计规范冲突时以本库为准，差异记入 `docs/ADR.md`（D17） |
 | `docs/acceptance-baseline.md` | 验收口径（V01–V13）：逐条要求、软件证据、实机证据与判据 | 验收以它为准，是唯一验收口径；退役仓库那份按臂归档的 Gate A–E 已由它替代（D17） |
 | `docs/s4-field-smoke.md` | 现场逐条命令、判据、产物、退出码 | 现场怎么执行以它为准 |
 | `docs/field-results.md` | 现场实际取到的结论与数字，按时间倒序，每条给证据文件 | 现场拿到了什么以它为准；数字与本文第 4.4 节或现场手册不一致时，以它引的证据文件为准 |

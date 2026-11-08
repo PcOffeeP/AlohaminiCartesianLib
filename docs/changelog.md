@@ -30,6 +30,10 @@ v0.7.0 给两个现场基准脚本加了客户端能力探测：`measure_latency
 
 parity 夹具对齐 vendor `6aee1f81` 的不变式：`tests/test_control_api_lerobot_parity.py` / `tests/test_kinematics_lerobot_parity.py` 在 fork `6aee1f81` 快照上 **61/61 通过**（`aba8428` 修复夹具后）。口径澄清（2026-11-05 实测）：从 PyPI 装的**上游 wheel `lerobot 0.6.1` 不含 `alohamini` 模块**，所以本库的差分对照只能对 **vendor fork（`liyiteng/lerobot_alohamini`）** 成立，正文中「对上游 lerobot 的差分对照」一律按 vendor fork 读。主环境无 `lerobot` 时这两个文件整体跳过（`2 skipped`），跳过不等于差分对照通过。
 
+把发版纪律写成证据红线（取舍与代价见 [ADR.md](ADR.md) D19）：V01 不收口不发 minor 版（`0.7.x → 0.8` 要有 V01 的实机证据）；每个发版至少新增一格实机证据并写明条件（供电 / 温度 / 容差），纯文档 / 测试修复的发版可豁免，但豁免理由必须写进 changelog；V01 收口前新增测试只走追因路径，不做 polish。要这条是因为「离线全绿」容易被当成发版依据——它只是软件侧快照，`2 skipped` 的两条 parity 差分对照并未跑过，实机侧 13 条里当时仍有 9 条「未取」。
+
+把 V01 残余支的分级口径与达成率分母统一写进 [ADR.md](ADR.md) D20：步末残余按关节类别分级——肩类（`shoulder_pan` / `shoulder_lift`）门槛改为 `≤2°`（≈22.8 tick），轻载轴维持 `≤2 tick（0.1758°）`；达成率主分母统一为 `abs(--delta-deg) × --steps`，不再用 `Σ(cmd_deg − baseline_deg)`（`--anchor command` 下逐条 `cmd_deg − baseline_deg` 含跨步累积 lead，求和会把同一段行程记两遍以上）。要这两条是因为 2026-11-08 路 A 两轮排除「动作慢 / 跟不上」后，同一份数据用两个分母分别算出 `43.0108%` 与 `79.1209%`，跨场次、跨跑法的读数不可比；`2°` 这个量级也不是本库自造——厂商 `_JOINT_STALL_MIN_COMMAND_ERROR_DEG = 2.0` 说明它落在固件默认能容忍的残余里。
+
 ## v0.6.0
 
 v0.6.0 修正了失败原因分类：`ArmIK.solve()` 结尾不再把「没到位」一律报 `JOINT_LIMIT`，而是按越限与否分流——解越出注入限位（越限判定仍含 `LIMIT_EPS_DEG` 容差）报 `JOINT_LIMIT`，未越限但位置残差超过 `profile.residual_limit_m` 报 `RESIDUAL`，两者同时成立时 `JOINT_LIMIT` 优先。`FAILURE_REASONS` 不新增枚举值，`IKResult` 字段不变。
