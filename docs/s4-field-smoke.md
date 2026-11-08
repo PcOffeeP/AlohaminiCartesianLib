@@ -798,8 +798,8 @@ run 4.2-gripper-regs ssh "$PI" '~/miniconda3/envs/lerobot_alohamini/bin/python -
 
 | 总线（`PORT`） | 电机名 | ID | model | 归一化 | 出处 |
 | --- | --- | --- | --- | --- | --- |
-| 左 `/dev/am_arm_follower_left`（→ `ttyACM0`） | `arm_left_shoulder_pan` … `arm_left_gripper` | 1–7 | 1 `sts3250`、2/3 `sts3095`、4/5/6 `sts3250`、7 `sts3250` | 1–6 `range_m100_100`、7 `range_0_100` | vendor `alohamini.py:155-163`（`am-follower-6dof-hd` 档）+ `configs/site.yaml:15` |
-| 左（**同一条总线**） | `base_left_wheel` / `base_back_wheel` / `base_right_wheel` | 8 / 9 / 10 | `sts3250` | `range_m100_100` | vendor `alohamini.py:209-215`（`left_bus_motors` 里同时有 `arm_left_*` 与 `base_*`），`model_specs.py:73-79` 的 `base_motor` |
+| 左 `/dev/am_arm_follower_left`（→ `ttyACM0`） | `arm_left_shoulder_pan` … `arm_left_gripper` | 1–7 | 1 `sts3250`、2/3 `sts3095`、4/5/6 `sts3250`、7 `sts3250` | 1–6 `range_m100_100`、7 `range_0_100` | vendor `alohamini.py:155-163`（`am-follower-6dof-hd` 档）+ `configs/site.yaml:14` |
+| 左（**同一条总线**） | `base_left_wheel` / `base_back_wheel` / `base_right_wheel` | 8 / 9 / 10 | `sts3250` | `range_m100_100` | vendor `alohamini.py:209-215`（`left_bus_motors` 里同时有 `arm_left_*` 与 `base_*`），vendor 那份型号表 `model_specs.py:75` 的 `base_motor`（`ec65318f` 的 `alohamini2pro` 段，值 `sts3250`） |
 | 左（**同一条总线**） | `lift_axis` | 11 | `sts3095` | `degrees` | 同上，`lift_motor` |
 | 右 `/dev/am_arm_follower_right`（→ `ttyACM1`） | `arm_right_*` | 1–7 | 同左臂 | 同左臂 | `configs/site.yaml:16` + 同一份 `am-follower-6dof-hd` 档 |
 
@@ -904,7 +904,7 @@ run 4.3d-config-classes ssh "$PI" 'sed -n "95,145p" ~/lerobot_alohamini/src/lero
 
 `4.3c` 用来确认这三个字段有没有命令行入口。实测只有 5 处 `add_argument`（`--robot_model`、`--no_follower`、`--profile_timing`、`--camera-stream`、`--camera-stream-port`），都不涉及这三个字段。
 
-`4.3d` 用来看清默认值属于哪个 dataclass。实测 `AlohaMiniHostConfig` 与 `AlohaMiniClientConfig` 各有一个 `observation_request_window`（`:110` 与 `:135`），取 Host 那个。
+`4.3d` 用来看清默认值属于哪个 dataclass。实测 `AlohaMiniHostConfig` 与 `AlohaMiniClientConfig` 各有一个 `observation_request_window`（`config_alohamini.py:98` 与 `:123`），取 Host 那个。
 
 取值规则：
 
@@ -953,9 +953,9 @@ max_loop_freq_hz: 50
 
 | 字段 | 依据（来路） |
 | --- | --- |
-| `observation_request_window` | `config_alohamini.py:110`（`AlohaMiniHostConfig` 源码默认）；该项无命令行入口 |
-| `watchdog_timeout_ms` | `config_alohamini.py:122` |
-| `max_loop_freq_hz` | `config_alohamini.py:125` |
+| `observation_request_window` | `config_alohamini.py:98`（`AlohaMiniHostConfig` 源码默认）；该项无命令行入口 |
+| `watchdog_timeout_ms` | `config_alohamini.py:110` |
+| `max_loop_freq_hz` | `config_alohamini.py:113` |
 
 另外四个字段的取法：
 
@@ -987,7 +987,7 @@ run 4.3e-load-check uv run --no-sync python -c "from pathlib import Path; from a
 
 `watchdog_timeout_ms` 两处默认值不同：本库 `src/alohamini_cartesian/config/overlay.py` 的 `AlohaMiniSettings` 默认 `500`，厂商 `config_alohamini.py` 默认 `1000`（不写死行号：行号随厂商提交变化，2026-10-25 在 Pi 上约 122 行）。核对宿主实参时不要混用，样例里写实际生效的那个值。
 
-`robot_model` 两处默认值不一致：本库 `overlay.py:51` 是 `alohamini1`；两个现场脚本的 `DEFAULT_ROBOT_MODEL` 都是 `alohamini2pro`（`benchmarks/alohamini_io/capture_robot_fingerprint.py:90`、`benchmarks/alohamini_io/measure_latency.py:537`）。现场机型是 AlohaMini 2 Pro，而代码 Gate C 要求宿主 metadata 的 `robot_model` 与 `--robot-model` 相等（比对在 `measure_latency.py:2382-2396`）。现场 YAML 必须显式写 `robot_model: alohamini2pro`，不能用模板里的 `alohamini1`，否则配置表达的意思与真机不符。
+`robot_model` 两处默认值不一致：本库 `overlay.py:51` 是 `alohamini1`；两个现场脚本的 `DEFAULT_ROBOT_MODEL` 都是 `alohamini2pro`（`benchmarks/alohamini_io/capture_robot_fingerprint.py:96`、`benchmarks/alohamini_io/measure_latency.py:537`）。现场机型是 AlohaMini 2 Pro，而代码 Gate C 要求宿主 metadata 的 `robot_model` 与 `--robot-model` 相等（比对在 `measure_latency.py:2382-2396`）。现场 YAML 必须显式写 `robot_model: alohamini2pro`，不能用模板里的 `alohamini1`，否则配置表达的意思与真机不符。
 
 本节产物：`configs/template.yaml`、`configs/site.yaml`，`stdout/4.3a-host-args-*`、`4.3a2-host-cmdline-*`、`4.3b-host-config-*`、`4.3c-config-args-*`、`4.3d-config-classes-*`、`4.3e-load-check-*`，以及第 4.1、4.1b、4.2 节的产物。
 
@@ -1146,6 +1146,102 @@ git -C /tmp/lerobot-vendor-6aee1f81 rev-parse HEAD
 
 产物：`rtt/rtt-net-cross-$STAMP.csv`、`stdout/5.3-rtt-net-cross-*`。
 
+#### 重建命令（2026-11-08 实测）
+
+一句话：`.venvs/alohamini-lerobot` 丢了、或换一台 PC 时，照下面这段重建；重建后本节的「环境事实」表三项版本（Python 3.13.13 / `lerobot` `0.6.1` / numpy `2.2.6`）与整目录体积 `881M` 都对得上，`pip freeze` 计数与 2026-11-05 那套相同（44 行），当天 `diff` 无输出。
+
+先定性质：这个环境是标准 `venv`，不是 `uv venv`。依据是该环境 `pyvenv.cfg` 里两行关键内容——`command = /opt/miniconda3/bin/python3.13 -m venv …`、`include-system-site-packages = false`。重建用同一条 `venv` 命令、同一个 conda 解释器；`uv venv` 建出来是另一副骨架（`pyvenv.cfg` 内容与 pip 版本都不同），不在本节验证范围。
+
+命令原文（在仓库根下执行；前五行变量按本机实际路径改）：
+
+```bash
+REPO=/Users/pcoffeep/pi-workspace/alohamini-cartesian-lib
+FORK=/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini
+PY313=/opt/miniconda3/bin/python3.13
+VENV="$REPO/.venvs/alohamini-lerobot"
+TMP=/tmp/lerobot-rebuild
+
+# 1 建环境（2.4 s / 12 M）
+"$PY313" -m venv "$VENV"
+"$VENV/bin/python" -V                     # 判据：Python 3.13.13
+"$VENV/bin/python" -m pip --version       # 判据：pip 26.0.1
+
+# 2 取 vendor 主分支快照（2.0 s / 357 M）；git archive 只读，不写 fork
+git -C "$FORK" rev-parse refs/heads/main  # 判据：ec65318f4cc3d830242f6e987d43f46e6b61f0a5
+mkdir -p "$TMP/src" "$TMP/wheel"
+git -C "$FORK" archive --format=tar refs/heads/main | tar -x -C "$TMP/src"
+
+# 3 造 wheel（4.3 s / 1.7 M）
+"$VENV/bin/python" -m pip wheel "$TMP/src" --no-deps -w "$TMP/wheel"
+ls -l "$TMP/wheel/lerobot-0.6.1-py3-none-any.whl"   # 判据：1804013 字节
+
+# 4 装 wheel 与全部依赖（45.3 s / 875 M；本次 pip 缓存命中）
+"$VENV/bin/python" -m pip install "$TMP/wheel/lerobot-0.6.1-py3-none-any.whl"
+
+# 5 把 6 个随解析时间漂移的包钉回 2026-11-05 的值（8 s → 881 M）
+"$VENV/bin/python" -m pip install "anyio==4.15.1" "click==8.5.0" "filelock==4.2.4" \
+  "hf-xet==1.7.0" "mypy_extensions==1.1.0" "pyzmq==27.2.0"
+
+# 6 去掉指向 /tmp 的一次性元数据（2026-11-05 那套没有这个文件）
+rm -f "$VENV/lib/python3.13/site-packages/lerobot-0.6.1.dist-info/direct_url.json"
+
+# 7 验收
+"$VENV/bin/python" -c "import sys, numpy, lerobot; from lerobot.robots.alohamini.alohamini_client import AlohaMiniClient; print(sys.version.split()[0], lerobot.__version__, numpy.__version__, AlohaMiniClient.__module__)"
+"$VENV/bin/python" "$REPO/benchmarks/alohamini_io/measure_latency.py" --help > /dev/null   # 判据：exit 0
+"$VENV/bin/python" -m pip freeze | wc -l   # 判据：44
+du -sh "$VENV"                             # 判据：881M
+
+# 8 清掉 /tmp 里的构建快照（回收 358 M；测量要的 vendor 快照另按上一小节取）
+rm -rf "$TMP"
+```
+
+第 7 步第一条的期望原文（本次实测，一行）：
+
+```text
+3.13.13 0.6.1 2.2.6 lerobot.robots.alohamini.alohamini_client
+```
+
+逐步判据与实测值（2026-11-08，试装置于 `/tmp/lerobot-rebuild-test-20261108/venv`）：
+
+| 步 | 做什么 | 判据 | 本次实测 |
+| --- | --- | --- | --- |
+| 1 | 建 venv | `python -V` = `Python 3.13.13`、`pip --version` = `pip 26.0.1` | 2.4 s，12 M |
+| 2 | `git archive` 取 fork `main` 快照 | `rev-parse refs/heads/main` = `ec65318f…f0a5` | 2.0 s，快照 357 M |
+| 3 | 造 wheel | `lerobot-0.6.1-py3-none-any.whl` 存在、1804013 字节 | 4.3 s，wheel 1.7 M |
+| 4 | 装 wheel + 全部依赖 | freeze 里有 `numpy==2.2.6`、`torch==2.11.0`、`torchvision==0.26.0` | 45.3 s，875 M |
+| 5 | 钉回 6 个漂移包 | `pip freeze \| wc -l` = 44 | 8 s，881 M |
+| 6 | 删 `direct_url.json` | 该文件不存在 | 文件已不存在；耗时未单测 |
+| 7 | 验收 | 上面那行期望原文 + `--help` exit `0` + `du -sh` = 881M | 四项全通过 |
+| 8 | 清 `/tmp` 构建快照 | `$TMP` 不存在 | 5 s（`du` + `rm` 两命令合计），回收 358 M |
+
+按上表相加，第 1–5 步 62 s（pip 缓存命中；其中第 4 步 45.3 s 全是装依赖）。`git archive` 只读：重建前后 `git -C "$FORK" status --porcelain \| wc -l` 都是 6，即 fork 上那 6 个既有未提交改动，未被本流程触及。
+
+第 5 步为什么存在：pip 对 `>=x,<y` 区间取当前最新，2026-11-08 重新解析时有 5 个包比 2026-11-05 那套新（`anyio` 4.15.1→4.16.0、`click` 8.5.0→8.5.1、`filelock` 4.2.4→4.2.9、`hf-xet` 1.7.0→1.8.0、`mypy_extensions` 1.1.0→1.2.0），另有 `pyzmq` 27.2.0 不在 `lerobot` 的基础安装依赖内（挂在 `pyzmq-dep` extra 上：`Requires-Dist: pyzmq<28.0.0,>=26.2.1; extra == "pyzmq-dep"`，基础安装不会拉；本次全量安装后 freeze 里确实没有它），2026-11-05 那套是额外装的。这 6 条钉死后 `pip freeze` 与现环境逐行相同（44 行对 44 行，`diff` 无输出），`du -sh` 也从 875M 回到 881M。
+
+第 6 步为什么存在：pip 26.0.1 装本地 wheel 会写 `site-packages/lerobot-0.6.1.dist-info/direct_url.json`（内容指向 `file:///private/tmp/.../lerobot-0.6.1-py3-none-any.whl`），2026-11-05 那套没有这个文件。它是可追溯元数据，不影响 import；删掉只为让两套一致。pip 26.0.1 没有跳过它的开关（`pip install --help | grep -i direct-url` 无输出，实测）。
+
+与 `PYTHONPATH` 快照的关系（两套东西，别合并）：
+
+| 项 | 取自 | 来源提交 | 源码含 `latest_request_timing` |
+| --- | --- | --- | --- |
+| 装进环境的 wheel | fork 的 `main` | `ec65318f` | 否 |
+| 测量命令的 `PYTHONPATH` | fork 的 `p1a-merged` | `6aee1f81` | 是 |
+
+实测对照：同一条 `python -c` 只换 `PYTHONPATH` 跑——不设时 `alohamini_client.py` 来自 `site-packages`，源码里搜不到 `latest_request_timing`；设成 `/tmp/lerobot-vendor-6aee1f81/src` 时来自该快照，搜得到。所以重建只解决主环境那条 `No module named 'lerobot'`（exit `3`），不解决 rtt 的 exit `9`：`PYTHONPATH` 快照仍按上一小节的 `git clone --branch p1a-merged --quiet …` 取，本小节不改那段；第 2 步的 `git archive` 只为造 wheel，不拿来做 `PYTHONPATH`。
+
+本库没装进这个环境（事实句）：重建后 `site-packages` 里没有 `alohamini_cartesian` 的 `dist-info` 与 `.pth`，在仓库根下 `import alohamini_cartesian` 报 `ModuleNotFoundError: No module named 'alohamini_cartesian'`（实测）。替代做法是把 `<repo>/src` 加进 `PYTHONPATH`，与 vendor 快照用冒号并列（写法见 §4.4 那条 `run`）；**把 cwd 放在仓库根不能替代它**，cwd 只解决 `benchmarks/…`、`examples/…` 这类脚本路径。5.1、5.2、5.3、6.2、7.1 的测量命令只 import `lerobot` 与 numpy，不需要本库，所以那些命令不写第二段 `PYTHONPATH`。
+
+实测范围（哪些步没实测，别当成已验证）：
+
+1. 上面 8 步全部在 `/tmp/lerobot-rebuild-test-20261108/venv` 上跑通，解释器与现环境同源（`/opt/miniconda3/bin/python3.13`）。**`.venvs/alohamini-lerobot` 本身没有重建**：唯一没实测的差别就是 `VENV` 指向仓库内路径这一处。试装目录（删前 `du -sh` 1.2 G，含 venv 881 M + 快照 357 M）已删；`/tmp` 下只剩既有的 `/tmp/lerobot-vendor-6aee1f81`（789 M，上一小节的快照，保留）与 `/tmp/alohamini-clean-install`（888 M，不是本流程建的，未动）。
+2. 冷缓存耗时未实测：本次 pip 缓存（209 M）命中，`torch-2.11.0-cp313-cp313-macosx_11_0_arm64.whl (80.6 MB)` 走 `Using cached`；无缓存时要下载，耗时取决于网速。
+3. wheel 逐字节可复现未验证：本次 sha256 `74ffa6fe1864259b6c35e3d8b84eb5a53852b50fba30987c7b59a81717913765`，没跑第二次比对。
+4. `connect()` 仍未验，与上面「已知限制 3」同口径。
+
+**vendor 行号基准**（本文与本项目其它文档统一口径）：vendor（fork）源码行号一律按**对应提交**计，不按本地工作区——`ec65318f` = fork `refs/heads/main`；`6aee1f81` = `p1a-merged` = Pi 运行时 HEAD。
+本地 fork 工作区有 6 个未提交改动，`git -C <fork> diff --numstat` 的**净增行数**是 `docs/alohamini/commands.md` +94、`examples/alohamini/teleoperate_bi.py` +13、`src/lerobot/robots/alohamini/config_alohamini.py` +12（同一条命令里另改了 `examples/alohamini/calibrate_bi.py`、`examples/alohamini/record_bi.py`、`tests/robots/test_alohamini_ros_compat.py`）。这三个数是增删相抵后的净增，**不是**引用行处的一律偏移：偏移随位置变（例：`docs/alohamini/commands.md` `:210` 在工作区是 `:263`，偏移 +53；`examples/alohamini/teleoperate_bi.py` `:90` 在工作区是 `:103`，偏移 +13）。所以一律用 `git show <ref>:<path>` 取行，不要在工作区 grep。
+本仓库内的行号引用由 `tests/test_doc_line_references.py` 守（判「文件能解析 / 行号在范围内 / 目标行非空」）；vendor 侧引用不在该守卫内。
+
 ## 6 量级验证：臂总线电流能不能判读
 
 本节要给出一条前置事实：臂总线电流能不能用来判负载。后面所有依赖电流的判断（第 7.2 节）都以这个结论为准。取数主路径是客户端的 `latest_safety_status["currents_ma"]`；`[Currents]` 这条日志在当前 vendor 的日志级别下不打印（见第 6.1 节）。
@@ -1180,7 +1276,7 @@ run 6.1a-host-pid ssh "$PI" 'date -u +%Y-%m-%dT%H:%M:%SZ; ps -eo pid,args | grep
 kill "$LOCAL_SSH_PID" 2>/dev/null
 ```
 
-判据：`6.1a-host-start-$STAMP.log` 里有 `pid=<数字>` 与 `ready=1`；`6.1a-host-pid-$STAMP.log` 里 `ps` 那行是 `python … -m lerobot.robots.alohamini.alohamini_host`，`ss` 给出 `:5555` 与 `:5556` 各一行 `LISTEN`（2026-11-06 实测原文：`pid=2516`、`ready=1`，`ps` 打出 PID `2517`，两个端口各一行 `LISTEN`）。
+判据：`6.1a-host-start-$STAMP.log` 里有 `pid=<数字>` 与 `ready=1`；`6.1a-host-pid-$STAMP.log` 里 `ps` 那行是 `python … -m lerobot.robots.alohamini.alohamini_host`，`ss` 给出 `5555` 与 `5556` 两个端口各一行 `LISTEN`（2026-11-06 实测原文：`pid=2516`、`ready=1`，`ps` 打出 PID `2517`，两个端口各一行 `LISTEN`）。
 
 **停 Host 用的 PID 要取 `6.1a-host-pid` 里 `ps` 打出的那个，不要用 `echo pid=$!` 的**：2026-11-06 实测 `echo pid=$!` 打 `2516`，实际 python 是 `2517`（`setsid` 自己占掉一个 PID），照 `2516` 去 kill 打不中。
 
@@ -1294,7 +1390,7 @@ run 7.1-tracking env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pcoffeep
 | `--mode tracking` | 必填 | 不写就落回 `rtt`，只采观测 |
 | `--enable-motion` | 必填 | 代码 Gate A 的第一个条件 |
 | `--joint` | `arm_left_shoulder_pan.pos`（先左臂单关节） | 代码 Gate A 的第二个条件；`.pos` 后缀可省 |
-| `--delta-deg` | `1.0` | 幅度被硬性钳到 `1.0°`（常量 `MAX_STEP_DELTA_DEG`，`:504`），**符号保留**：`-1.0` 按 `-1.0` 执行、`-2.0` 钳成 `-1.0`；`0` 是用法错误（exit 2）。负值即朝反方向 |
+| `--delta-deg` | `1.0` | 幅度被硬性钳到 `1.0°`（常量 `MAX_STEP_DELTA_DEG`，`measure_latency.py:504`），**符号保留**：`-1.0` 按 `-1.0` 执行、`-2.0` 钳成 `-1.0`；`0` 是用法错误（exit 2）。负值即朝反方向 |
 | `--anchor` | `present`（默认；验证误差累积形态时用 `command`） | 两模式只差目标锚在哪：`present` 每步重读实测位置、把目标放在「实测加 `delta_deg`」上，lead 只有一步、不跨步累积；`command` 锚在上一步发出的 target（首步落回实测），lead 跨步累积。指标受影响：`command` 的一步可能补掉跨了几步的 lead，`rise_90_time_s` 提前记满、`overshoot_deg` 变成（行程 − 一步 delta）、`error_deg` 停在累积 lead 上，所以这三个量与 `present` 不能横向比较。CSV 与 sidecar 没有锚点列，只能靠 stdout 那行 `note: anchor=command: …` 区分模式，归档时 stdout 必须与 CSV 一起存。物理风险：`command` 下 Gate E 仍按 `\|delta\| × steps <= 20.0` 判，`--steps 20 --delta-deg 1.0` 合法、lead 可积到 20°，静摩擦一旦破开，整段 lead 可能一次性释放；首跑用 3–5 步 |
 | `--steps` | 先 `5`，成功后再说 | `\|delta\| × steps` 必须不超过 20.0°；默认 20 步、每步 1.0° 正好顶在上限；`--delta-deg` 传负值时上限按绝对值算，符号不影响上限 |
 | `--control-hz` | `50.0`（默认） | 两条命令最小间隔 1/50 s = 20 ms；必须有限且不小于 1，`inf`/`nan` 被拒 |
@@ -1304,9 +1400,9 @@ run 7.1-tracking env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pcoffeep
 
 `--delta-deg` 的幅度上限与 stdout 表现：常量 `MAX_STEP_DELTA_DEG = 1.0`（`benchmarks/alohamini_io/measure_latency.py:504`），`resolve_delta_deg`（`:2118-2126`）的实现是 `min(max(delta, -MAX_STEP_DELTA_DEG), MAX_STEP_DELTA_DEG)`——**钳的是幅度，不钳符号**。请求 `--delta-deg 2.0` 时按 1.0 执行，请求 `-2.0` 时按 -1.0 执行，请求 `-1.0` 时原样执行。report 首部把实际值与请求值都打印出来，原文形如 `delta_deg=1.000 (requested 2.000)`（打印在 `measure_latency.py:3369-3370`）。要凑更大总行程，只能改成「1° × 更多步」，加大 `--delta-deg` 的幅度无效。
 
-横幅里那句 `note: settle tolerance <X> deg >= 0.1 * delta (<Y> deg)`（`:3427-3431`）有一处既有文案瑕疵：标签写的是 `0.1 * delta`，括号里的 `<Y>` 打印的却是 **`delta` 本身**。判读时按 `delta` 本身读那个数，不要把它当成「0.1 × delta 的下限值」。该瑕疵已登记在 `TODO.md`。
+横幅里那句 `note: settle tolerance <X> deg >= 0.1 * delta (<Y> deg)`（`measure_latency.py:3427-3431`）有一处既有文案瑕疵：标签写的是 `0.1 * delta`，括号里的 `<Y>` 打印的却是 **`delta` 本身**。判读时按 `delta` 本身读那个数，不要把它当成「0.1 × delta 的下限值」。该瑕疵已登记在 `TODO.md`。
 
-负值合法这条与退出码的关系：`--delta-deg 0` 才是用法错误（exit 2，stderr 原文 `--delta-deg must be a finite and non-zero number (got 0.0); negative steps are legal, a zero step commands nothing`，判据在 `:1798`）；`--delta-deg -1` 一路过到 connect，本地实测主环境无 `lerobot` 时以 exit 3 结束，不是 2。
+负值合法这条与退出码的关系：`--delta-deg 0` 才是用法错误（exit 2，stderr 原文 `--delta-deg must be a finite and non-zero number (got 0.0); negative steps are legal, a zero step commands nothing`，判据在 `measure_latency.py:1798`）；`--delta-deg -1` 一路过到 connect，本地实测主环境无 `lerobot` 时以 exit 3 结束，不是 2。
 
 关于 `rise_90_time_s` 为空：源码的说法是这一列 can be empty，即**可能**为空。是否为空取决于该关节是否在同一次轮询里越过 90% 线；容差取小未必空，取大也未必不空。
 
@@ -1331,7 +1427,7 @@ run 7.1-tracking env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pcoffeep
 run 7.1b-gatec-reverse env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python benchmarks/alohamini_io/measure_latency.py --host "$PI_HOST" --mode tracking --enable-motion --joint arm_left_shoulder_pan.pos --robot-model alohamini2 --delta-deg 1.0 --steps 1 --control-hz 50.0 --settle-tolerance-deg 0.05 --settle-timeout-s 2.0 --timeout-s 60 --csv "$S4DIR/tracking/tracking-7.1b-$STAMP.csv"
 ```
 
-`--robot-model alohamini2` 是故意写的错值：宿主报的是 `alohamini2pro`（`configs/site.yaml:12`）。两个值都是 vendor 的合法 SKU（`model_specs.py:61-79`），且两侧的关节键名集合相同（`model_specs.py:35-44`），按代码顺序看 Gate B（键在不在）不会先拒——**2026-11-06 实测推翻这一预判**，理由见本节「实测结果」。
+`--robot-model alohamini2` 是故意写的错值：宿主报的是 `alohamini2pro`（`configs/site.yaml:12`）。两个值都是 vendor 的合法 SKU（vendor 那份型号表 `model_specs.py:65-80`，`ec65318f` 里 `alohamini2` 与 `alohamini2pro` 两段），且两侧的关节键名集合相同（同文件 `model_specs.py:33-50`，`am-follower-6dof` 与 `am-follower-6dof-hd` 两个关节元组逐项同名），按代码顺序看 Gate B（键在不在）不会先拒——**2026-11-06 实测推翻这一预判**，理由见本节「实测结果」。
 
 #### 实测结果（2026-11-06）：真机落 Gate B，不是 Gate C
 
@@ -1411,7 +1507,7 @@ run 7.2b-host-tracking ssh "$PI" 'HOSTLOG=/tmp/site-host-<STAMP>.log; grep "\[HO
 
 停 Host 之后手臂仍然带电保持。2026-10-25 停 Host 后读到的寄存器是 `Torque_Enable=1`、`Lock=0`，位置环还在通电，人手推就是顶着位置环。断电才失力。（2026-10-25 那次用的信号未记录；若是 `kill -9` 则与本段相容，若是 `kill -INT` 则与实测冲突，需复核。）
 
-**只有 `SIGINT` 会释放扭矩。** Host 收到 `SIGINT`（`kill -INT`）走 `except KeyboardInterrupt` → `finally` → `robot.disconnect()`，`disconnect()` 调 `left_bus.disconnect(self.config.disable_torque_on_disconnect)`，该字段默认 `True`，即释放扭矩。源码（本地 fork `ec65318f`；Pi 副本 `6aee1f81` 行号差 +33）：`alohamini_host.py:548-556`、`alohamini.py:1251-1253`、`config_alohamini.py:68`。现场：2026-11-06 实测 `kill -INT` 之后左总线两轴（ID1 / ID6）`Torque_Enable=0`（`stdout/rt-regs-verdict-20261106T083449Z.md` 第 1.2 节），Host 日志末两行 `Keyboard interrupt received. Exiting...` / `Shutting down AlohaMini Host.`（`stdout/rt-regs-host-verify-20261106T083449Z.log` 末两行）。`kill -9` 与 `SIGTERM` 不给进程收尾机会，扭矩保持带电：2026-11-06 实测 `kill -9` 后左总线 11 只电机 `Torque_Enable` 全 `1`（`stdout/10.5-m1-regs-final-20261106T073052Z.log`，11 个 `Torque_Enable = 1` 行）。`SIGTERM` 那一支本轮没有单独读数，是按「不给收尾机会」推的，**未验证**。
+**只有 `SIGINT` 会释放扭矩。** Host 收到 `SIGINT`（`kill -INT`）走 `except KeyboardInterrupt` → `finally` → `robot.disconnect()`，`disconnect()` 调 `left_bus.disconnect(self.config.disable_torque_on_disconnect)`，该字段默认 `True`，即释放扭矩。源码（行号按提交取，逐条两支）：`alohamini_host.py:548-556`（`ec65318f`；`6aee1f81` 为 `:612-620`）、`alohamini.py:1251-1253`（`ec65318f`；`6aee1f81` 为 `:1284-1286`）、`config_alohamini.py:56`（两支该行相同，偏移 0）。现场：2026-11-06 实测 `kill -INT` 之后左总线两轴（ID1 / ID6）`Torque_Enable=0`（`stdout/rt-regs-verdict-20261106T083449Z.md` 第 1.2 节），Host 日志末两行 `Keyboard interrupt received. Exiting...` / `Shutting down AlohaMini Host.`（`stdout/rt-regs-host-verify-20261106T083449Z.log` 末两行）。`kill -9` 与 `SIGTERM` 不给进程收尾机会，扭矩保持带电：2026-11-06 实测 `kill -9` 后左总线 11 只电机 `Torque_Enable` 全 `1`（`stdout/10.5-m1-regs-final-20261106T073052Z.log`，11 个 `Torque_Enable = 1` 行）。`SIGTERM` 那一支本轮没有单独读数，是按「不给收尾机会」推的，**未验证**。
 
 另一条是**外部来源、非本轮实测**：写 `Goal_Position` 时固件会自置 `Torque_Enable=1`（厂商手册与社区帖两处，原文不在证据目录）。因此「读到的 `Torque_Enable=1`」本身不足以断定是谁写的。
 
@@ -1528,9 +1624,9 @@ M0 已离线排除换算链（1° = 11 tick；台账与数字见 `docs/field-res
 
 做法：用厂商遥操作（leader 主臂，即手持的遥操作主臂）动 `arm_left_shoulder_pan` 与 `arm_left_shoulder_lift`，全程不经过本库。
 
-启动方式：厂商遥操作的入口与命令仓库里查得到，写死在下面。**时序关键是 Host 保持运行**——vendor 文档原文 `Run these on the PC / DGX client after the host is running.`（`docs/alohamini/commands.md:263`），遥操作是 PC 侧经 ZMQ 连 Host 的远端客户端（`examples/alohamini/teleoperate_bi.py:96-119` 建 `AlohaMiniClientConfig(remote_ip=…)` + `AlohaMiniClient`），它碰的是**主臂**串口，不抢从臂总线。所以**不要停 Host**。
+启动方式：厂商遥操作的入口与命令仓库里查得到，写死在下面。**时序关键是 Host 保持运行**——vendor 文档原文 `Run these on the PC / DGX client after the host is running.`（`docs/alohamini/commands.md:210`），遥操作是 PC 侧经 ZMQ 连 Host 的远端客户端（`examples/alohamini/teleoperate_bi.py:96-119` 建 `AlohaMiniClientConfig(remote_ip=…)` + `AlohaMiniClient`），它碰的是**主臂**串口，不抢从臂总线。所以**不要停 Host**。
 
-在 PC（Mac）另开一个终端，按 vendor 文档的原样命令跑（`docs/alohamini/commands.md:267-276`）：
+在 PC（Mac）另开一个终端，按 vendor 文档的原样命令跑（`docs/alohamini/commands.md:224-234`）：
 
 ```bash
 conda activate bot
@@ -1547,12 +1643,12 @@ python examples/alohamini/teleoperate_bi.py \
 三条必须对上的口径：
 
 - `--robot.robot_model` 必须与宿主实报值一致（本机 `configs/site.yaml:12` 是 `alohamini2pro`）；写错会撞厂商客户端自己的模型校验（`alohamini_client.py:417-420` 抛 `ValueError: Host robot_model does not match the client configuration`），见第 7.1b 节的同一条机理。
-- `--teleop.arm_profile am-leader-6dof` 是 6 自由度主臂档；只支持 `so-arm-5dof` / `am-leader-6dof` 两个取值（`examples/alohamini/teleoperate_bi.py:68-79`）。
-- 主臂串口默认值按平台取（`teleoperate_bi.py:56-66`）：macOS 是 `/dev/tty.usbmodem*`、Linux 是 `/dev/am_arm_leader_left` / `/dev/am_arm_leader_right`。现场用 `ls /dev/tty.usbmodem*`（或对应平台的 `/dev/*leader*`）确认后，用 `--teleop.left_port` / `--teleop.right_port` 显式指定，不要依赖默认值。
+- `--teleop.arm_profile am-leader-6dof` 是 6 自由度主臂档；只支持 `so-arm-5dof` / `am-leader-6dof` 两个取值（`examples/alohamini/teleoperate_bi.py:55-63`）。
+- 主臂串口在 vendor 脚本的**提交口径**里是写死的常量，不按平台取、也不可覆盖：`left_arm_config.port="/dev/am_arm_leader_left"`（`examples/alohamini/teleoperate_bi.py:90`）、`right_arm_config.port="/dev/am_arm_leader_right"`（`:94`），两支提交 `ec65318f` 与 `6aee1f81` 上逐字相同；`--teleop.left_port` / `--teleop.right_port` 在这两支上不存在（全仓 `git grep` 零命中）。**但本地 fork 的工作区不是这样**：那 6 个未提交改动已给 `examples/alohamini/teleoperate_bi.py` 加上 `--teleop.left_port`（`:57`）与 `--teleop.right_port`（`:63`），默认值按平台取（`:59` / `:65`：macOS 是 `/dev/tty.usbmodem…`、其它平台是 `/dev/am_arm_leader_*`），并把写死的端口改成读参数（`:103` / `:107`）。现场用哪份检出决定有没有这两个参数：先 `git -C <fork> status --porcelain` 看——输出 6 行（6 个未提交改动在）就是工作区口径，有两个参数且默认按平台取；输出 0 行（干净检出）就是提交口径，没有这两个参数。两种情形都不要自己造端口参数：按提交口径现场只能按写死的取值确认设备是否在位：`ls -l /dev/am_arm_leader_left /dev/am_arm_leader_right`，两条都在才谈 teleop；不在位就记「未测」。
 
 冲突与失败：若遥操作连不上 Host、或报端口被占用，把 stderr 原文记下来，先查 Host 是否真的在跑（§3.4 的 5555 / 5556 `LISTEN`）与 `remote_ip` 是否写对；仍不通就记「未测」，**不要改 vendor 代码、不要猜命令**。
 
-物理前提（人工确认项）：**主臂手柄（leader）需在现场**、且需先按 vendor 流程标定过（`docs/alohamini/commands.md:288-289` 说明 Pi 侧的 `alohamini_calibrate` 标的是从臂、不是 Mac 侧主臂）。手柄不在场，整条 teleop 不可执行，直接跳到 M1。
+物理前提（人工确认项）：**主臂手柄（leader）需在现场**、且需先按 vendor 流程标定过（`docs/alohamini/commands.md:149-157` 说明 Pi 侧的 `alohamini_calibrate` 标的是从臂、不是 Mac 侧主臂）。手柄不在场，整条 teleop 不可执行，直接跳到 M1。
 
 判据：位移 **> 20 tick**（≈ 1.76°）算「能动」。读数取动前 / 动后各一次 `Present_Position`，只读，范式同第 4.2 节。
 
@@ -1599,7 +1695,7 @@ python examples/alohamini/teleoperate_bi.py \
 
 阈值（以下这一组数是默认 `--anchor present` 的口径）：`--steps 10` 整轮 10° 时，每步目标是「当前反馈 + 1°」（约 `measure_latency.py:3149-3168` 每步都重读 `baseline_units` 再 `+delta_deg`），前一步没走到位的部分不带进下一步，因此**最后一步的 `Goal_Position − Present_Position` ≈ 11 tick**（1° ÷ 0.0879°/tick = 11.375，M0 取整 11 tick），**不是累积 110 tick**。`--anchor command` 是另一条下发路径：目标锚在上一步发出的 target 上、lead 跨步累积，同一个读数变成 `steps × \|delta\|` 量级（`--steps 10 --delta-deg 1.0` 时约 110 tick）。读寄存器前先确认这次 run 用的哪个锚点：stdout 有 `note: anchor=command` 那行就是 `command`，没有这行就是默认 `present`（这行只在 `command` 模式打）。
 
-**看门狗会改写 `Goal_Position`，让分支③ 假命中。** Host 在最后一条合法命令之后超过 `watchdog_timeout_ms`（默认 1000 ms）仍没收到新命令时，会把 `last_observation` 的 `*.pos` 当保持位重新下发，并把 `target_source` 置 `watchdog`。此时读到的 `Goal_Position − Present_Position` ≈ 1 tick，远小于 11 tick，**分支③「写没到总线」会假命中**。机理依据：判定式与保持位构造（`hold_action` 取 `last_observation` 的 `.pos`）在 `alohamini_host.py:348-362`、`:357` 置 `target_source`；默认超时 `1000` 在 `config_alohamini.py:122`（本地 fork `ec65318f` 只读核对；Pi 副本 `6aee1f81` 行号差 +33）。现场告警原文两行 `WARNING:root:Host command watchdog expired; stopping motion` 在 `stdout/site-host-20261106T074049Z.log` 第 16–17 行，**属 07:40:49Z 起的那个 Host 会话**（装的是 07:40 腕部轮与 07:46 pan 轮），不是「客户端先死」的专用证据。
+**看门狗会改写 `Goal_Position`，让分支③ 假命中。** Host 在最后一条合法命令之后超过 `watchdog_timeout_ms`（默认 1000 ms）仍没收到新命令时，会把 `last_observation` 的 `*.pos` 当保持位重新下发，并把 `target_source` 置 `watchdog`。此时读到的 `Goal_Position − Present_Position` ≈ 1 tick，远小于 11 tick，**分支③「写没到总线」会假命中**。机理依据：判定式与保持位构造（`hold_action` 取 `last_observation` 的 `.pos`）在 `alohamini_host.py:348-362`（`ec65318f`；`6aee1f81` 为 `:411-425`）、`:357`（`ec65318f`；`6aee1f81` 为 `:420`）置 `target_source`；默认超时 `1000` 在 `config_alohamini.py:110`（两支该行相同，偏移 0）。现场告警原文两行 `WARNING:root:Host command watchdog expired; stopping motion` 在 `stdout/site-host-20261106T074049Z.log` 第 16–17 行，**属 07:40:49Z 起的那个 Host 会话**（装的是 07:40 腕部轮与 07:46 pan 轮），不是「客户端先死」的专用证据。
 
 **首帧 `target_source=watchdog` 不代表本轮客户端先死。** `target_source` 是 Host 侧的持久状态：只在收到合法命令时置 `command`（`alohamini_host.py:330`）、看门狗触发时置 `watchdog`（`:357`）、监督纠偏时置 `protection`（`:373`），新客户端连上本身不改它。上一轮客户端结束（正常退出或被 kill）后 1 s 看门狗即触发，于是「上一轮客户端刚结束、Host 仍在跑」的会话里，新客户端连上的**第一条数据帧**就是 `watchdog`，早于它自己的第一条命令。2026-11-06 实测：`tracking/m1r3-pan-20261106T074620Z-safety.csv` 与 `tracking/slowvsstall-pan-20261106T090635Z-safety.csv` 各有且仅有 18 行 `watchdog`（18 只电机 × 1 帧），全部 `step_index=0`、`sample_sequence=2`，而各轮第一条命令帧在 `sample_sequence=3`；其余 5 份 sidecar（`m1r3-wrist`、`m2-pan`、`slowvsstall-wrist`、`final-rightpan`、`final-punchtest`）`watchdog` 帧数全为 0，首帧都是 `none`。
 
@@ -1752,7 +1848,7 @@ $S4DIR/                       # = ~/pi-workspace/alohamini-cartesian-teleop/evid
 
 **产生条件**：只在 `--mode tracking` 产生；`--mode rtt` 不产生（该模式不读 `latest_safety_status`）。
 
-**9 列**（`SAFETY_CSV_FIELDS`，`:626`，顺序固定）：
+**9 列**（`SAFETY_CSV_FIELDS`，`measure_latency.py:626`，顺序固定）：
 
 | 列 | 含义 |
 | --- | --- |
@@ -1812,7 +1908,7 @@ sidecar 写盘失败（`OSError`）也只打一条自己的警告，**退出码�
 - [x] 第 4.3 节两份 YAML 落盘，字段名与 `config/overlay.py` 一致，`load_settings(check_devices=False)` exit 0（2026-11-05 远程会话已满足，证据：`configs/template.yaml`、`configs/site.yaml`、`stdout/4.3e-load-check-20261105T063600Z.exit`，数字见 `docs/field-results.md` 2026-11-05 节）
 - [x] 第 5 节三条 rtt 各 exit 0、各 500 样本、CSV 各有数据行；`achieved_rate_hz` 与请求率的差距有记录；跨机那条给出 `net_rtt_estimate_s` p50 并与 `6.176 ms` 并列（2026-11-05 远程会话已满足跨机那条，证据：`rtt/rtt-net-cross-20261105T063600Z-2.csv`、`stdout/5.3-rtt-net-cross-2-*`，数字见 `docs/field-results.md` 2026-11-05 节）
 - [x] 第 6 节两段电流读数在盘（主路径 `latest_safety_status["currents_ma"]`，范式见 `stdout/6.1c-obs-idle-$STAMP.py`；`[Currents]` 日志路径当前不可依赖，见 §6.1），并写出结论：臂总线电流可判读，或不能判负载（2026-11-05 远程会话已满足，证据：`stdout/6.2b-analysis-20261105T063600Z.txt`、`stdout/7.2-analysis-20261105T063600Z.txt`，数字见 `docs/field-results.md` 2026-11-05 节）
-- [x] 第 7.1 节若执行：每步的 `error_deg`、`overshoot_deg`、`settled` 齐全；`rise_90_time_s` 为空时写明原因；收尾 `hold_issued` 在报告里（2026-11-06 到场窗口已满足：10 步的 `error_deg` / `overshoot_deg` / `settled` 与 `hold_issued=yes` 在 `stdout/10.5-m1r3-pan-20261106T074049Z.log:5`、`:11`，逐行表在 `tracking/m1r3-pan-20261106T074620Z.csv`；`rise_90_time_s` 为空的原因「残余 > 0.1 × 命令量、没有帧越过 90% 线」由 `stdout/slow-vs-stall-judge-20261106T090635Z.txt` 第 5.4 节逐轴核成立（腕收尾残余 0.1209° 对 0.100°、`pan` 0.8242° 对 0.100°），数字见 `docs/field-results.md` 2026-11-06 节。探针本身未改、以及「收敛之后会不会有 90% 交叉」仍未观测，这两件记在 `TODO.md` 的 `rise_90_time_s` 工程债行）
+- [x] 第 7.1 节若执行：每步的 `error_deg`、`overshoot_deg`、`settled` 齐全；`rise_90_time_s` 为空时写明原因；收尾 `hold_issued` 在报告里（2026-11-06 到场窗口已满足：10 步的 `error_deg` / `overshoot_deg` / `settled` 与 `hold_issued=yes` 在 `stdout/10.5-m1r3-pan-20261106T074049Z.log:5`、`stdout/10.5-m1r3-pan-20261106T074049Z.log:11`，逐行表在 `tracking/m1r3-pan-20261106T074620Z.csv`；`rise_90_time_s` 为空的原因「残余 > 0.1 × 命令量、没有帧越过 90% 线」由 `stdout/slow-vs-stall-judge-20261106T090635Z.txt` 第 5.4 节逐轴核成立（腕收尾残余 0.1209° 对 0.100°、`pan` 0.8242° 对 0.100°），数字见 `docs/field-results.md` 2026-11-06 节。探针本身未改、以及「收敛之后会不会有 90% 交叉」仍未观测，这两件记在 `TODO.md` 的 `rise_90_time_s` 工程债行）
 - [x] 第 7.2 节：`target_source` 分布、`requested_target` 与 `accepted_target` 的比较、`current_ma` 走势三项有结论，且落到三类之一；`_joint_hold_goal` 有无写入点的 grep 原文在盘（2026-11-05 远程会话已满足，证据：`stdout/7.2-analysis-20261105T063600Z.txt`、`stdout/7.2-joint-hold-write-*`，数字见 `docs/field-results.md` 2026-11-05 节）
 - [x] sidecar 的四个数字有记录：每帧行数、`motor` 空行占比、`current_ma` 分布、`hold_active` 全列取值（safety sidecar 此前只有离线测试覆盖，真机首跑按这四项记）（2026-11-05 远程会话已满足，证据：`stdout/7.1-wrist-sidecar-try2-20261105T063600Z.log`，四项数字尚未在台账逐项登记；同一轮主表见已登记的 `stdout/7.1-wrist-try2-*`）
 - [ ] 第 8 节：断电与上电有记录，Host 停启有 PID 与两条命令原文，停机与重启时间都是 UTC（未勾：Host 停启有记录且时刻是 UTC（PID `1866`，`stdout/6.1a-host-pid-20261106T070942Z.log`；停机 `2026-11-06T09:08:01Z` + `kill_int_exit=0`，`stdout/4.1-host-int-20261106T090635Z.log`），但「断电与上电有记录」只有用户口述的换电（`stdout/scope-append-20261106T070942Z.md` ①），无仪器证据；断电前「把手臂放到低位」也没有现场记录）

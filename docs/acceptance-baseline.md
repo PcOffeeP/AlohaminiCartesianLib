@@ -108,7 +108,7 @@ V01 现在的实机证据只有一个腕部关节的跟随（`arm_left_wrist_rol
 
 达成率口径沿用 `docs/s4-field-smoke.md` 第 7 节（净行程 ÷ 指令行程）。`--anchor command` 下指令行程按 `abs(delta_deg) × steps` 算成立；`--anchor present` 下相邻 target 的间距会被跟随误差吃掉，不能用 `delta_deg × steps` 当分母（见 `TODO.md` §4 的换算条目）。
 
-上表基线的三个百分数是**10 步 × 1°、settle 2 s 窗、容差 0.05°** 那一场的口径（`docs/field-results.md:45`），与单步 15 s 长窗的 `17.582%`（`:47`）不是同一个窗口，不要混成一个区间。对端量级参照只有口述：用户口述 vendor 遥操作同链路能带动肩部，量级约 100%（**口述，未取仪器证据**，见 `docs/field-results.md` 2026-11-06 节；本轮未跑 teleop oracle）。
+上表基线的三个百分数是**10 步 × 1°、settle 2 s 窗、容差 0.05°** 那一场的口径（`docs/field-results.md:79`），与单步 15 s 长窗的 `17.582%`（`:81`）不是同一个窗口，不要混成一个区间。对端量级参照只有口述：用户口述 vendor 遥操作同链路能带动肩部，量级约 100%（**口述，未取仪器证据**，见 `docs/field-results.md` 2026-11-06 节；本轮未跑 teleop oracle）。
 
 `70%` 与 A 阶段的 **≥50%** 不同源，不是同一场的同一门槛：A 阶段判据是 `--anchor present` + 10 步、门槛 `≥50%` 且步末残余 ≤2 tick（`TODO.md` §3.1、本文件 V01 行），本节是 `--anchor command` + 5 步、门槛 `≥70%`。
 
