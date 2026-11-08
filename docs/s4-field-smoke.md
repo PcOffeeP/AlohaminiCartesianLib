@@ -435,6 +435,8 @@ run 4.1c-capture uv run --no-sync python benchmarks/alohamini_io/capture_robot_f
 
 比对基准是**上一次收工断电前**采的现场指纹，现指向 `~/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261106/capture/fingerprint-postpower-20261106T070942Z.json`（`captured_utc=2026-11-06T07:10:31+00:00`，`robot_metadata.schema_version=2`，18 个电机（左 11 + 右 7），`lerobot_version="0.6.1"`，`host=127.0.0.1`，`sample_count=5`；同一 STAMP 的产物另带 `stdout/4.1c-capture-20261106T070942Z.*` 与 `stdout/4.1c-capture-scp-20261106T070942Z.*`）。上一份 `fingerprint-postpower-20261106T064429Z.json`（`captured_utc=2026-11-06T06:45:05+00:00`）**已作废为位置基准**：2026-11-06 07:00Z 后用户换新电池并重新上电（`stdout/scope-append-20261106T070942Z.md` ①），位置跨过换电不再连续，它只剩标定字段可作历史对照；换电那一轮因此**判不了「断电期间移位」**，这份新基线服务的是下一轮断电。**基准必须采于上一次收工断电前，且此后没有未记录的运动**——否则位置组差值里混着那些运动，超阈也归不了因：2026-11-05 的旧指纹 `evidence/s4-20261104/capture/fingerprint-20261105T063600Z.json` 采于那轮试动之前、跨过了试动，位置组 8 只电机超 3 tick 却无法归因，已作废为**位置**基准（标定字段仍可作历史对照）。做法沿用 2026-11-05 已验证的 `robot_metadata.motors` 子树 diff 思路，但**把标定与位置拆成两段**，判据不同。
 
+**该基线的位置组（B 组）只作归因，不作判据**：`fingerprint-postpower-20261106T070942Z.json`（`captured_utc=2026-11-06T07:10:31Z`）之后另有 07:19–09:06Z 六轮记录在案的运动，所以它的 B 组位置差值只能归到「记录在案的运动」（并据此识别未记录的运动），**不能当「断电期间滑移」的判据**；新基准在本次上电后重采。A 组（标定字段）不受影响，仍可判「标定有没有被改过」。
+
 先把脚本落到 `$S4DIR/stdout/` 并在同一份指纹上自检一次（两侧同一文件，期望两组计数都是 0）：
 
 ```bash
@@ -1256,6 +1258,8 @@ run 6.2b-currents-move ssh "$PI" 'HOSTLOG=/tmp/site-host-<STAMP>.log; grep "\[Cu
 - [ ] 空场：人物离场
 - [ ] 无负载：末端无负载
 - [ ] 行程按「1° × 更多步」规划：常量 `MAX_STEP_DELTA_DEG = 1.0`（`benchmarks/alohamini_io/measure_latency.py:504`）钳的是每步**幅度**、不钳符号——`resolve_delta_deg`（`:2118-2126`）返回 `min(max(delta, -1.0), 1.0)`，所以 `--delta-deg 2.0` 按 `1.0` 执行、`--delta-deg -2.0` 按 `-1.0` 执行、`--delta-deg -1.0` 原样执行。stdout 同时打印实际值与请求值，原文形如 `delta_deg=1.000 (requested 2.000)`。要更大总行程只能加 `--steps`，加大 `--delta-deg` 的幅度不产生更大位移
+- [ ] **手臂低位或有承托**：抬高的手臂在 lead 一次性释放时会被带走，幅度不可控
+- [ ] **有能按断电开关的人在机器人旁**：远程且无人在场时**禁止**跑 `--anchor command`（此时只能跑 `--anchor present`）
 - [ ] 断电开关在手边，可随时按下
 
 本文里的 Gate A–F 指 `benchmarks/alohamini_io/measure_latency.py` 里的运行时门禁，即发命令前的六道检查：
