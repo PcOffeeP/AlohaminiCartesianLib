@@ -8,7 +8,7 @@
 - 2026-11-05 节：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261104/`
 - 2026-10-25 及更早：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261025/`（索引 [evidence/s4-20261025/README.md](file:///Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261025/README.md)）
 
-下表「证据文件」列给的是**该节所属目录**下的相对路径（各节首段的「条件」一句已写明本节用哪个目录）。逐条命令、判据与退出码表在 [docs/field-ops/00-opening.md](field-ops/00-opening.md)，本文件只记拿到了什么。
+下表「证据文件」列给的是**该节所属目录**下的相对路径（各节首段的「条件」一句已写明本节用哪个目录）。逐条命令、判据与退出码表在 [docs/field-ops/README.md](field-ops/README.md)，本文件只记拿到了什么。
 
 ## 2026-11-08（现场验收日）· S4 现场窗口（第 4 次）
 

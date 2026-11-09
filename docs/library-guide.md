@@ -1,6 +1,6 @@
 # 库使用与接口说明
 
-这份文件写给要用这个库的人，讲接口与行为。决策理由在 `docs/ADR.md`，现场操作在 `docs/field-ops/00-opening.md`。
+这份文件写给要用这个库的人，讲接口与行为。决策理由在 `docs/ADR.md`，现场操作在 `docs/field-ops/README.md`。
 
 ## 1 配置
 
@@ -124,7 +124,7 @@ export PYTHONPATH=<vendor fork>/src:src
 .venvs/alohamini-lerobot/bin/python examples/robot_dry_run.py --host <Pi 的 IP>
 ```
 
-两行都按本机环境替换：解释器路径与 `.venvs/` 目录只在本机成立、不入库（`.gitignore` 已忽略）；`--host` 填机器人 Pi 的 IP/主机名（现场记录过 `10.34.170.98`，跑通后可用 `pi5.local`，见 [field-ops/40-gates-params.md](field-ops/40-gates-params.md)）。
+两行都按本机环境替换：解释器路径与 `.venvs/` 目录只在本机成立、不入库（`.gitignore` 已忽略）；`--host` 填机器人 Pi 的 IP/主机名（现场记录过 `10.34.170.98`，跑通后可用 `pi5.local`，见 [field-ops/00-opening.md](field-ops/00-opening.md)）。
 
 第一行末尾的 `:src` 不能省：`alohamini_cartesian` 没装进 vendor 环境，靠 `PYTHONPATH` 带上本仓库的 `src`。没有 vendor 环境时直接跑本示例，它会打印「需要 vendor 环境」的跳过文案并以退出码 `0` 结束，不连设备、不联网。那份跳过分支只看环境（`importlib.util.find_spec("lerobot")` 为 `None`），`lerobot` 装了但符号改名/缺失时原样抛出导入错误，不退 `0`。
 
