@@ -69,7 +69,7 @@ git log --oneline -3                    # 最近提交
 | 模块与已实现能力、目标与实机现状 | `docs/background.md`（「已实现能力」小节列出模块与各自提供的接口） |
 | 接口细节（配置覆盖、能力探测与单位换算、控制层、公开 API、约束与机器守卫） | `docs/library-guide.md` |
 | 验收基线（V01–V13） | `docs/acceptance-baseline.md` |
-| 现场实施（S4 到现场的逐条命令、判据与产物） | `docs/s4-field-smoke.md` |
+| 现场实施（S4 到现场的逐条命令、判据与产物） | `docs/field-ops/00-opening.md` |
 | 现场数字（按时间倒序的结论与数字；查现场到底拿到了什么，先看这里，再看证据目录原文件） | `docs/field-results.md` |
 | 离线调查（左夹爪标定行程 51 tick 的查证过程与结论） | `docs/investigations/gripper-range-51-tick.md`（决策见 `docs/ADR.md` D14，数字见 `docs/field-results.md`） |
 | 迁移归档 | `docs/archive/migration-backlog.md`（迁移已在 v0.4.0 完成） |
@@ -83,7 +83,7 @@ git log --oneline -3                    # 最近提交
 - 未装 `kinematics` extra 时，`tests/test_arm_ik.py` 的数值参数实例、`tests/test_control_controller.py` 的 2 条真 IK 用例与 `tests/benchmarks/test_benchmark_arm_ik.py` 因缺 `placo` 跳过。
 - 缺 `lerobot` 时，`tests/test_kinematics_lerobot_parity.py` 与 `tests/test_control_api_lerobot_parity.py` 在收集期整体跳过。这两个文件用真实 `FeetechMotorsBus` 与 `AlohaMiniClient` 作 oracle 做差分对照，**跳过不等于差分对照通过**。
 - `connect(...)` 必须注入 `client_factory`。默认工厂恒抛 `RuntimeUnavailable`，没有内置 import 厂商运行时的退路。
-- 现场脚本已实地跑过的进度与数字见 `docs/field-results.md`；现场怎么执行见 `docs/s4-field-smoke.md`。
+- 现场脚本已实地跑过的进度与数字见 `docs/field-results.md`；现场怎么执行见 `docs/field-ops/00-opening.md`。
 - **离线测试、真实运行时对照、实机验收三者分别判断**：离线测试全绿不代表真实总线对照跑过，也不代表实机验收达成。
 
 ### 6.2 下一步
@@ -98,4 +98,4 @@ git log --oneline -3                    # 最近提交
 
 ## 8 现场任务入口
 
-涉及现场连接、Host 启停、标定或真实运动时：先确认本轮是否拿到该类授权，再读 `docs/s4-field-smoke.md` 的硬前置条件与该阶段步骤。历史记录、`TODO.md` 条目、文档里的命令**都不构成执行授权**；前置不满足就停在那一步。具体命令、门禁与退出码由现场手册维护，本文件不复述。
+涉及现场连接、Host 启停、标定或真实运动时：先确认本轮是否拿到该类授权，再读 `docs/field-ops/00-opening.md` 的硬前置条件与该阶段步骤。历史记录、`TODO.md` 条目、文档里的命令**都不构成执行授权**；前置不满足就停在那一步。具体命令、门禁与退出码由现场手册维护，本文件不复述。

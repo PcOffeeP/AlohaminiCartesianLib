@@ -644,7 +644,7 @@ max_loop_freq_hz: 50
 | `configs/template.yaml` | 随库分发的通用默认，换机器可原样使用 | `1` / `500` / `50`，取自 `src/alohamini_cartesian/config/overlay.py` 的 `AlohaMiniSettings` 默认值 |
 | `configs/site.yaml` | 本机现场值，即 Host 进程实际生效的那份 | 数字本身以 `configs/site.yaml` 为准，本节不复制一份当权威 |
 
-`configs/site.yaml` 的注释里写「见 `docs/s4-field-smoke.md` 第 4.3 节」，指的就是本节。
+`configs/site.yaml` 的注释里写「见 `docs/field-ops/10-health-baseline.md` 第 4.3 节」，指的就是本节。
 
 三个数值字段的来路（只记「这些数字怎么来的」，取值以 `configs/site.yaml` 为准）：
 

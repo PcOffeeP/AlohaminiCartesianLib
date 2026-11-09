@@ -1,7 +1,8 @@
 """文档里 ``文件名:行号`` 引用的机器守卫（离线，只读文本）。
 
-四个文档（``docs/s4-field-smoke.md``、``docs/field-results.md``、
-``docs/acceptance-baseline.md``、``TODO.md``）用 ``文件名:行号`` 指代源码位置。
+十个文档（``TODO.md``、``docs/acceptance-baseline.md``、``docs/field-results.md`` 与
+``docs/field-ops/`` 下的 7 份现场手册子文档 ``00-opening.md`` … ``60-artifacts.md``）
+用 ``文件名:行号`` 指代源码位置。
 源码一改行号就漂，读者会点到不相关的代码。本文件把这类引用逐条按三条判定：
 目标文件能解析到、行号落在 ``1..len(文件行数)`` 内（区间还要 ``起 <= 止``）、
 目标行 ``str.strip()`` 后非空。
@@ -40,8 +41,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DOCUMENTS = (
     "TODO.md",
     "docs/acceptance-baseline.md",
+    "docs/field-ops/00-opening.md",
+    "docs/field-ops/10-health-baseline.md",
+    "docs/field-ops/20-toolchain.md",
+    "docs/field-ops/30-host-ops.md",
+    "docs/field-ops/40-gates-params.md",
+    "docs/field-ops/50-experiments.md",
+    "docs/field-ops/60-artifacts.md",
     "docs/field-results.md",
-    "docs/s4-field-smoke.md",
 )
 
 # 裸文件名按 basename 唯一匹配时扫描的目录。已经列全仓库内的源码 / 文档 / 配置目录；
@@ -72,15 +79,18 @@ EXTERNAL_FILENAMES = frozenset(
 )
 
 # 抽取规则退化（例如正则写错、只匹配到极少条目）时本用例会先红。
-# 2026-11-08 实测：四个文档合计 174 条引用，其中 66 条由机器逐条判行号
-# （TODO 16 / acceptance-baseline 3 / field-results 5 / s4-field-smoke 42），另有 108 条
-# 落在 10 个仓库外文件名上被跳过。算术：基线 152 = 68 + 84（仓库内 + 仓库外）；
-# ① C 项把 ``model_specs.py`` 那三条改判为 vendor 侧：68 − 3 = 65、84 + 3 = 87；
-# ② 本轮文档改写新引 22 条（新增行号必然新增引用）：仓库内 +1（TODO 的 ``:560``）、
-#    仓库外 +21（A 项 4 + F 项 8 + G 项 6 + B 项 1 + E 项 2）⇒ 65 + 1 = 66、87 + 21 = 108，
-#    合计 152 + 22 = 174。
-# 下限仍取 60：实测 66 已高于它 6 条，再往上抬会让「文档正常删掉几条引用」也变红。
-MIN_REFERENCES = 60
+# 2026-11-08 实测：十个文档合计抽取 291 条引用，其中 179 条由机器逐条判行号
+# （TODO 23 / acceptance-baseline 3 / field-ops 00-opening 0 / 10-health-baseline 14 /
+#  20-toolchain 0 / 30-host-ops 0 / 40-gates-params 16 / 50-experiments 116 /
+#  60-artifacts 2 / field-results 5），另有 112 条落在 10 个仓库外文件名上被跳过。
+# 手册拆进 ``docs/field-ops/`` 不改变抽取条数：拆前那一版（单个 3295 行文件）单独是 198 条
+# = 142 条仓库内 + 50 条仓库外 + 6 条指向旧文件自身（路径已不存，迁前判违规）；
+# 拆后 7 份子文档仍是 198 条 = 148 条仓库内（142 + 原那 6 条指向新文件）+ 50 条仓库外。
+# 外置跳过仍是 112 条（手册 50 + TODO 19 + field-results 43），抽取合计仍是 291 条。
+# 旧注释里的 174 / 66 / 108 属更早一轮，已作废。
+# 下限取 160：实测 179 已高于它 19 条（约 10.6%，与旧口径 60 对 66 的约 9% 同一比例），
+# 再往上抬会让「文档正常删掉几条引用」也变红。
+MIN_REFERENCES = 160
 
 _EXTENSION = r"(?:py|md|toml|yaml|yml|json|csv)"
 _NAME = rf"[A-Za-z0-9_][A-Za-z0-9_./-]*\.{_EXTENSION}"
@@ -234,7 +244,7 @@ def _check_document(document: str) -> Report:
 
 
 def test_documents_have_no_broken_line_references() -> None:
-    """四个文档里的行号引用必须全部落在真实、非空的行上。"""
+    """十个文档里的行号引用必须全部落在真实、非空的行上。"""
     violations: list[str] = []
     for document in DOCUMENTS:
         violations.extend(_check_document(document).violations)

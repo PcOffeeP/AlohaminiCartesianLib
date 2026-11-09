@@ -500,7 +500,7 @@ mkdir -p "$S4DIR/stdout" && cp -p /tmp/s10-7-move-to.py "$S4DIR/stdout/10.7-scri
 #!/usr/bin/env python3
 """§10.7 驱动脚本草案（预写，未真机执行）。
 
-手册 docs/s4-field-smoke.md §10.7 内嵌这份脚本，仓库里不新建文件。三种跑法：
+手册 docs/field-ops/50-experiments.md §10.7 内嵌这份脚本，仓库里不新建文件。三种跑法：
 
   --dry-run       纯离线：读 URDF 限位、解 IK、逐毫米预检；不建客户端、零网络、零发送
   --limits-only   只读：连真机读 metadata，打印两侧有效限位窗口；dry_run=True，零发送
@@ -1239,7 +1239,7 @@ Gate A–F 是 `measure_latency.py` 里的运行时门禁（§7.1 的表），`m
 | `zero` 取值 | 有限数、单位度；在正向式里是**最后一步的加法项**，反向式先减 zero 再乘 sign。非有限在构造时 fail-fast | `src/alohamini_cartesian/kinematics/joint_adapter.py:212` |
 | 组织形态 | `side -> joint -> 值`，两侧各注入一份，构造时传入 | `src/alohamini_cartesian/kinematics/joint_adapter.py:142` |
 | 库内默认值 | **没有**。不注入就构造不出适配器；本库不提供「猜一份」的退路 | `src/alohamini_cartesian/kinematics/joint_adapter.py:147` |
-| 缺文件时现场行为 | §10.7 驱动脚本以 `15` 退出（`_load_side_json` 的前置拒绝，六关节缺一也走这条） | `docs/s4-field-smoke.md:2371`、`docs/s4-field-smoke.md:2693` |
+| 缺文件时现场行为 | §10.7 驱动脚本以 `15` 退出（`_load_side_json` 的前置拒绝，六关节缺一也走这条） | `docs/field-ops/50-experiments.md:739`、`docs/field-ops/50-experiments.md:1061` |
 | 双向消费 | 同一份映射同时用于观测（units→deg）与命令（deg→units），命令区间闸门也用它 | `src/alohamini_cartesian/kinematics/joint_adapter.py:510`、`src/alohamini_cartesian/kinematics/joint_adapter.py:617`、`src/alohamini_cartesian/kinematics/joint_adapter.py:443` |
 | 关节名 | 六关节固定顺序 `shoulder_pan` / `shoulder_lift` / `elbow_flex` / `wrist_flex` / `wrist_yaw` / `wrist_roll` | `src/alohamini_cartesian/kinematics/joint_adapter.py:67` |
 | 右臂关节名 | 电机键是 `arm_right_<joint>.pos`，**URDF 关节名仍是 `left_*`**（右臂复用左臂模型，不是「右臂 = 左臂」的值假设） | `src/alohamini_cartesian/kinematics/joint_adapter.py:76` |
@@ -1262,9 +1262,9 @@ jq -e 'keys | length == 6' "$S4DIR/stdout/10.8-signs-left-$STAMP.json"
 jq -e 'keys | length == 6' "$S4DIR/stdout/10.8-zeros-left-$STAMP.json"
 ```
 
-- 拆分后必须是**扁平**的「关节名 → 数值」；`_load_side_json` 读的就是扁平形态（`docs/s4-field-smoke.md:2371`），多包一层 `signs` / `zeros` 外层键会被当成「缺关节」并以 `15` 退出。
+- 拆分后必须是**扁平**的「关节名 → 数值」；`_load_side_json` 读的就是扁平形态（`docs/field-ops/50-experiments.md:739`），多包一层 `signs` / `zeros` 外层键会被当成「缺关节」并以 `15` 退出。
 - 现场没有 `jq` 时用别的工具拆也行，判据只有一条：拆出来的文件是扁平六键，值类型是数值。本节只定产物形态，不定工具。
-- §10.7 驱动脚本的 `_build_adapter`（`docs/s4-field-smoke.md:2382`）把**同一份** `signs` / `zeros` 同时注入 `left` 与 `right` —— 这是脚本的简化。所以**右臂真跑必须传右臂自己的文件**：`--signs-json …/10.8-signs-right-$STAMP.json --zeros-json …/10.8-zeros-right-$STAMP.json`。**不得**把左臂文件传给右臂命令，也不得靠这次简化让右臂「借用」左臂值。
+- §10.7 驱动脚本的 `_build_adapter`（`docs/field-ops/50-experiments.md:750`）把**同一份** `signs` / `zeros` 同时注入 `left` 与 `right` —— 这是脚本的简化。所以**右臂真跑必须传右臂自己的文件**：`--signs-json …/10.8-signs-right-$STAMP.json --zeros-json …/10.8-zeros-right-$STAMP.json`。**不得**把左臂文件传给右臂命令，也不得靠这次简化让右臂「借用」左臂值。
 
 ### 参考位形（离线 URDF FK 计算，未经实测）
 
@@ -1332,7 +1332,7 @@ C2b 的离线 FK 结果：末端 `left_Fixed_Jaw` = **(−0.000966, −0.316448,
 | --- | --- | --- |
 | 1 | 摆姿：把六关节摆到 C2b 的形状（大臂竖直向上、小臂水平朝正前方、腕部顺直） | 上节逐关节目视判据；摆完人不要碰 |
 | 2 | 读数：按 §4.1 采一份 `capture` 指纹，`observation_state` 里有每个电机的 `<motor>.pos`（**归一化值**，键形如 `arm_left_shoulder_pan.pos`） | §4.1 的判据（exit 0、`robot_metadata.schema_version == 2`） |
-| 3 | 归一化 → tick：按 §4.1c 的同一条换算 `int(((v + 100) / 200) × (max − min) + min)`，`range_0_100` 用 `int((v / 100) × (max − min) + min)`；`max` / `min` 取该电机 metadata 的 `range_max` / `range_min` | `docs/s4-field-smoke.md:529`、`docs/s4-field-smoke.md:623` |
+| 3 | 归一化 → tick：按 §4.1c 的同一条换算 `int(((v + 100) / 200) × (max − min) + min)`，`range_0_100` 用 `int((v / 100) × (max − min) + min)`；`max` / `min` 取该电机 metadata 的 `range_max` / `range_min` | `docs/field-ops/10-health-baseline.md:171`、`docs/field-ops/10-health-baseline.md:265` |
 | 4 | tick → 度：`motor_deg = (tick − mid) × 360 / (resolution − 1)`，`mid = (range_min + range_max) / 2` | 这是库观测侧的原式（`src/alohamini_cartesian/kinematics/joint_adapter.py:530`）。口算口径 **1 tick ≈ 0.0879° = 360/4096**（用 `resolution − 1 = 4095` 时 360/4095 = 0.08792°，差 0.02%，判读时忽略） |
 | 5 | 算 zero：`zero = q_target − sign × motor_deg_read`，每关节一次 | 适配器正向式的移项（`src/alohamini_cartesian/kinematics/joint_adapter.py:26`） |
 

@@ -1,6 +1,6 @@
 # 迁移待办（已归档）
 
-已归档，迁移在 v0.4.0 完成；剩余工作全部转入 [S4 现场实施：真机 smoke](../s4-field-smoke.md)。本文件现位于 `docs/archive/migration-backlog.md`。
+已归档，迁移在 v0.4.0 完成；剩余工作全部转入 [S4 现场实施：真机 smoke](../field-ops/00-opening.md)。本文件现位于 `docs/archive/migration-backlog.md`。
 
 ## 本文件记录了什么
 
@@ -15,7 +15,7 @@
 
 | 事 | 现在去哪 |
 | --- | --- |
-| 现场 smoke（S4）：真机 metadata 取值、Mode A/B 测量、代码 Gate F 拒绝路径 | [S4 现场实施：真机 smoke](../s4-field-smoke.md) |
-| 配置样例：D2 的「模板文件 → 现场文件」两份 YAML | [S4 现场实施：真机 smoke](../s4-field-smoke.md) 第 7 节 |
+| 现场 smoke（S4）：真机 metadata 取值、Mode A/B 测量、代码 Gate F 拒绝路径 | [S4 现场实施：真机 smoke](../field-ops/00-opening.md) |
+| 配置样例：D2 的「模板文件 → 现场文件」两份 YAML | [S4 现场实施：真机 smoke](../field-ops/40-gates-params.md) 第 7 节 |
 
 ADR 决策依据：`docs/ADR.md` 的 D3（迁移范围与分阶段）与 D9（`benchmarks/alohamini_io` 迁移时机）是这次迁移的决策记录。

@@ -91,7 +91,7 @@
 | 阶段 3 受控试动（Mode B） | 部分：已首次执行，腕部达标、肩部未跟随 | 产物与数字见 `docs/field-results.md` 的 2026-10-25 与 2026-11-05 两节 |
 | 阶段 4 配置样例 | 已完成 | 产物与数字见 `docs/field-results.md` 的 2026-10-25 节 |
 
-证据目录：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261025/`。逐条命令与判据见 `docs/s4-field-smoke.md`。
+证据目录：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261025/`。逐条命令与判据见 `docs/field-ops/00-opening.md`。
 
 ## 5 边界
 
@@ -113,7 +113,7 @@
 | 设计规范：`/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini-cartesian-teleop/docs/alohamini-control/Alohamini-control-design.md`（自标 SSOT，位于已退役仓库，未迁入本库） | 历史设计来源：接口契约、状态机、决策 D001–D018；Gate A–E 已归档，不再是现行验收口径 | 不参与优先级：历史设计来源与溯源参考 |
 | `docs/ADR.md` | 本库落地时的取舍与代价（D1–D20） | 与本库代码冲突时以它为准；与设计规范冲突时以本库为准，差异记入 `docs/ADR.md`（D17） |
 | `docs/acceptance-baseline.md` | 验收口径（V01–V13）：逐条要求、软件证据、实机证据与判据 | 验收以它为准，是唯一验收口径；退役仓库那份按臂归档的 Gate A–E 已由它替代（D17） |
-| `docs/s4-field-smoke.md` | 现场逐条命令、判据、产物、退出码 | 现场怎么执行以它为准 |
+| `docs/field-ops/00-opening.md` | 现场逐条命令、判据、产物、退出码 | 现场怎么执行以它为准 |
 | `docs/field-results.md` | 现场实际取到的结论与数字，按时间倒序，每条给证据文件 | 现场拿到了什么以它为准；数字与本文第 4.4 节或现场手册不一致时，以它引的证据文件为准 |
 | `docs/library-guide.md` | 配置覆盖规则、能力探测与单位换算、控制层、公开 API、代码约束与机器守卫 | 接口与行为以它为准 |
 | `docs/changelog.md` | 各版本的改动、当时的测试条数与提交哈希（v0.2.0 → v0.7.0） | 历史事实以它为准 |

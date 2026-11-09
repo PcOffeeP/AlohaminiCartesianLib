@@ -1,6 +1,6 @@
 # 库使用与接口说明
 
-这份文件写给要用这个库的人，讲接口与行为。决策理由在 `docs/ADR.md`，现场操作在 `docs/s4-field-smoke.md`。
+这份文件写给要用这个库的人，讲接口与行为。决策理由在 `docs/ADR.md`，现场操作在 `docs/field-ops/00-opening.md`。
 
 ## 1 配置
 
@@ -124,7 +124,7 @@ export PYTHONPATH=<vendor fork>/src:src
 .venvs/alohamini-lerobot/bin/python examples/robot_dry_run.py --host <Pi 的 IP>
 ```
 
-两行都按本机环境替换：解释器路径与 `.venvs/` 目录只在本机成立、不入库（`.gitignore` 已忽略）；`--host` 填机器人 Pi 的 IP/主机名（现场记录过 `10.34.170.98`，跑通后可用 `pi5.local`，见 [s4-field-smoke.md](s4-field-smoke.md)）。
+两行都按本机环境替换：解释器路径与 `.venvs/` 目录只在本机成立、不入库（`.gitignore` 已忽略）；`--host` 填机器人 Pi 的 IP/主机名（现场记录过 `10.34.170.98`，跑通后可用 `pi5.local`，见 [field-ops/40-gates-params.md](field-ops/40-gates-params.md)）。
 
 第一行末尾的 `:src` 不能省：`alohamini_cartesian` 没装进 vendor 环境，靠 `PYTHONPATH` 带上本仓库的 `src`。没有 vendor 环境时直接跑本示例，它会打印「需要 vendor 环境」的跳过文案并以退出码 `0` 结束，不连设备、不联网。那份跳过分支只看环境（`importlib.util.find_spec("lerobot")` 为 `None`），`lerobot` 装了但符号改名/缺失时原样抛出导入错误，不退 `0`。
 
@@ -163,9 +163,9 @@ export PYTHONPATH=<vendor fork>/src:src
 
 六个关节的 URDF 名：`left_shoulder_pan`、`left_shoulder_lift`、`left_elbow_flex`、`left_wrist_flex`、`left_wrist_yaw_joint`（这一条 joint 名带 `_joint` 后缀）、`left_wrist_roll`。
 
-**限位**。URDF 内六个 joint 的 `limit` 都是 `lower=-3.14` / `upper=3.14` rad，是上游值。本库未逐关节核对真实机械行程，限位是否宽于真实行程由 `docs/ADR.md` D10 的已知代价覆盖。现场口径是 `docs/s4-field-smoke.md` §10.7 ①a 在真机上读 `effective_limits_deg`，URDF 里的 `±3.14` 不作为真实行程的依据。
+**限位**。URDF 内六个 joint 的 `limit` 都是 `lower=-3.14` / `upper=3.14` rad，是上游值。本库未逐关节核对真实机械行程，限位是否宽于真实行程由 `docs/ADR.md` D10 的已知代价覆盖。现场口径是 `docs/field-ops/50-experiments.md` §10.7 ①a 在真机上读 `effective_limits_deg`，URDF 里的 `±3.14` 不作为真实行程的依据。
 
-**零实测声明**。上游 `sources.json` 自报 `hardware_verified: false`，同记 `meshes_downloaded: false`、`placo_load_tested: false`、`retrieved_on: 2026-09-21`；本库也没有任何杆长实测记录，`docs/acceptance-baseline.md` 的 V01–V13 无几何条目。因此 FK/IK 的绝对精度**未经实测验证**：它证明的是「同一份几何下解算自洽」，物理尺寸是否正确它答不了。收口方式与判据见 `TODO.md` 的「URDF 杆长零实测」行、`docs/s4-field-smoke.md` §10.7 与 `docs/ADR.md` D21。
+**零实测声明**。上游 `sources.json` 自报 `hardware_verified: false`，同记 `meshes_downloaded: false`、`placo_load_tested: false`、`retrieved_on: 2026-09-21`；本库也没有任何杆长实测记录，`docs/acceptance-baseline.md` 的 V01–V13 无几何条目。因此 FK/IK 的绝对精度**未经实测验证**：它证明的是「同一份几何下解算自洽」，物理尺寸是否正确它答不了。收口方式与判据见 `TODO.md` 的「URDF 杆长零实测」行、`docs/field-ops/50-experiments.md` §10.7 与 `docs/ADR.md` D21。
 
 ## 4 公开 API
 

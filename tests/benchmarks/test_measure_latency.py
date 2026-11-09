@@ -3905,7 +3905,7 @@ def test_main_should_refuse_rtt_with_the_absent_wording_when_the_face_is_missing
 # trade-off* (refusing a possibly legal client beats writing empty timing rows),
 # not a defect: R12 locks it as such.  Whether a real vendor client has the R12
 # shape (``{}`` on the frame right after ``connect()``, filled afterwards) is
-# unverified -- no field run has produced it, see ``docs/s4-field-smoke.md``.
+# unverified -- no field run has produced it, see ``docs/field-ops/00-opening.md``.
 
 
 def test_main_should_refuse_rtt_when_the_timing_face_empties_mid_run(

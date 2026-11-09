@@ -8,7 +8,7 @@
 - 2026-11-05 节：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261104/`
 - 2026-10-25 及更早：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261025/`（索引 [evidence/s4-20261025/README.md](file:///Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261025/README.md)）
 
-下表「证据文件」列给的是**该节所属目录**下的相对路径（各节首段的「条件」一句已写明本节用哪个目录）。逐条命令、判据与退出码表在 [docs/s4-field-smoke.md](s4-field-smoke.md)，本文件只记拿到了什么。
+下表「证据文件」列给的是**该节所属目录**下的相对路径（各节首段的「条件」一句已写明本节用哪个目录）。逐条命令、判据与退出码表在 [docs/field-ops/00-opening.md](field-ops/00-opening.md)，本文件只记拿到了什么。
 
 ## 2026-11-08（现场验收日）· S4 现场窗口（第 4 次）
 
@@ -75,7 +75,7 @@
 | 左 | `54144` | `3008`（每帧 18 行） | `3007` 帧全 `command` | `42098/42098 = 100.0000%` | 全 `False`（`54144/54144`） | `104.0` | `700` |
 | 右 | `53208` | `2956`（每帧 18 行） | `2955` 帧全 `command` | `41384/41384 = 100.0000%` | 全 `False` | `71.5` | `153` |
 
-`requested == accepted` 一列数的是 `requested_target` 与 `accepted_target` 双非空的行（其余是底盘三轮与升降轴，Host 侧本就没有目标表项）。右侧 `sample_sequence=2` 那一帧为上一轮遗留的 `watchdog`（不计入本轮；左侧同一帧为 `none`）。两侧判读都落入 `docs/s4-field-smoke.md` §7.2 结论①：**目标已被 Host 采纳，残余在 Host 下游的伺服／机械静摩擦侧**。证据文件 `tracking/tracking-v01residual-{left,right}-anchor-command-20261108T141936Z-safety.csv`、`stdout/7.2-analysis-{left,right}-20261108T141936Z.txt`。
+`requested == accepted` 一列数的是 `requested_target` 与 `accepted_target` 双非空的行（其余是底盘三轮与升降轴，Host 侧本就没有目标表项）。右侧 `sample_sequence=2` 那一帧为上一轮遗留的 `watchdog`（不计入本轮；左侧同一帧为 `none`）。两侧判读都落入 `docs/field-ops/40-gates-params.md` §7.2 结论①：**目标已被 Host 采纳，残余在 Host 下游的伺服／机械静摩擦侧**。证据文件 `tracking/tracking-v01residual-{left,right}-anchor-command-20261108T141936Z-safety.csv`、`stdout/7.2-analysis-{left,right}-20261108T141936Z.txt`。
 
 **机理与结论**：厂商写 `P_Coefficient=16` / `I_Coefficient=0`（`alohamini.py:537`/`:539` 左、`:564`/`:565` 右），没有积分项，位置环只能靠力平衡收尾，稳态残余必然留下、延长 settle 窗也消不掉。残余只有 `0.87–1.04°`（`9.88–11.88 tick`），两侧同量级，**「动作慢 / 跟不上」这个解释被排除**。残余支的处置定为分级口径，见 `docs/ADR.md` D20。
 
@@ -157,7 +157,7 @@
 
 | 项目 | 状态 |
 | --- | --- |
-| 07:26 那轮 M1 `Goal − Present = 1 tick` 的成因 | **未确定**。读数 `Goal=2156` / `Present=2155`（ID1），看门狗改写是候选之一（机制见上表「看门狗会在 1 s 内把 `Goal_Position` 改写成保持位」）。该轮没有 Host 日志原件、没有 CSV、没有 sidecar（`tracking/` 下无任何 `tracking-10.5-m1-20261106T072606Z*`），该轮判读自己写明「快照本身无法区分『从未写入』与『已写入且已到位』」（`stdout/10.5-m1-verdict-20261106T072606Z.md`「有效性质疑」段）；该轮操作顺序是客户端先 `kill -9`、Host 7 s 后才 `kill -9`，不符合 M1「Host 死在客户端之前」的主判据（`docs/s4-field-smoke.md` §10.5 M1） |
+| 07:26 那轮 M1 `Goal − Present = 1 tick` 的成因 | **未确定**。读数 `Goal=2156` / `Present=2155`（ID1），看门狗改写是候选之一（机制见上表「看门狗会在 1 s 内把 `Goal_Position` 改写成保持位」）。该轮没有 Host 日志原件、没有 CSV、没有 sidecar（`tracking/` 下无任何 `tracking-10.5-m1-20261106T072606Z*`），该轮判读自己写明「快照本身无法区分『从未写入』与『已写入且已到位』」（`stdout/10.5-m1-verdict-20261106T072606Z.md`「有效性质疑」段）；该轮操作顺序是客户端先 `kill -9`、Host 7 s 后才 `kill -9`，不符合 M1「Host 死在客户端之前」的主判据（`docs/field-ops/50-experiments.md` §10.5 M1） |
 | 断电后手臂失力手感 | **用户现场口述，未取仪器证据**。无日志、无传感器读数，不进结论 |
 | `Minimum_Startup_Force` 的 `configure()` 持久性 | 未取证。下次 Host 启动后该寄存器是否被 vendor `configure()` 覆盖回 0，未测（`stdout/scope-append-final-20261107-20261106T085908Z.md` 的「未验证 / 限制」） |
 | 腕部 1.375 tick 稳态残余的成因 | 未查。15 s 长窗仍未收敛（`stdout/slow-vs-stall-judge-20261106T090635Z.txt`），与肩的 9.375 tick 不同源，成因未定位 |
@@ -173,7 +173,7 @@
 | `base_back_wheel` 一次 `Moving=1` 瞬时扰动 | 成因未验证。左组日志里 `base_back_wheel` 读到 `Moving=1`、`Present_Velocity=-50`，同一轮其余电机 `Moving=0`；后段 `pass2` 复读全为 `Moving=0`。未重测、未定位 |
 | `arm_right_wrist_yaw` 温度 `29 ℃`（其余 17 只 20–23 ℃） | 成因未验证。单点读数，未复测，未查该轴负载与驱动配置 |
 | 第一次起 Host 的本地 ssh 挂 600 s | 根因未定位。会话 1（`06:32:51Z` 起）本地 ssh 调用 600 s 未返回，而远端 Host 已就绪；上层中止后 `06:43:31Z` 执行 `kill 2340`（`kill_exit=0`），复查无 LISTEN、无残留。会话 2 改用「本地 ssh 后台 + 轮询端口 + 杀本地 ssh」，`06:44:41Z` 一次起通（python PID `2517`） |
-| Gate C 的真机专属证据 | 不可达。真机链路上厂商客户端先降级观测 schema，本库 Gate B 先拒；Gate C 文案只在离线测试里成立（见 `docs/s4-field-smoke.md` §7.1b）。V10 的 Gate C 专属实机子项是否接受 Gate B 替代，待裁决 |
+| Gate C 的真机专属证据 | 不可达。真机链路上厂商客户端先降级观测 schema，本库 Gate B 先拒；Gate C 文案只在离线测试里成立（见 `docs/field-ops/40-gates-params.md` §7.1b）。V10 的 Gate C 专属实机子项是否接受 Gate B 替代，待裁决 |
 | 会话 1 的 Host 日志原件 | 未取回证据目录。`/tmp/site-host-20261106T063251Z.log` 的 `2658.5 mA` 与 `Lift axis homed to 0mm.` 两行只经 `stdout/scope-20261106T062506Z.md` 转述 |
 
 ## 2026-11-05（远程会话）· S4 现场窗口（第 2 次）
@@ -207,7 +207,7 @@
 | A | 目标编码取整（归一化→tick 往返取整把 1° 命令吃掉） | 已排除 | M0 离线复算：期望步长 11.375 tick→`int()` 后 11 tick，实测步长 0–1 tick，取整损失 0.375 tick < 1 tick 且命令是绝对量不累加（`stdout/M0-tick-recompute-20261105.txt` 的 (c)、(e7)） |
 | B | PC→Host 值传递段（目标在 Host 端被改写或钳制） | 已排除 | 两轴步内 `requested_target == accepted_target` 零例外，`accepted_target` 变化点与主 CSV 的 `cmd_units` 逐位字符相同，运动帧 `target_source` 全为 `command`；sidecar 旁证 req/acc/cmd 逐字符相同（wrist 177/178、pan 116/119、lift 175/176 条非空样本） |
 | C | 伺服寄存器配置与限流钳制 | 已排除 | 2026-10-25 停 Host 后只读：`Torque_Limit` 1000、`Max_Torque_Limit` 1000、`P`/`I`/`D` = 16/0/32、`Operating_Mode` 0，四台逐项相同（`stdout/reg_read_1792923639.log`，152 次读零失败）；且「`requested == accepted` 零例外」只说明 `_limit_*_by_current` 未钳制值 |
-| D | 关节扭矩未使能 | **未排除（被弱化，不作定论）** | 源码依据：`configure()` 在 `alohamini.py:520` 调 `left_bus.disable_torque()`、`:545` 的 `enable_torque()` 被注释、`disconnect` 默认 `disable_torque_on_disconnect=True`（`config_alohamini.py:56`）；但不是「全包无调用点」，且与「腕部同总线达成 87.91% 且两轮逐字相同」不相容；由 `docs/s4-field-smoke.md` §10.5 的 M1 分支 ① 覆盖 |
+| D | 关节扭矩未使能 | **未排除（被弱化，不作定论）** | 源码依据：`configure()` 在 `alohamini.py:520` 调 `left_bus.disable_torque()`、`:545` 的 `enable_torque()` 被注释、`disconnect` 默认 `disable_torque_on_disconnect=True`（`config_alohamini.py:56`）；但不是「全包无调用点」，且与「腕部同总线达成 87.91% 且两轮逐字相同」不相容；由 `docs/field-ops/50-experiments.md` §10.5 的 M1 分支 ① 覆盖 |
 | E | 伺服保护锁存 | 未排除 | 无本窗口的寄存器侧观测；`Status` 全 0 只在 2026-10-25 停 Host 后读到 |
 | F | 力矩不足 | 无证据（降级为「无电流证据」） | 臂总线电流不能判负载：运动窗口最大 `19.5 mA`，低于 `20 mA`（3 个 raw 刻度）门槛 |
 | G | 机械 | 未排除 | 未到现场，无齿隙 / 死区 / 连杆测量 |
@@ -215,7 +215,7 @@
 
 弱证据一条：实测组合 `{Torque_Enable=1, Lock=0}` 与 vendor 两条写路径都不相容——`feetech.py:293` 写 `{0, 0}`、`:304` 写 `{1, 1}`，本库 `src/` 不写这两个寄存器；该组合与「`Lock` 写静默失败」相容，但这是**未验证的假说**，不是结论。
 
-未排除者合计：D / E / G + 总线写静默失败；F 无证据。定性动作（teleop oracle → M1 → M2）见 `docs/s4-field-smoke.md` §10.5，均需有人到场。
+未排除者合计：D / E / G + 总线写静默失败；F 无证据。定性动作（teleop oracle → M1 → M2）见 `docs/field-ops/50-experiments.md` §10.5，均需有人到场。
 
 ### 未取到 / 未验证
 
@@ -289,7 +289,7 @@
 | 达成率 | 净行程 ÷ 指令行程。净行程 = 末步 `measured_deg` − 首步 `baseline_deg`；指令行程 = Σ（每步 `cmd_deg` − 该步 `baseline_deg`），不用「步数 × 1°」。例：`1.7582 ÷ 2.0000 = 87.9%` |
 | 停稳 | `settled=True` 指该步在 settle 预算内稳住（本轮容差 0.15°）；`note` 为 `settle budget exhausted` 即预算用完仍未稳 |
 | 1 tick | 0.0879°（`360/(4096-1)`）。腕部每步约 10 tick；肩部在 2026-10-25 窗口每步约 1 tick，在 2026-11-05 窗口 `pan` 整轮 2 步共 1 tick（0.5 tick/步）、`lift` 整轮 0 tick |
-| `tracking/` CSV 列 | 14 列含义见 `docs/s4-field-smoke.md` 第 11 节。要点：`cmd_deg` 是该步的绝对目标角，`baseline_deg` 是该步起点的实测角，`measured_deg` 是该步收尾的实测角 |
+| `tracking/` CSV 列 | 14 列含义见 `docs/field-ops/60-artifacts.md` 第 11 节。要点：`cmd_deg` 是该步的绝对目标角，`baseline_deg` 是该步起点的实测角，`measured_deg` 是该步收尾的实测角 |
 | 回环 RTT 的读法 | `net_rtt_est_s` 是扣掉 host 采样、相位、排队与预取等待之后的估计值，不是纯往返时延；`host=127.0.0.1` 表示这是 Pi 本机回环，不能当网络延迟读 |
-| 电流的单位、粒度与计数 | `[Currents]` 打印值已是 mA（Host 侧 `int(raw × 6.5)` 截断）：`6` 是 1 个 raw 刻度，`13` 是 2 个刻度。同一份日志里升降轴 `Present_Current` 读到 `71.5` / `221.0` / `936.0` / `2639.0` mA，说明电流读取本身正常；局限在臂总线静止与轻载下只有 0–2 个 raw 刻度。**运动中的量级未验证**，不要拿它反推负载。计数须按整份文件复算：`grep -c '\[Currents\]'` 给 1278、元素 11502；旧版本 `docs/s4-field-smoke.md` 第 6 节按前缀统计留下的「1020 行、9180 个元素」已作废，那组数只到本文件第 1035 行（约前 50 KB），比整份文件少 258 行，按前缀统计会偏小；现该文第 6 节与本文都按整份文件复算，引用时不要混用。判读门槛见 `docs/s4-field-smoke.md` 第 6.2 节 |
+| 电流的单位、粒度与计数 | `[Currents]` 打印值已是 mA（Host 侧 `int(raw × 6.5)` 截断）：`6` 是 1 个 raw 刻度，`13` 是 2 个刻度。同一份日志里升降轴 `Present_Current` 读到 `71.5` / `221.0` / `936.0` / `2639.0` mA，说明电流读取本身正常；局限在臂总线静止与轻载下只有 0–2 个 raw 刻度。**运动中的量级未验证**，不要拿它反推负载。计数须按整份文件复算：`grep -c '\[Currents\]'` 给 1278、元素 11502；旧版本 `docs/field-ops/30-host-ops.md` 第 6 节按前缀统计留下的「1020 行、9180 个元素」已作废，那组数只到本文件第 1035 行（约前 50 KB），比整份文件少 258 行，按前缀统计会偏小；现该文第 6 节与本文都按整份文件复算，引用时不要混用。判读门槛见 `docs/field-ops/30-host-ops.md` 第 6.2 节 |
 | 时间基准 | 证据文件名与日志时间戳都由 `date -u` 生成，是 UTC。本文件正文里的日期（如 `2026-10-25`）也是 UTC 日期。本机时间是 UTC+8，钟点比日志数字大 8 小时：UTC 07:00 对应本地 15:00，UTC 09:33 对应本地 17:33。Pi 的系统时区在证据目录内没有 `timedatectl` 记录 |
