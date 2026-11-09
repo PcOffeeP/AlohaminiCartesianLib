@@ -47,6 +47,60 @@
 
 改 Pi 上的仓库、标定文件或服务配置都不在本手册范围内，需单独授权。
 
+## 现场日速查索引
+
+本节是全手册的入口：先在这里定位事实与出处，再跳到被指的小节执行。表格只给「一句话 + 指针」，数字、判据与命令一律以被指小节为准，本节不复制判据。
+
+### A. 已确证事实速查
+
+| 事实 | 一句话 | 出处 |
+| --- | --- | --- |
+| 网络与 IP | `PI_HOST` 是唯一需现场填的值，上次记录 `10.34.170.98`；连不上按四步处置：`ping` → mDNS `pi5.local` → 问现场要 IPv4 → 路由器 DHCP 列表找 `pi5` | §2「变量块」与「SSH 连接检查与连不上时的处置」、§3.1 |
+| Host 启动三步法 | ① 本地后台跑 ssh（远端 `setsid nohup … &`）→ ② 轮询 5556 端口最多 90 s → ③ 端口起来后杀本地 ssh | §6.1 |
+| 停 Host 用的 PID | 取 `6.1a-host-pid` 里 `ps` 打出的那个，**不要**用 `echo pid=$!`（`setsid` 自己占掉一个 PID；2026-11-06 实测 `2516` vs `2517`） | §6.1 |
+| Host 启动命令带 `python -u` | 无缓冲，日志实时落 `/tmp/site-host-$STAMP.log` | §6.1 |
+| 串口别名 | `/dev/am_arm_follower_left` → `ttyACM0`、`/dev/am_arm_follower_right` → `ttyACM1`；`/dev/serial/by-id/` 的 `usb-1a86_…` 名字**不能**代替这两个别名 | §4.2、§3.7 |
+| 当前基线指纹 | `capture/fingerprint-20261108T141936Z.json`（`captured_utc=2026-11-08T14:20:21+00:00`）、`capture/fingerprint-postpower-20261108T141936Z.4.1c-preserved.json`（`…T14:20:35+00:00`）、收尾 `capture/fingerprint-postpower-20261108T141936Z.json`（`…T14:28:12+00:00`，与前者同名冲突的那份） | `docs/field-results.md` 2026-11-08 节「指纹三份」；原件 `~/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261108/capture/fingerprint-*.json` |
+| 断电无滑移首判 | 第一份不受「期间有运动」污染的 B1 判据：14 只位置电机 `delta` 全 `+0`，唯 `arm_left_shoulder_pan` 为 `-1` tick；`CALIB_FIELD_DIFFS: 0`、`POSITION_MOTORS_OVER_3_TICK: 0` | `docs/field-results.md` 2026-11-08 节表 1 |
+| 肩部全案结论 | `--anchor command` 5 步 × 1° 达成率左 `77.3626%`、路 A 重跑左 `79.1209%` / 右 `82.6374%`；步末残余 `0.87–1.04°`（`9.88–11.88` tick）两侧同量级 → 目标已被 Host 采纳，残余在 Host 下游伺服／机械静摩擦；处置按分级口径（肩类 `≤2°`、其余 `≤2 tick`） | `docs/field-results.md` 2026-11-06 与 2026-11-08 节；`docs/ADR.md` D20 |
+| 臂总线电流不能判负载 | 静止基线与运动窗口读数全部低于 `20 mA` 门槛（`≥20 mA` 样本 0 个） | §6.2；`docs/field-results.md` 2026-11-05 节 |
+| 电池电压口径 | `Present_Voltage` 原始值 min `116` / max `119`（地址 62、1 字节、无符号、全链无换算，源码侧已核）；`11.6–11.9 V` 用 `0.1 V/单位` 的比例算，该比例来自 Feetech 手册、源码不提供，故换算值只作相对比较，**不得**当标定或实测证据 | `docs/field-results.md` 2026-11-08 节 B3 行；§4.2「满电电压基准的判据」 |
+| `Torque_Enable` | 写 `Goal_Position` 时固件会自置 `1`（外部来源、非本轮实测）；只有 `SIGINT`（`kill -INT`）会释放扭矩，`kill -9` / `SIGTERM` 不释放 | §8.1；`docs/field-results.md` 2026-11-06 节 |
+| kill 纪律 | M1 / M2 取运动中的扭矩状态只许 `kill -9`，**禁用 `SIGTERM`**（干净退出走 `disable_torque`，读到的是退出后状态，读数作废） | §10.5 |
+| sidecar 是肩部判读主证据 | `tracking-*-safety.csv` 的 `target_source`、`requested_target == accepted_target`、`hold_active`、`current_ma`；`[HOST TRACKING]` 与 `[Currents]` 因 vendor 日志级别压制不打印，不可依赖 | §6.1、§7.2、§11；`docs/ADR.md` D18 |
+| sidecar 解析细节 | 文件是 CRLF 行尾，`tr -d '\r'` 不能省；`$9` 是 `target_source`、`$2` 是 `sample_sequence` | §10.5、§11 |
+| 寄存器尸检的可信边界 | 客户端先死／无 CSV／无 sidecar 时，判读只靠 Host `kill` 与客户端收尾的时刻先后 + Host 日志有无 `Host command watchdog expired`；单看寄存器读数不可信 | §10.5 |
+| scope 模板五项 | 时间 UTC / 授权人 / 授权范围 / 允许的动作 / 不允许的动作，落 `stdout/scope-$STAMP.md`；不过 `run`（heredoc 正文不进 `.cmd`） | §3.9 |
+| URDF 来源与零实测 | 派生自厂商上游 `am-arm200pro.urdf`（commit `5b03af1ef6c80595bd988e0137cf8e7c35811eb6`，sha256 `c38669d46d2bf804c112a6d8ce926074c8ff65ba70917503e09b77c75e285030`），`sources.json` 自报 `hardware_verified: false`，本库无杆长实测 | `docs/library-guide.md` §3.1；`docs/ADR.md` D21 |
+| `signs` / `zeros` 契约 | 正向 `q_kinematic_deg = sign × motor_deg + zero`；反向 `motor_deg = (q − zero) / sign`；`sign` 只许 `±1`，库内无默认值，不注入就构造不出适配器 | §10.8 |
+| §4.1c 两组判据 | A 组（标定字段）任一不等 = 事故，停；B 组位置阈值 `3 tick`（本项目自定上界，非厂商值） | §4.1c |
+| 换算常数 | `1 tick = 360/4096° = 0.087890625°` | §4.1c；`docs/field-results.md` 2026-11-08 节 |
+| 左夹爪只有 51 tick | `2021..2072`，`range_0_100` 下 `4.48°`；D14 已定本轮不重标定，只读确认 | §4.2；`docs/ADR.md` D14 |
+| 未标定前的可执行性 | §10.7 的 ①a / ② / ③ 缺 `signs` / `zeros` 直接按 `15` 退出，**不得**手写或猜 | §10.7、§10.8 |
+| 时间基准 | Pi 时区 `Europe/London`，日志时间等于 UTC，本地是 UTC+8；`$S4DIR` / `$STAMP` 按 `date -u` 生成 | §2 |
+| 产物路径纪律 | 一律显式传 `--out` / `--csv`：默认文件名时间戳只到秒，同一秒内跑两次会静默覆盖 | §3.8 |
+
+### B. 下一次现场日执行顺序
+
+编号即执行顺序，每步一行；命令与判据在各步指向的小节里，本节不重复。
+
+1. **§2 变量块与 `run` 函数**：同一 shell 粘一次，`$S4DIR` / `$STAMP` 由 `date -u` 定死，后续命令都假定这几步已完成。
+2. **§3 到场核对**：网络、Host 进程、端口、工具、设备路径逐条过；其中 §3.9 授权记录落盘（五项填满）、§3.10 人工确认项逐条勾。
+3. **两条安全前置口述确认**：就在 §3.9 记 scope 时当面口述并落盘——手臂低位或有承托；能按断电开关的人在机器人旁。
+4. **§10.8 `signs` / `zeros` 标定**：必须在 torque 释放态下摆姿；只读观测档与运动档分离，硬前置与判据见 §10.8「安全前置」。
+5. **§6.1 起 Host**：按三步法起，停 Host 用的 PID 取 `6.1a-host-pid` 里 `ps` 打出的那个（不是 `echo pid=$!`）。
+6. **§10.6 Gate D**：按该节的唯一触发路径取数；等不到就记「未触发」，不另造注入路径。
+7. **§10.7 `move_to` 与卷尺实测**：①a / ② / ③ 的前置是 §10.8 产出的两份 JSON；④ 卷尺实测缺量具就记「未测」，不用目测替。
+8. **收尾 §8.1**：停 Host ≠ 失力——先把手臂放到低位，再断电。
+
+两条安全前置（手臂低位或有承托、断电开关在手且有人在旁）必须在 §3.9 记 scope 时口述确认并落盘，缺一条即停。
+
+### C. 安全底线
+
+1. **Host 只 `SIGINT`（`kill -INT`），不 `SIGTERM`、不 `kill -9`（除 §10.5 的 M1 / M2 取证）** → §8.1、§10.5
+2. **`--anchor command` 与 `move_to` 必须有能按断电开关的人在机器人旁**；远程无人在场只跑 `--anchor present` → §7.1
+3. **sidecar 是主证据，寄存器尸检不可信**（无 sidecar 时靠时刻先后与 Host 日志有无 `Host command watchdog expired`） → §10.5
+
 ## 1 硬前置条件
 
 | 编号 | 条件 | 怎么确认 | 不满足怎么办 |
@@ -2009,14 +2063,14 @@ grep -rn "baseline feedback" tests/ --include=*.py
 
 本节接 §10.6：ik 通路只有库 API 这一条路，所以这里给的是「怎么把库 API 跑起来」的完整跑法，而不是某个现成脚本的参数表。
 
-**硬前置（先满足再动手）：本节 ①a / ② / ③ 三条命令的前置当前不满足。** 这三条都强制 `--signs-json` / `--zeros-json`，而 `signs`（六关节 ±1）/ `zeros`（六关节零点，度）**没有产出流程**——仓库与手册都没有：`tools/` 只有 `verify_unit_consistency.py`（离线核对指纹与标定的单位口径），`benchmarks/` 下两个脚本不产出它们，仓库内的 `.py` 文件对 `signs-json` / `zeros-json` 零命中（`grep -rn "signs-json\|zeros-json" --include=*.py .` 无输出，只有本手册提到这两个选项名）；`examples/robot_dry_run.py:46` 自述「`JointKinematicAdapter` 需要每侧六关节完整的 `signs`/`zeros`，现场没有标定值」。因此：
+**硬前置（先满足再动手）：本节 ①a / ② / ③ 三条命令的前置当前不满足。** 这三条都强制 `--signs-json` / `--zeros-json`，而 `signs`（六关节 ±1）/ `zeros`（六关节零点，度）的**产出流程见 §10.8（预写，未真机执行）；未标定前 ①a / ② / ③ 不可执行**。仓库侧现状照旧：`tools/` 只有 `verify_unit_consistency.py`（离线核对指纹与标定的单位口径），`benchmarks/` 下两个脚本不产出它们，仓库内的 `.py` 文件对 `signs-json` / `zeros-json` 零命中（`grep -rn "signs-json\|zeros-json" --include=*.py .` 无输出，只有本手册提到这两个选项名）；`examples/robot_dry_run.py:46` 自述「`JointKinematicAdapter` 需要每侧六关节完整的 `signs`/`zeros`，现场没有标定值」。因此：
 
 | 档 | 可执行性 | 依据 |
 | --- | --- | --- |
 | ①b（纯离线 `--dry-run`） | **可执行**：只用 URDF 与 seed，不读 `signs` / `zeros` | `_run_dry` 只调 `_build_ik` / `_urdf_limits_deg`，不建 adapter、不建 client |
 | ①a / ② / ③ | **暂不可执行**：缺 `signs` / `zeros` 就直接按 `15` 退出 | `_load_side_json` 的 `path is None` 分支 |
 
-在 `signs` / `zeros` 的产出流程落地前，这三条记为「**暂不可执行**」，且**不得为了让命令跑起来去手写或猜 `signs` / `zeros`**（那是伪标定，违反 `AGENTS.md` 第 3 节的证据纪律）。本节其余内容（判据表、预期值表、安全前置、现场确认项）仍按预写保留，等前置落地后照原样执行。
+`signs` / `zeros` 的产出流程已在 §10.8 预写、待现场执行并回写；在这之前这三条记为「**暂不可执行**」，且**不得为了让命令跑起来去手写或猜 `signs` / `zeros`**（那是伪标定，违反 `AGENTS.md` 第 3 节的证据纪律）。本节其余内容（判据表、预期值表、安全前置、现场确认项）仍按预写保留，等 §10.8 现场执行并回写后照原样执行。
 
 ### 调用途径判定：仓库里没有现成入口
 
@@ -2760,7 +2814,7 @@ Gate A–F 是 `measure_latency.py` 里的运行时门禁（§7.1 的表），`m
 | 3 | 工作区范围 | 配置里没有（`site.yaml` 七个键，见 `src/alohamini_cartesian/config/overlay.py:40`） | 只能现场目视与询问；离线不给结论 |
 | 4 | `+Z` 向上 9 cm 物理上是否撞物 / 撞桌 | 目视；注意 `placo` 模型已剥掉 collision mesh、无自碰撞与桌面约束 | 有碰撞风险就停，或减小 `--dz` |
 | 5 | 9 cm 在 `2.0°` / 周期 step gate 下要走多少周期、能否在 `10 s` 内到位 | 用 ①b 的最大单关节跨度 ÷ `2.0°` × `1/30 s` 估算（identity 形态的 `wrist_roll` 约 `153.6°` → 约 77 个周期 ≈ `2.6 s`，前提是第一步就能被接受） | 估算不能替实测；现场以 `moves[].elapsed_s` 与是否超时为准 |
-| 6 | `signs` / `zeros` 的产出流程（**当前不存在，阻塞 ①a / ② / ③**） | 无离线推导法：只能来自真实标定，仓库与手册都没有产出脚本（见本节节首硬前置）；另：右臂复用同一份左臂 URDF 模型（`src/alohamini_cartesian/kinematics/joint_adapter.py:76-82` 的注释写明这是库的假设） | 产出流程落地前这三档记为「暂不可执行」；**不得**手写或猜这两份 JSON，也不得用左臂值顶替右臂；→ 见 §10.8 |
+| 6 | `signs` / `zeros` 的产出流程（**流程见 §10.8，预写未执行；未标定前阻塞 ①a / ② / ③**） | 无离线推导法：只能来自真实标定，仓库里没有产出脚本，产出流程是 §10.8 的预写跑法（见本节节首硬前置）；另：右臂复用同一份左臂 URDF 模型（`src/alohamini_cartesian/kinematics/joint_adapter.py:76-82` 的注释写明这是库的假设） | 产出流程现场执行并回写前，这三档记为「暂不可执行」；**不得**手写或猜这两份 JSON，也不得用左臂值顶替右臂；→ 见 §10.8 |
 | 7 | Gate D 的现场触发形态 | 见 §10.6 的「现场确认项」 | 同 §10.6：等不到就记「未触发」 |
 | 8 | 7 点路径每周期关节步长是否触发 step gate 拒发 | 看 `moves` 是否出现「超时且无成功行」 | 触发了即预期形态；要真正走完需另议分点策略，不在本节范围内 |
 | 9 | 卷尺在手（钢卷尺或 30 cm 钢直尺，最小刻度 1 mm）+ 美纹纸 + 垂线或角尺 | 开跑前查实物在场：④ 卷尺实测靠这三样，缺一样判据不成立 | 缺就**不记录 ④**，记「未测：量具不在场」，不得用目测或 FK 预测值代替 |
@@ -2769,7 +2823,7 @@ Gate A–F 是 `measure_latency.py` 里的运行时门禁（§7.1 的表），`m
 
 本节一次真机都没执行过，所有数值都是离线 URDF 计算或公式推导，判据未经现场校验；执行后按实际回写。
 
-本节只解决一件事：`signs`（六关节 ±1）与 `zeros`（六关节零点，度）这两份映射怎么从「摆一个能用人眼判的姿势」产出来。它是 §10.7 现场确认项第 6 条那条「产出流程当前不存在」的落地形态，**不代表这两份文件已经存在**：没有现场记录之前，本节只是跑法预写，§10.7 的 ①a / ② / ③ 仍记「暂不可执行」。
+本节只解决一件事：`signs`（六关节 ±1）与 `zeros`（六关节零点，度）这两份映射怎么从「摆一个能用人眼判的姿势」产出来。它对应 §10.7 现场确认项第 6 条所指的产出流程，**不代表这两份文件已经存在**：没有现场记录之前，本节只是跑法预写，§10.7 的 ①a / ② / ③ 仍记「暂不可执行」。
 
 ### 产出物与 JSON 形态
 
@@ -2817,7 +2871,7 @@ Gate A–F 是 `measure_latency.py` 里的运行时门禁（§7.1 的表），`m
 | `zero` 取值 | 有限数、单位度；在正向式里是**最后一步的加法项**，反向式先减 zero 再乘 sign。非有限在构造时 fail-fast | `src/alohamini_cartesian/kinematics/joint_adapter.py:212` |
 | 组织形态 | `side -> joint -> 值`，两侧各注入一份，构造时传入 | `src/alohamini_cartesian/kinematics/joint_adapter.py:142` |
 | 库内默认值 | **没有**。不注入就构造不出适配器；本库不提供「猜一份」的退路 | `src/alohamini_cartesian/kinematics/joint_adapter.py:147` |
-| 缺文件时现场行为 | §10.7 驱动脚本以 `15` 退出（`_load_side_json` 的前置拒绝，六关节缺一也走这条） | `docs/s4-field-smoke.md:2317`、`docs/s4-field-smoke.md:2639` |
+| 缺文件时现场行为 | §10.7 驱动脚本以 `15` 退出（`_load_side_json` 的前置拒绝，六关节缺一也走这条） | `docs/s4-field-smoke.md:2371`、`docs/s4-field-smoke.md:2693` |
 | 双向消费 | 同一份映射同时用于观测（units→deg）与命令（deg→units），命令区间闸门也用它 | `src/alohamini_cartesian/kinematics/joint_adapter.py:510`、`src/alohamini_cartesian/kinematics/joint_adapter.py:617`、`src/alohamini_cartesian/kinematics/joint_adapter.py:443` |
 | 关节名 | 六关节固定顺序 `shoulder_pan` / `shoulder_lift` / `elbow_flex` / `wrist_flex` / `wrist_yaw` / `wrist_roll` | `src/alohamini_cartesian/kinematics/joint_adapter.py:67` |
 | 右臂关节名 | 电机键是 `arm_right_<joint>.pos`，**URDF 关节名仍是 `left_*`**（右臂复用左臂模型，不是「右臂 = 左臂」的值假设） | `src/alohamini_cartesian/kinematics/joint_adapter.py:76` |
@@ -2840,9 +2894,9 @@ jq -e 'keys | length == 6' "$S4DIR/stdout/10.8-signs-left-$STAMP.json"
 jq -e 'keys | length == 6' "$S4DIR/stdout/10.8-zeros-left-$STAMP.json"
 ```
 
-- 拆分后必须是**扁平**的「关节名 → 数值」；`_load_side_json` 读的就是扁平形态（`docs/s4-field-smoke.md:2317`），多包一层 `signs` / `zeros` 外层键会被当成「缺关节」并以 `15` 退出。
+- 拆分后必须是**扁平**的「关节名 → 数值」；`_load_side_json` 读的就是扁平形态（`docs/s4-field-smoke.md:2371`），多包一层 `signs` / `zeros` 外层键会被当成「缺关节」并以 `15` 退出。
 - 现场没有 `jq` 时用别的工具拆也行，判据只有一条：拆出来的文件是扁平六键，值类型是数值。本节只定产物形态，不定工具。
-- §10.7 驱动脚本的 `_build_adapter`（`docs/s4-field-smoke.md:2328`）把**同一份** `signs` / `zeros` 同时注入 `left` 与 `right` —— 这是脚本的简化。所以**右臂真跑必须传右臂自己的文件**：`--signs-json …/10.8-signs-right-$STAMP.json --zeros-json …/10.8-zeros-right-$STAMP.json`。**不得**把左臂文件传给右臂命令，也不得靠这次简化让右臂「借用」左臂值。
+- §10.7 驱动脚本的 `_build_adapter`（`docs/s4-field-smoke.md:2382`）把**同一份** `signs` / `zeros` 同时注入 `left` 与 `right` —— 这是脚本的简化。所以**右臂真跑必须传右臂自己的文件**：`--signs-json …/10.8-signs-right-$STAMP.json --zeros-json …/10.8-zeros-right-$STAMP.json`。**不得**把左臂文件传给右臂命令，也不得靠这次简化让右臂「借用」左臂值。
 
 ### 参考位形（离线 URDF FK 计算，未经实测）
 
@@ -2910,7 +2964,7 @@ C2b 的离线 FK 结果：末端 `left_Fixed_Jaw` = **(−0.000966, −0.316448,
 | --- | --- | --- |
 | 1 | 摆姿：把六关节摆到 C2b 的形状（大臂竖直向上、小臂水平朝正前方、腕部顺直） | 上节逐关节目视判据；摆完人不要碰 |
 | 2 | 读数：按 §4.1 采一份 `capture` 指纹，`observation_state` 里有每个电机的 `<motor>.pos`（**归一化值**，键形如 `arm_left_shoulder_pan.pos`） | §4.1 的判据（exit 0、`robot_metadata.schema_version == 2`） |
-| 3 | 归一化 → tick：按 §4.1c 的同一条换算 `int(((v + 100) / 200) × (max − min) + min)`，`range_0_100` 用 `int((v / 100) × (max − min) + min)`；`max` / `min` 取该电机 metadata 的 `range_max` / `range_min` | `docs/s4-field-smoke.md:475`、`docs/s4-field-smoke.md:569` |
+| 3 | 归一化 → tick：按 §4.1c 的同一条换算 `int(((v + 100) / 200) × (max − min) + min)`，`range_0_100` 用 `int((v / 100) × (max − min) + min)`；`max` / `min` 取该电机 metadata 的 `range_max` / `range_min` | `docs/s4-field-smoke.md:529`、`docs/s4-field-smoke.md:623` |
 | 4 | tick → 度：`motor_deg = (tick − mid) × 360 / (resolution − 1)`，`mid = (range_min + range_max) / 2` | 这是库观测侧的原式（`src/alohamini_cartesian/kinematics/joint_adapter.py:530`）。口算口径 **1 tick ≈ 0.0879° = 360/4096**（用 `resolution − 1 = 4095` 时 360/4095 = 0.08792°，差 0.02%，判读时忽略） |
 | 5 | 算 zero：`zero = q_target − sign × motor_deg_read`，每关节一次 | 适配器正向式的移项（`src/alohamini_cartesian/kinematics/joint_adapter.py:26`） |
 
