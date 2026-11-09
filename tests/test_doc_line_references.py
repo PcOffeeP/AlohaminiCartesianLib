@@ -1,8 +1,8 @@
 """文档里 ``文件名:行号`` 引用的机器守卫（离线，只读文本）。
 
-十个文档（``TODO.md``、``docs/acceptance-baseline.md``、``docs/field-results.md`` 与
-``docs/field-ops/`` 下的 7 份现场手册子文档 ``00-opening.md`` … ``60-artifacts.md``）
-用 ``文件名:行号`` 指代源码位置。
+十二个文档（``TODO.md``、``docs/acceptance-baseline.md``、``docs/field-results.md`` 与
+``docs/field-ops/`` 下的 7 份现场手册子文档 ``00-opening.md`` … ``60-artifacts.md``，
+外加同目录的 ``README.md`` 与 ``completed-work.md``）用 ``文件名:行号`` 指代源码位置。
 源码一改行号就漂，读者会点到不相关的代码。本文件把这类引用逐条按三条判定：
 目标文件能解析到、行号落在 ``1..len(文件行数)`` 内（区间还要 ``起 <= 止``）、
 目标行 ``str.strip()`` 后非空。
@@ -48,6 +48,8 @@ DOCUMENTS = (
     "docs/field-ops/40-gates-params.md",
     "docs/field-ops/50-experiments.md",
     "docs/field-ops/60-artifacts.md",
+    "docs/field-ops/README.md",
+    "docs/field-ops/completed-work.md",
     "docs/field-results.md",
 )
 
@@ -79,18 +81,21 @@ EXTERNAL_FILENAMES = frozenset(
 )
 
 # 抽取规则退化（例如正则写错、只匹配到极少条目）时本用例会先红。
-# 2026-11-08 实测：十个文档合计抽取 291 条引用，其中 179 条由机器逐条判行号
+# 2026-11-09 实测：十二个文档合计抽取 291 条引用，其中 179 条由机器逐条判行号
 # （TODO 23 / acceptance-baseline 3 / field-ops 00-opening 0 / 10-health-baseline 14 /
 #  20-toolchain 0 / 30-host-ops 0 / 40-gates-params 16 / 50-experiments 116 /
-#  60-artifacts 2 / field-results 5），另有 112 条落在 10 个仓库外文件名上被跳过。
+#  60-artifacts 2 / README 0 / completed-work 0 / field-results 5），另有 112 条落在 10 个
+# 仓库外文件名上被跳过。``README.md`` 与 ``completed-work.md`` 各 0 条，故把这两份补进
+# ``DOCUMENTS`` 后抽取合计与判行号条数都不变（仍是 291 / 179）。
 # 手册拆进 ``docs/field-ops/`` 不改变抽取条数：拆前那一版（单个 3295 行文件）单独是 198 条
 # = 142 条仓库内 + 50 条仓库外 + 6 条指向旧文件自身（路径已不存，迁前判违规）；
 # 拆后 7 份子文档仍是 198 条 = 148 条仓库内（142 + 原那 6 条指向新文件）+ 50 条仓库外。
 # 外置跳过仍是 112 条（手册 50 + TODO 19 + field-results 43），抽取合计仍是 291 条。
 # 旧注释里的 174 / 66 / 108 属更早一轮，已作废。
-# 下限取 160：实测 179 已高于它 19 条（约 10.6%，与旧口径 60 对 66 的约 9% 同一比例），
-# 再往上抬会让「文档正常删掉几条引用」也变红。
-MIN_REFERENCES = 160
+# 下限取 170：实测 179，余量 9 条（约 5%）；这样静默从 ``DOCUMENTS`` 删掉一份中型文档
+# 也会红——删 10-health-baseline（14 条）→ 165、删 40-gates-params（16 条）→ 163，
+# 两者都低于 170；文档正常删掉几条引用（远少于 9 条）不会红。
+MIN_REFERENCES = 170
 
 _EXTENSION = r"(?:py|md|toml|yaml|yml|json|csv)"
 _NAME = rf"[A-Za-z0-9_][A-Za-z0-9_./-]*\.{_EXTENSION}"
@@ -244,7 +249,7 @@ def _check_document(document: str) -> Report:
 
 
 def test_documents_have_no_broken_line_references() -> None:
-    """十个文档里的行号引用必须全部落在真实、非空的行上。"""
+    """十二个文档里的行号引用必须全部落在真实、非空的行上。"""
     violations: list[str] = []
     for document in DOCUMENTS:
         violations.extend(_check_document(document).violations)
