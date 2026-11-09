@@ -130,6 +130,43 @@ export PYTHONPATH=<vendor fork>/src:src
 
 但「只读」只约束下发，不约束观测请求：示例自身的两次取帧都走 `include_cameras=False`，而库内 `LiftHandle.height()`（`control/api.py:494`）与 `_prime_state_machine()` 的首帧（`control/api.py:845`）调的是无参 `get_observation()`，落回厂商默认 `include_cameras=True`（`lerobot/robots/alohamini/alohamini_client.py:535`），所以真机分支仍会多发 3 次相机帧请求；要做到真正 state-only 需改库侧调用签名，当前不做。
 
+### 3.1 机器人模型（URDF）
+
+本库用一份 URDF 做 FK/IK 的几何锚点，路径 `src/alohamini_cartesian/kinematics/assets/am_arm200/kinematics.urdf`。`control/arm_ik.py` 的 `ArmIK` 用它构造模型并算 FK/IK；读这份文件的是 `placo`（可选 extra `kinematics`，见 `docs/ADR.md` D8），不装该 extra 时运动学数值路径不可用。
+
+**来源与 sha256 链**。该 URDF 派生自 GitHub `liyiteng/AM-ARM` 的 `am-arm200pro.urdf`，commit `5b03af1ef6c80595bd988e0137cf8e7c35811eb6`，上游文件 sha256 `c38669d46d2bf804c112a6d8ce926074c8ff65ba70917503e09b77c75e285030`。派生动作是剥离：去掉 inertial 属性、visual/collision 的 mesh 引用、不用的夹爪与相机关节和链接；保留完整 6-DOF 链，每个 link/joint 的 origin、axis 与 limit 原样留。
+
+剥离 mesh 有一个直接后果：`placo` 模型里没有碰撞几何体，因此没有自碰撞检查，也没有桌面与工装约束。IK 解不保证末端路径不与自身或桌面相撞，碰撞判断由调用方负责。
+
+**溯源锚点**。上游原件、`sources.json` 与 Apache-2.0 许可证副本存于退役仓库的只读目录（本库不复制该目录）：
+
+```
+/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini-cartesian-teleop/docs/alohamini-control/reference/urdf-sources/
+```
+
+核 sha256 时以该目录下的 `am-arm200pro.urdf` 为准。本库当前没有任何 `LICENSE` / `NOTICE` 文件，即这份派生 URDF 随包分发、上游许可证与署名未随包附上；合规待处理，见 `TODO.md` 的许可债行。
+
+**关键杆长**。URDF 内的长度单位是米，下表「值」列前半照抄 URDF、后半是换算值，换算到毫米保留两位小数。
+
+| 量 | URDF 出处 | 值 |
+| --- | --- | --- |
+| 肩高 | `left_shoulder_pan` origin 的 z | `0.062556` m = `62.56` mm |
+| 肩俯仰偏置 | `left_shoulder_lift` origin | `(0, -0.029035, 0.058223)` m |
+| 大臂 | `left_elbow_flex` origin 的 xy 模长（`√(0.041170749² + 0.128514359²)`） | `0.13495` m = `134.95` mm |
+| 小臂 | `left_wrist_flex` origin 的 xy 模长（`√(0.003204703² + 0.198428485²)`） | `0.19845` m = `198.45` mm |
+| 腕偏置 1 | `left_wrist_yaw_joint` origin 的模长（`(-0.000916, -0.028130, -0.000966)`） | `0.02816` m = `28.16` mm |
+| 腕偏置 2 | `left_wrist_roll` origin 的模长（`(0, 0.060993, -0.024239)`） | `0.06563` m = `65.63` mm |
+
+上表的毫米值由米值换算得来，本库没有杆长实测记录。
+
+**单位与坐标系**。长度单位是米，角度以 rad 写在 URDF 里。根 link 是 `left_Base`，指的是**该臂的肩底座系**，**不是整机基座系**——URDF 里没有底盘、升降到肩底座的变换，`ArmIK` 输出的末端位置也在这个肩底座系下。要算世界坐标，由调用方自己叠加基座到肩底座的变换；本库不提供该变换，也不给工作区结论。
+
+六个关节的 URDF 名：`left_shoulder_pan`、`left_shoulder_lift`、`left_elbow_flex`、`left_wrist_flex`、`left_wrist_yaw_joint`（这一条 joint 名带 `_joint` 后缀）、`left_wrist_roll`。
+
+**限位**。URDF 内六个 joint 的 `limit` 都是 `lower=-3.14` / `upper=3.14` rad，是上游值。本库未逐关节核对真实机械行程，限位是否宽于真实行程由 `docs/ADR.md` D10 的已知代价覆盖。现场口径是 `docs/s4-field-smoke.md` §10.7 ①a 在真机上读 `effective_limits_deg`，URDF 里的 `±3.14` 不作为真实行程的依据。
+
+**零实测声明**。上游 `sources.json` 自报 `hardware_verified: false`，同记 `meshes_downloaded: false`、`placo_load_tested: false`、`retrieved_on: 2026-09-21`；本库也没有任何杆长实测记录，`docs/acceptance-baseline.md` 的 V01–V13 无几何条目。因此 FK/IK 的绝对精度**未经实测验证**：它证明的是「同一份几何下解算自洽」，物理尺寸是否正确它答不了。收口方式与判据见 `TODO.md` 的「URDF 杆长零实测」行、`docs/s4-field-smoke.md` §10.7 与 `docs/ADR.md` D21。
+
 ## 4 公开 API
 
 - `alohamini_cartesian.adapter.protocol`：`RobotTransport`（`get_observation`、`send_action`、`prime_observation_request_window(*, include_cameras)`）、`RobotSpec`（`robot_model`、`left_port`、`right_port`），两个 `typing.Protocol`。
