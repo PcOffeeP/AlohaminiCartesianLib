@@ -2760,10 +2760,283 @@ Gate A–F 是 `measure_latency.py` 里的运行时门禁（§7.1 的表），`m
 | 3 | 工作区范围 | 配置里没有（`site.yaml` 七个键，见 `src/alohamini_cartesian/config/overlay.py:40`） | 只能现场目视与询问；离线不给结论 |
 | 4 | `+Z` 向上 9 cm 物理上是否撞物 / 撞桌 | 目视；注意 `placo` 模型已剥掉 collision mesh、无自碰撞与桌面约束 | 有碰撞风险就停，或减小 `--dz` |
 | 5 | 9 cm 在 `2.0°` / 周期 step gate 下要走多少周期、能否在 `10 s` 内到位 | 用 ①b 的最大单关节跨度 ÷ `2.0°` × `1/30 s` 估算（identity 形态的 `wrist_roll` 约 `153.6°` → 约 77 个周期 ≈ `2.6 s`，前提是第一步就能被接受） | 估算不能替实测；现场以 `moves[].elapsed_s` 与是否超时为准 |
-| 6 | `signs` / `zeros` 的产出流程（**当前不存在，阻塞 ①a / ② / ③**） | 无离线推导法：只能来自真实标定，仓库与手册都没有产出脚本（见本节节首硬前置）；另：右臂复用同一份左臂 URDF 模型（`src/alohamini_cartesian/kinematics/joint_adapter.py:76-82` 的注释写明这是库的假设） | 产出流程落地前这三档记为「暂不可执行」；**不得**手写或猜这两份 JSON，也不得用左臂值顶替右臂 |
+| 6 | `signs` / `zeros` 的产出流程（**当前不存在，阻塞 ①a / ② / ③**） | 无离线推导法：只能来自真实标定，仓库与手册都没有产出脚本（见本节节首硬前置）；另：右臂复用同一份左臂 URDF 模型（`src/alohamini_cartesian/kinematics/joint_adapter.py:76-82` 的注释写明这是库的假设） | 产出流程落地前这三档记为「暂不可执行」；**不得**手写或猜这两份 JSON，也不得用左臂值顶替右臂；→ 见 §10.8 |
 | 7 | Gate D 的现场触发形态 | 见 §10.6 的「现场确认项」 | 同 §10.6：等不到就记「未触发」 |
 | 8 | 7 点路径每周期关节步长是否触发 step gate 拒发 | 看 `moves` 是否出现「超时且无成功行」 | 触发了即预期形态；要真正走完需另议分点策略，不在本节范围内 |
 | 9 | 卷尺在手（钢卷尺或 30 cm 钢直尺，最小刻度 1 mm）+ 美纹纸 + 垂线或角尺 | 开跑前查实物在场：④ 卷尺实测靠这三样，缺一样判据不成立 | 缺就**不记录 ④**，记「未测：量具不在场」，不得用目测或 FK 预测值代替 |
+
+## 10.8 signs / zeros 标定流程（预写，未真机执行）
+
+本节一次真机都没执行过，所有数值都是离线 URDF 计算或公式推导，判据未经现场校验；执行后按实际回写。
+
+本节只解决一件事：`signs`（六关节 ±1）与 `zeros`（六关节零点，度）这两份映射怎么从「摆一个能用人眼判的姿势」产出来。它是 §10.7 现场确认项第 6 条那条「产出流程当前不存在」的落地形态，**不代表这两份文件已经存在**：没有现场记录之前，本节只是跑法预写，§10.7 的 ①a / ② / ③ 仍记「暂不可执行」。
+
+### 产出物与 JSON 形态
+
+每侧一份标定文件，六关节齐全：
+
+| 产物 | 路径 | 内容 |
+| --- | --- | --- |
+| 左臂标定文件 | `$S4DIR/stdout/10.8-calib-left-$STAMP.json` | `side` + `signs` + `zeros` |
+| 右臂标定文件 | `$S4DIR/stdout/10.8-calib-right-$STAMP.json` | 同上，`side` 为 `right` |
+| 拆分后的 signs（喂 `--signs-json`） | `$S4DIR/stdout/10.8-signs-left-$STAMP.json` / `…-right-…` | 扁平的「关节名 → ±1」 |
+| 拆分后的 zeros（喂 `--zeros-json`） | `$S4DIR/stdout/10.8-zeros-left-$STAMP.json` / `…-right-…` | 扁平的「关节名 → 度」 |
+| 自检记录 | `$S4DIR/stdout/10.8-selfcheck-$STAMP.md` | 参考位形、读数、算出的 sign/zero、FK 核对结果 |
+
+标定文件形态（**下面每个数字都是占位，示例形态，非实测值**；不得照抄，也不得把它当标定结果）：
+
+```json
+{
+  "side": "left",
+  "signs": {
+    "shoulder_pan": 1,
+    "shoulder_lift": -1,
+    "elbow_flex": 1,
+    "wrist_flex": -1,
+    "wrist_yaw": 1,
+    "wrist_roll": -1
+  },
+  "zeros": {
+    "shoulder_pan": -12.3,
+    "shoulder_lift": 41.0,
+    "elbow_flex": -8.5,
+    "wrist_flex": 3.2,
+    "wrist_yaw": -67.4,
+    "wrist_roll": 0.0
+  }
+}
+```
+
+适配器（决定这两份文件怎么被消费）的契约：
+
+| 项 | 契约 | 出处 |
+| --- | --- | --- |
+| 正向（观测 → 运动学角） | `q_kinematic_deg = sign × motor_deg + zero` | `src/alohamini_cartesian/kinematics/joint_adapter.py:26` |
+| 反向（运动学角 → 命令） | `motor_deg = (q_kinematic_deg − zero) / sign`，实现写作 `sign × (q − zero)` | `src/alohamini_cartesian/kinematics/joint_adapter.py:31`、`src/alohamini_cartesian/kinematics/joint_adapter.py:635` |
+| `sign` 取值 | 只许 `+1` / `-1`；其他数值、`bool`、字符串在构造时 fail-fast | `src/alohamini_cartesian/kinematics/joint_adapter.py:206` |
+| `zero` 取值 | 有限数、单位度；在正向式里是**最后一步的加法项**，反向式先减 zero 再乘 sign。非有限在构造时 fail-fast | `src/alohamini_cartesian/kinematics/joint_adapter.py:212` |
+| 组织形态 | `side -> joint -> 值`，两侧各注入一份，构造时传入 | `src/alohamini_cartesian/kinematics/joint_adapter.py:142` |
+| 库内默认值 | **没有**。不注入就构造不出适配器；本库不提供「猜一份」的退路 | `src/alohamini_cartesian/kinematics/joint_adapter.py:147` |
+| 缺文件时现场行为 | §10.7 驱动脚本以 `15` 退出（`_load_side_json` 的前置拒绝，六关节缺一也走这条） | `docs/s4-field-smoke.md:2317`、`docs/s4-field-smoke.md:2639` |
+| 双向消费 | 同一份映射同时用于观测（units→deg）与命令（deg→units），命令区间闸门也用它 | `src/alohamini_cartesian/kinematics/joint_adapter.py:510`、`src/alohamini_cartesian/kinematics/joint_adapter.py:617`、`src/alohamini_cartesian/kinematics/joint_adapter.py:443` |
+| 关节名 | 六关节固定顺序 `shoulder_pan` / `shoulder_lift` / `elbow_flex` / `wrist_flex` / `wrist_yaw` / `wrist_roll` | `src/alohamini_cartesian/kinematics/joint_adapter.py:67` |
+| 右臂关节名 | 电机键是 `arm_right_<joint>.pos`，**URDF 关节名仍是 `left_*`**（右臂复用左臂模型，不是「右臂 = 左臂」的值假设） | `src/alohamini_cartesian/kinematics/joint_adapter.py:76` |
+
+与 firmware 字段的区别（两条不同层的换算，**不得混算**）：
+
+| 项 | 适配器的 `signs` / `zeros`（本节产出的两份文件） | firmware 的 `homing_offset` / `drive_mode` |
+| --- | --- | --- |
+| 量纲 | `sign` 无量纲（±1）；`zero` 单位**度** | `homing_offset` 单位 **tick**；`drive_mode` 是 `0` / `1` 的反向开关 |
+| 谁消费 | 本库 `JointKinematicAdapter`，构造时注入 | 厂商 `MotorsBus` 的归一化 / 反归一化链 |
+| 本库是否重放 | 不适用（本库自己的映射） | `homing_offset` **从不重放**（源码原文见 `src/alohamini_cartesian/kinematics/joint_adapter.py:51`）；`drive_mode` 只在 `range_m100_100` 模式里按厂商公式取反 |
+| 混算禁令 | 不得把 `homing_offset`（tick）直接当 `zero`（度）；不得用 `drive_mode` 反推 `sign`。两者所在的换算层不同，单位也不同，混用会得到量级都错的映射 | 同左 |
+
+拆分与侧别（脚本侧的坑，必须按这条传）：
+
+```bash
+jq '.signs' "$S4DIR/stdout/10.8-calib-left-$STAMP.json" > "$S4DIR/stdout/10.8-signs-left-$STAMP.json"
+jq '.zeros' "$S4DIR/stdout/10.8-calib-left-$STAMP.json" > "$S4DIR/stdout/10.8-zeros-left-$STAMP.json"
+jq -e 'keys | length == 6' "$S4DIR/stdout/10.8-signs-left-$STAMP.json"
+jq -e 'keys | length == 6' "$S4DIR/stdout/10.8-zeros-left-$STAMP.json"
+```
+
+- 拆分后必须是**扁平**的「关节名 → 数值」；`_load_side_json` 读的就是扁平形态（`docs/s4-field-smoke.md:2317`），多包一层 `signs` / `zeros` 外层键会被当成「缺关节」并以 `15` 退出。
+- 现场没有 `jq` 时用别的工具拆也行，判据只有一条：拆出来的文件是扁平六键，值类型是数值。本节只定产物形态，不定工具。
+- §10.7 驱动脚本的 `_build_adapter`（`docs/s4-field-smoke.md:2328`）把**同一份** `signs` / `zeros` 同时注入 `left` 与 `right` —— 这是脚本的简化。所以**右臂真跑必须传右臂自己的文件**：`--signs-json …/10.8-signs-right-$STAMP.json --zeros-json …/10.8-zeros-right-$STAMP.json`。**不得**把左臂文件传给右臂命令，也不得靠这次简化让右臂「借用」左臂值。
+
+### 参考位形（离线 URDF FK 计算，未经实测）
+
+做法：`uv run --no-sync python`（主 `.venv` 有 `placo` 0.10.1）加载 `src/alohamini_cartesian/kinematics/assets/am_arm200/kinematics.urdf`（只读），关节名与 `ArmIK.fk` 同口径、末端取 `left_Fixed_Jaw` 原点。计算脚本落 `/tmp`，不落仓。下面的数都是**离线 URDF FK 计算，未经实测**。
+
+全零位形（六关节全 0°）：
+
+| link | x (m) | y (m) | z (m) |
+| --- | --- | --- | --- |
+| `left_Base` | 0.000000 | 0.000000 | 0.000000 |
+| `left_Rotation_Pitch` | 0.000000 | 0.000000 | +0.062556 |
+| `left_Upper_Arm` | 0.000000 | −0.029035 | +0.120779 |
+| `left_Lower_Arm` | 0.000000 | +0.099479 | +0.161950 |
+| `left_Wrist_Pitch_Roll` | 0.000000 | −0.098949 | +0.158745 |
+| `left_wrist_yaw` | −0.000966 | −0.127079 | +0.159661 |
+| `left_Fixed_Jaw`（末端） | −0.000966 | −0.188071 | +0.135422 |
+
+零位形下各杆段（段 = 相邻两关节轴原点连线）：
+
+| 段 | 长度 (m) | 单位方向 | 最接近的世界轴 |
+| --- | --- | --- | --- |
+| 大臂段（`left_Upper_Arm` → `left_Lower_Arm`） | 0.134948 | (0.000004, 0.952325, 0.305086) | `+Y`，偏 17.76° |
+| 小臂段（`left_Lower_Arm` → `left_Wrist_Pitch_Roll`） | 0.198454 | (0.000000, −0.999870, −0.016148) | `−Y`，偏 0.93° |
+| 腕段（`left_Wrist_Pitch_Roll` → `left_wrist_yaw`） | 0.028161 | (−0.034316, −0.998882, 0.032517) | `−Y`，偏 2.71° |
+| 夹爪段（`left_wrist_yaw` → `left_Fixed_Jaw`） | 0.065632 | (−0.000001, −0.929307, −0.369307) | `−Y`，偏 21.67° |
+
+零位形末端距 `left_Base` 原点 0.231756 m。**零位形不适合当参考位形**：大臂段本身就与 `+Y` 差 17.76°（URDF 的 elbow origin 带 −0.041171 m 的 x 分量），肉眼判「正不正」判不准。
+
+候选姿势（腕三轴全 0；候选即扫描 `shoulder_lift` / `elbow_flex` 找「杆段贴世界轴」的整数角）：
+
+| 候选 | q_target（`pan`, `lift`, `elbow`, `w_flex`, `w_yaw`, `w_roll`）（度） | 大臂段贴轴 | 小臂段贴轴 | 末端 (x, y, z) m | 距基座原点 m | 判读 |
+| --- | --- | --- | --- | --- | --- | --- |
+| C0 零位形 | 0, 0, 0, 0, 0, 0 | `+Y` 偏 17.76° | `−Y` 偏 0.93° | (−0.000966, −0.188071, +0.135422) | 0.231756 | 大臂不贴轴，不选 |
+| C1 整臂竖直向上伸直 | 0, −72, +163, 0, 0, 0 | `+Z` 偏 0.24° | `+Z` 偏 0.07° | (−0.000965, −0.049983, +0.543696) | 0.545989 | 两段同轴，只剩一个竖直判据（绕轴自旋判不出），且 163° 贴 ±180° 限位面 |
+| C2 大臂竖直 + 小臂水平朝 `+Y` | 0, −72, −107, 0, 0, 0 | `+Z` 偏 0.24° | `+Y` 偏 0.07° | (−0.000966, +0.259492, +0.277231) | 0.379729 | 两条判据各一次；`−Y` 侧有障碍时的备选 |
+| **C2b 大臂竖直 + 小臂水平朝 `−Y`（选定）** | **0, −72, +73, 0, 0, 0** | `+Z` 偏 0.24° | `−Y` 偏 0.07° | **(−0.000966, −0.316448, +0.234221)** | **0.393700** | 两条判据各一次，且小臂朝模型零位末端所在的一侧（离机身本体远） |
+| C3 大臂竖直向下 + 小臂水平朝 `+Y` | 0, +108, +73, 0, 0, 0 | `−Z` 偏 0.24° | `+Y` 偏 0.07° | (−0.000967, +0.258378, +0.007337) | 0.258483 | 末端只高出基座平面 7 mm，桌面 / 底座碰撞风险，不选 |
+| C4 整臂竖直向下伸直 | 0, +108, +162, 0, 0, 0 | `−Z` 偏 0.24° | `−Z` 偏 0.93° | (−0.000968, −0.003065, −0.301719) | 0.301736 | 末端在基座平面下 0.302 m，物理上不成立，不选 |
+
+选 C2b 的理由：两条杆段各贴一条世界轴（偏 0.24° / 0.07°），一条垂线校竖直、一把角尺校水平就够；末端相对基座的关系简单（上方 0.234 m、正前方 0.316 m、侧向 0.001 m），便于后面的量级核对。C1 / C4 用同轴判据只能判「两者共线且竖直」，判不出绕轴自旋；C3 的末端高度不可接受。
+
+C2b 的逐关节目标角与目视判据（**目标角是 URDF 运动学角，不是电机角**；电机角要现场读）：
+
+| 关节（URDF 名 / 手册关节名） | q_target（度） | 目视判据（用杆长关系描述） |
+| --- | --- | --- |
+| `left_shoulder_pan` / `shoulder_pan` | 0 | 整个手臂落在机身中线所在的竖直平面内：从正上方看，小臂指向「正前方」，不左右偏 |
+| `left_shoulder_lift` / `shoulder_lift` | −72 | **大臂段**（shoulder_lift 轴 → elbow 轴，长 **0.135 m**）沿重力反方向竖直向上：垂线贴在大臂侧面，上下两端都贴住即竖直 |
+| `left_elbow_flex` / `elbow_flex` | +73 | **小臂段**（elbow 轴 → wrist_flex 轴，长 **0.198 m**）水平：角尺一边贴小臂、另一边竖直（与上一条的垂线平行），两段成 90° |
+| `left_wrist_flex` / `wrist_flex` | 0 | 腕段（0.028 m）与小臂同轴（离线 FK 下偏 3.47°）：目视「腕部跟管状小臂一条线」 |
+| `left_wrist_yaw_joint` / `wrist_yaw` | 0 | 夹爪沿小臂延长线朝前：离线 FK 下夹爪 link 的 z 轴指 `−Y`，与水平小臂同向 |
+| `left_wrist_roll` / `wrist_roll` | 0 | 夹爪不自旋：离线 FK 下夹爪 link 的 x 轴指 `−X`，即张口左右开。**该轴位置判据完全退化**（+1° 步末端位移 0.000 mm，见下节灵敏度表），只能看张口朝向 |
+
+C2b 的离线 FK 结果：末端 `left_Fixed_Jaw` = **(−0.000966, −0.316448, +0.234221) m**，距 `left_Base` 原点 **0.393700 m**（离线 URDF FK 计算，未经实测）。杆长口径：大臂段 0.134948 m、小臂段 0.198454 m，与 `docs/library-guide.md` §3.1 的关键杆长表同源。
+
+两条口径边界，别读过头：
+
+- 这些位置值只说明「同一份 URDF 下自洽」。URDF 杆长**零实测**（`TODO.md` §4 那行），所以它们不是物理精度承诺。
+- `shoulder_lift = −72°` / `elbow_flex = +73°` 是否在真机可达窗口内，离线判不了（URDF 的 ±180° 只是乐观上界），属「现场确认项（§10.8）」第 1 条。
+
+### zeros 现场标定
+
+前置：手臂已按上节的 C2b 摆到位（摆姿方式与安全见「安全前置」），本轮授权含只读观测。
+
+| 步 | 做什么 | 判据 / 依据 |
+| --- | --- | --- |
+| 1 | 摆姿：把六关节摆到 C2b 的形状（大臂竖直向上、小臂水平朝正前方、腕部顺直） | 上节逐关节目视判据；摆完人不要碰 |
+| 2 | 读数：按 §4.1 采一份 `capture` 指纹，`observation_state` 里有每个电机的 `<motor>.pos`（**归一化值**，键形如 `arm_left_shoulder_pan.pos`） | §4.1 的判据（exit 0、`robot_metadata.schema_version == 2`） |
+| 3 | 归一化 → tick：按 §4.1c 的同一条换算 `int(((v + 100) / 200) × (max − min) + min)`，`range_0_100` 用 `int((v / 100) × (max − min) + min)`；`max` / `min` 取该电机 metadata 的 `range_max` / `range_min` | `docs/s4-field-smoke.md:475`、`docs/s4-field-smoke.md:569` |
+| 4 | tick → 度：`motor_deg = (tick − mid) × 360 / (resolution − 1)`，`mid = (range_min + range_max) / 2` | 这是库观测侧的原式（`src/alohamini_cartesian/kinematics/joint_adapter.py:530`）。口算口径 **1 tick ≈ 0.0879° = 360/4096**（用 `resolution − 1 = 4095` 时 360/4095 = 0.08792°，差 0.02%，判读时忽略） |
+| 5 | 算 zero：`zero = q_target − sign × motor_deg_read`，每关节一次 | 适配器正向式的移项（`src/alohamini_cartesian/kinematics/joint_adapter.py:26`） |
+
+读数链一句话版：**归一化值 → tick（§4.1c 同式）→ 度（1 tick ≈ 0.0879° = 360/4096）→ 代入 `zero = q_target − sign × motor_deg_read`**。
+
+填表（本次为空白模板，不是实测值；按 `AGENTS.md` §3 缺失口径留空，**不得**填 0）：
+
+| 关节 | q_target（度，C2b） | motor_deg_read（度） | sign | zero（度） |
+| --- | --- | --- | --- | --- |
+| `shoulder_pan` | 0 | （未测） | （未定） | （未测） |
+| `shoulder_lift` | −72 | （未测） | （未定） | （未测） |
+| `elbow_flex` | +73 | （未测） | （未定） | （未测） |
+| `wrist_flex` | 0 | （未测） | （未定） | （未测） |
+| `wrist_yaw` | 0 | （未测） | （未定） | （未测） |
+| `wrist_roll` | 0 | （未测） | （未定） | （未测） |
+
+**sign 未定之前这张表算不出来**，所以顺序是：先摆姿 + 读数（本节）→ 再定 sign（下一节）→ 再回填 zero。读数与摆姿必须同一次：姿势一动，`motor_deg_read` 就作废。
+
+为什么不能先假定 sign：
+
+- **现场确认项：左臂 sign 现值在证据目录与 configs 中均无记录。** 已查 `/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/` 下 `s4-20261106/configs`、`s4-20261107/configs`、`s4-20261108/configs` 三个目录**全空**，全目录 `grep -E "sign|zero"` **无命中**。所以没有可继承的起始值，也没有历史对照可以「先验一下」。
+- 因此：**首次标定时先用 ±1° 单步法定 sign**（下一节），不得凭「机械上应该同向」之类的推断先填 ±1。
+
+### sign 判定
+
+做法：在参考位形（或任何安全位形）上，单轴发 **+1°** 小步，看**该轴自身的实测角**是增还是减——增则 `sign = +1`，减则 `sign = −1`（符号相对 URDF 正方向）。
+
+命令形态沿用 §7.1 / §10.5 已验证过的 `measure_latency.py --mode tracking`（`--joint <电机键> --delta-deg 1.0 --steps 1`，其余参数与 §7.1 那张参数表一致；不要照 §10.5 的 M1/M2 那样跑 10 步，本步只要一个方向信号）。看的是 tracking CSV 里该轴 `measured_deg` 相对基线是增还是减（§11 的 tracking CSV 列口径），不是肉眼看位移。
+
+单轴 +1° 的末端位移（离线 FK，C2b 位形）——决定「为什么不能靠肉眼判方向」：
+
+| 关节 | +1° 时末端原点位移 (mm) | +1° 时末端姿态转角 (度) |
+| --- | --- | --- |
+| `shoulder_pan` | 5.523 | 1.000 |
+| `shoulder_lift` | 5.393 | 1.000 |
+| `elbow_flex` | 5.040 | 1.000 |
+| `wrist_flex` | 1.608 | 1.000 |
+| `wrist_yaw` | 1.065 | 1.000 |
+| `wrist_roll` | **0.000** | 1.000 |
+
+`wrist_roll` 的 1° 步在末端位置上量不出来（0.000 mm，主轴穿过末端原点），若只看位移会把「动了」误判成「没动」甚至误判成「反向」。所以六轴的判据统一为**读该轴观测角的增减**，不读末端位移。
+
+填表（本次为空白模板，不是实测值）：
+
+| # | 关节 | 实测方向（增 / 减） | sign（+1 / −1） | 复测是否一致（第二次独立读数） |
+| --- | --- | --- | --- | --- |
+| 1 | `shoulder_pan` | （未测） | （未定） | （未测） |
+| 2 | `shoulder_lift` | （未测） | （未定） | （未测） |
+| 3 | `elbow_flex` | （未测） | （未定） | （未测） |
+| 4 | `wrist_flex` | （未测） | （未定） | （未测） |
+| 5 | `wrist_yaw` | （未测） | （未定） | （未测） |
+| 6 | `wrist_roll` | （未测） | （未定） | （未测） |
+
+与 zeros 的交叉校验（sign 判错时 zero 会系统性偏「两倍 `motor_deg_read`」，用它当自检）：
+
+- 记 `m = motor_deg_read`（同一姿势、同一轴）。sign 取 `+1` 时 `zero = q_target − m`；取 `−1` 时 `zero = q_target + m`。两者之差恒为 `2m`。
+- 于是：**同一姿势下按两种候选 sign 各算一次 zero，差值必须恰好等于 `2 × motor_deg_read`**（数值上应吻合到 0.01° 量级）。不吻合说明两次用的不是同一姿势的读数（或 read 值抄错），先回去重采，不要先改 sign。
+- 算例（占位数字，示例形态）：若 `q_target = −72°`、`m = +41.0°`，则 `sign = +1` 给 `zero = −113.0°`、`sign = −1` 给 `zero = −31.0°`，差 `82.0° = 2 × 41.0°`。
+- 反向读法：若现场最后算出的 zero 大得离谱（例如某个轴的 zero 绝对值超过 180°），先怀疑 sign 判反了，而不是先怀疑读数。
+
+### 自检（注入后跑 FK）
+
+两道闸，都过才算自检完成：
+
+| 闸 | 做什么 | 判据 |
+| --- | --- | --- |
+| (a) 构造闸 | 用拆好的四份文件喂 §10.7 的 ①a（`--limits-only`，只读、零发送） | 退出码 `0`，两侧六个关节都有窗口。sign 非 ±1、六关节缺一、文件没拆分，都在这一步暴露（`15` 或缺窗口） |
+| (b) 数值闸 | 同一姿势的读数 + 标定文件 → 按适配器观测侧公式算 `q_kinematic_deg`（`src/alohamini_cartesian/kinematics/joint_adapter.py:534`）→ 与 C2b 的 `q_target` 比 → 再用 URDF 的 FK 算末端位置 | `q_kinematic_deg` 与 `q_target` 之差 ≤ 3°（目视量级）；末端位置落进下表口径 |
+
+末端量级核对表（期望值 = C2b 的离线 FK；量具是卷尺 / 角尺 / 目视，**不是毫米级判据**）：
+
+| 项 | 期望值（离线 FK，未经实测） | 允许偏差口径 | 不符时先查什么 |
+| --- | --- | --- | --- |
+| 末端高度（基座系 `+Z`） | +0.234 m | ±0.05 m 量级 | 先查大臂段是否真竖直（C2b 判据 2）；再查 `shoulder_lift` / `elbow_flex` 的 zero 是否用同一姿势的读数算的 |
+| 末端水平距离（正前方） | 0.316 m | ±0.05 m 量级 | 先查小臂段是否真水平；再查 `elbow_flex` 的 sign 是否判反（判反会让 zero 偏 `2m`） |
+| 末端侧向偏移（左右） | 0.001 m（≈ 0） | ≤ 0.03 m | 基本只由 `shoulder_pan` 的 zero 决定：pan 零位偏了，整条臂绕竖轴转，侧向最先偏离 |
+| 末端距基座原点 | 0.394 m | ±0.05 m 量级 | 上面三项都对但这一项不对，说明量点不是 `left_Fixed_Jaw`（末端连杆原点），先统一量点 |
+
+±0.05 m 这个口径的来由：离线算「六关节同时偏 +3°」→ 末端位移 32.78 mm、「同时偏 −3°」→ 32.70 mm。目视判姿到位的精度就是几度量级，所以核对口径只能是分米里的半格，**不是毫米级**。毫米级判据是 §10.7 的 ④ 卷尺实测项，本表替代不了它。
+
+本项通过只说明「sign / zero 与参考位形自洽、量级对得上」，不构成 FK 绝对精度证据：几何仍锚在零实测的 URDF 上。
+
+### 右臂流程
+
+右臂把「参考位形 → zeros → sign 判定 → 自检」四步**独立**跑一遍：独立摆姿（右臂自己摆到 C2b 的形状）、独立读数（`arm_right_*` 键）、独立定 sign（六轴各一次单步）、独立算 zero、独立自检。
+
+| 允许 | 禁止 |
+| --- | --- |
+| 参考位形用同一套目标角（C2b 是 URDF 几何，两侧同模型） | 直接把左臂的 `signs` / `zeros` 抄进右臂文件 |
+| 用 sign 判定法实测确认某轴与左臂一致后，沿用该轴的左臂值 | 以「同型号机械、应该一样」为理由沿用，不附实测 |
+| 右臂沿用左臂的 URDF 模型（库的设计，`src/alohamini_cartesian/kinematics/joint_adapter.py:76`） | 把「模型复用」当成「标定值复用」——两者不是一回事 |
+
+例外条款只有一条：若某轴右臂实测 sign 与左臂一致，可以在右臂标定文件里写同值，但**证据里必须写明「实测一致」并附两次独立读数**（左臂一次、右臂一次，各自带 STAMP 与电机键）。没有这两份读数就沿用 = 伪标定。
+
+侧别相关的三处必须对上，缺一处就把左臂文件送进了右臂命令：
+
+| 位置 | 右臂取值 |
+| --- | --- |
+| 标定文件 `side` 字段 | `"right"` |
+| 拆分文件名 | `10.8-signs-right-$STAMP.json` / `10.8-zeros-right-$STAMP.json` |
+| §10.7 命令参数 | `--signs-json` / `--zeros-json` 指向上面那两份，必要时再显式给 `--side right` |
+
+### 安全前置
+
+| 项 | 要求 | 出处 |
+| --- | --- | --- |
+| Host 启停 | 按 §6.1 的三步法启、按 §8.1 停；**停 Host 不等于失力**，摆姿前先确认扭矩状态 | §6.1、§8.1 |
+| 单轴单次 ≤ 2° | sign 判定用 **1°** 小步（`--delta-deg 1.0 --steps 1`），且全程不超过 step gate 的 `max_joint_step_deg = 2.0` | `src/alohamini_cartesian/control/controller.py:133` |
+| 手臂低位或有承托 | C2b 把大臂抬到竖直向上，摆姿与保持期间**必须有承托或人手不离开**；判为不安全时改用 C2（小臂朝另一侧）或改在低位判 sign，参考位形的目视判据随之重算 | §7.1 开跑勾选单 |
+| 断电开关在人手上 | sign 判定会真实下发命令，属运动档；远程无人在场**不跑**「sign 判定」那一节 | §7.1 开跑勾选单 |
+| 授权范围 | 摆姿 + 读数属只读观测档（§4.1 的 `capture`）；sign 判定属运动档，需现场运动授权 | 第 0 节的授权表 |
+| 摆姿本身 | 摆姿要动关节（释放扭矩后手摆，或人手扶着摆），使能瞬间按当前位置闭环，可能跳一下；`Torque_Enable=1` 的写入者至今未定位，所以摆姿期间人手不离开、末端不放重物 | `TODO.md` §3.1「识别 `Torque_Enable=1` 的写入者」那行 |
+
+### 现场确认项（§10.8）
+
+| # | 确认项 | 怎么确认 | 确认不了怎么办 |
+| --- | --- | --- | --- |
+| 1 | 参考位形 C2b 在该侧真能摆到位（`shoulder_lift = −72°` / `elbow_flex = +73°` 是否在可达窗口内） | 摆姿时目视逐条对「参考位形」那一节的判据；摆不动或顶住就是不可达 | 改 C2（小臂朝 `+Y`）或整体降级为「低位 L 形」并重算该位形的 FK 与表格；不可达那一侧记「位形不可达」，不得硬掰 |
+| 2 | 摆好的姿势有没有碰撞 / 缆线绷紧 | 目视 + 手摸线束；末端与机身、桌面、升降柱留出可见间隙 | 有碰撞风险就换位形或换侧，不记录本次标定 |
+| 3 | 读数命令可用性（§4.1 的 `capture` 在本次环境能跑通） | `capture` exit 0、`robot_metadata.schema_version == 2`、`observation_state` 里六关节键齐全 | 跑不通就记「本次无读数」，**不得**用上一次姿势的旧读数顶替（姿势已变，读数作废） |
+| 4 | 左臂 sign 起始值无记录，必须用单步法 | 证据目录 `s4-20261106` / `s4-20261107` / `s4-20261108` 三份 `configs` 全空，全目录按 `sign` / `zero` 两个词 grep 无命中（本节已查） | 没有起始值这件事本身不是阻塞：按「sign 判定」那一节六轴各做一次单步法即可；**不得**先填一个「看起来合理」的 sign |
+| 5 | sign 与 zero 是否互相自洽 | 同一姿势下按两种候选 sign 各算一次 zero，差值应恰好 `2 × motor_deg_read`（「sign 判定」那一节的交叉校验） | 不吻合就重采这一轴的读数，不要改 sign 去迁就 |
+| 6 | 标定文件的拆分与侧别对不对 | 拆出的两份是扁平六键（用 `jq` 求键数为 6）；`side` 字段与文件名、`--signs-json` / `--zeros-json` 的指向三者一致 | 任一处不一致就重拆，不带着这个疑点往下跑 §10.7 的 ①a |
+| 7 | 与 firmware `homing_offset` / `drive_mode` 不得混用 | 本节文件里的 `zero` 是**度**、`sign` 是 ±1；不写、不读 `homing_offset` / `drive_mode`，也不拿它们当对照值 | 若现场发现某轴 `drive_mode` 不是 0，先停：那会改变归一化读数的符号（§4.1c 已写明），读数链要重新界定才能用 |
+| 8 | 右臂不得复制左臂值 | 右臂文件从右臂自己的读数与单步法来；例外条款要求「实测一致」+ 两次独立读数 | 拿不出两次独立读数就重做右臂的 sign 判定，不得沿用 |
+| 9 | 本节不产出任何 V 编号的实机证据 | 本节产出的是两份标定文件 + 自检记录；V01 的 `move_to` 实机证据仍要按 §10.7 跑 | 记「标定已有、`move_to` 未跑」，别把标定记录当 `move_to` 证据 |
 
 ## 11 产物与归档
 
