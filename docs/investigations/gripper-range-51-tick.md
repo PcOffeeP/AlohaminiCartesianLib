@@ -93,5 +93,5 @@
 - 不影响 A 阶段：夹爪不是运动学关节（`kinematics/joint_adapter.py:54-55`、`:64-65` 明确 gripper 不进关节向量）。
 - 不影响 Gate F：`range_max > range_min`、换算字段齐全，第二段不会因这件事拒绝。既有测试对这一条没有预期变化。
 
-现场只读确认步骤见 `docs/field-ops/10-health-baseline.md` 第 4.2 节「左夹爪 ID7 只读确认」。
+现场只读确认步骤见 `docs/field-ops/runbook/3-health.md#sec-4-2` 第 4.2 节「左夹爪 ID7 只读确认」。
 

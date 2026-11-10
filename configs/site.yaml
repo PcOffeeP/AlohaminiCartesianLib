@@ -16,9 +16,9 @@ left_port: /dev/am_arm_follower_left
 right_port: /dev/am_arm_follower_right
 # 未实测，留默认值：本机有 20 个 /dev/video* 节点，但没有「相机名 → 设备路径」的实测映射。
 cameras: {}
-# 现场部署值 3：Pi 上 config_alohamini.py 第 110 行（AlohaMiniHostConfig 源码默认，该项无命令行入口），见 docs/field-ops/10-health-baseline.md 第 4.3 节。
+# 现场部署值 3：Pi 上 config_alohamini.py 第 110 行（AlohaMiniHostConfig 源码默认，该项无命令行入口），见 docs/field-ops/runbook/1-prepare.md 第 4.3 节。
 observation_request_window: 3
-# 现场部署值 1000：Pi 上 config_alohamini.py 第 122 行，见 docs/field-ops/10-health-baseline.md 第 4.3 节。
+# 现场部署值 1000：Pi 上 config_alohamini.py 第 122 行，见 docs/field-ops/runbook/1-prepare.md 第 4.3 节。
 watchdog_timeout_ms: 1000
-# 现场部署值 50：Pi 上 config_alohamini.py 第 125 行，见 docs/field-ops/10-health-baseline.md 第 4.3 节。
+# 现场部署值 50：Pi 上 config_alohamini.py 第 125 行，见 docs/field-ops/runbook/1-prepare.md 第 4.3 节。
 max_loop_freq_hz: 50

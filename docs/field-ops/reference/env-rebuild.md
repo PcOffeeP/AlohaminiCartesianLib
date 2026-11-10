@@ -1,40 +1,8 @@
-## 5 零运动测量（不动机器人）
+# 隔离环境与 PYTHONPATH 重建（原 §5.3）
 
-三条命令都不构造任何运动指令：`measure --mode rtt` 只采样观测。三条都过 `run`：stdout 与 stderr 合并落到 `$S4DIR/stdout/<步骤号>-$STAMP.log`，退出码落到同名 `.exit`。
+本文件管什么：主环境没装 `lerobot` 时要用的隔离环境怎么从零重建、`PYTHONPATH` 两段各指到哪、哪些步实测过哪些没实测。现场跑 `measure_latency.py` 解释器不对时，从这里照抄。
 
-### 5.1 部署形态（请求 30 Hz、窗口 3）
-
-```bash
-run 5.1-rtt-deploy env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python benchmarks/alohamini_io/measure_latency.py --host "$PI_HOST" --mode rtt --rate-hz 30 --request-window 3 --samples 500 --csv "$S4DIR/rtt/rtt-deploy-$STAMP.csv"
-```
-
-判据：exit 0，`$S4DIR/rtt/rtt-deploy-$STAMP.csv` 写出且有数据行。返回 `3` 是连接问题，按第 12 节处置。
-
-解释器不用 `uv run --no-sync python`：主环境没装 `lerobot`，那样写会以 exit `3`、`No module named 'lerobot'` 失败（2026-11-05 实测）。隔离环境与 `PYTHONPATH` 快照的取法见第 5.3 节的「解释器与 `PYTHONPATH`」小节。
-
-### 5.2 RTT 形态（请求 1000 Hz、窗口 1）
-
-```bash
-run 5.2-rtt-net env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python benchmarks/alohamini_io/measure_latency.py --host "$PI_HOST" --mode rtt --rate-hz 1000 --request-window 1 --samples 500 --csv "$S4DIR/rtt/rtt-net-$STAMP.csv"
-```
-
-解释器与 `PYTHONPATH` 的来由同 5.1（见第 5.3 节）；`uv run --no-sync python` 在主环境会以 exit `3` 失败，不是代码问题。
-
-判据：`exit 0` 且 CSV 有数据行。
-
-若返回 `9`：该时点这份 vendor 的 client 不发布 `latest_request_timing`，rtt 无法测量。这是设计行为，按第 10 节记录，不当故障、不重试改参数。升级后 HEAD `6aee1f81` 提供该面，实测 exit 0。
-
-在 Pi 上执行时，必须把 `PYTHONPATH` 指向被测代码，否则会 import 到已安装的旧版本。采集脚本的 `default_client_factory()` 直接 `import lerobot`，不经过本库 adapter。不设 `PYTHONPATH` 时有两种表现：指纹计时字段全 `null`，或 `measure --mode rtt` 返回退出码 `9`。两种都看着像代码缺陷，实际原因是跑错了代码。
-
-两条读法必须先定下来：
-
-- `--rate-hz` 低于 200 时，`age_s` 的主体是响应在客户端 socket 里等下一次 poll 的空闲时间，所以它测的是「端到端观测滞后」，不能当网络往返时间读。要测 RTT 必须用 `--rate-hz 1000`。脚本在低于 200 Hz 时自己打警告；打了警告不等于失败，但它封住了这一组数值当 RTT 读的用法。
-- `--request-window 1` 是 RTT 形态（无预取等待可减）；`--request-window 3` 是部署形态（控制栈实际用的窗口）。两者不可混为一谈，也不可互相替代。
-
-`--samples` 默认是 `500`，本文照样写出来，便于现场比对命令原文。参考值（2026-10-22）：部署形态组 `achieved_rate_hz=30.1`（请求 30 Hz）；RTT 形态组 `achieved_rate_hz=49.0`（请求 1000 Hz）。实际到达率受 Host 主循环节拍限制。
-
-产物：`rtt/rtt-deploy-$STAMP.csv`、`rtt/rtt-net-$STAMP.csv`，以及 `stdout/5.1-rtt-deploy-*`、`stdout/5.2-rtt-net-*`。
-
+<a id="sec-5-3"></a>
 ### 5.3 跨机 RTT（PC → Pi 真实网段）
 
 背景一句：2026-10-25 时的两份 rtt CSV 均为 Pi 本机回环（`host=127.0.0.1`），量不到 PC 到 Pi 这一段；2026-11-05 已补跨机实测（结果见 §9 与 `docs/field-results.md`）。跨机这一次必须换解释器：用仓库内的隔离环境 `.venvs/alohamini-lerobot/bin/python`，因为主环境没有 `lerobot`，且按 `docs/ADR.md` D8 主环境要停在 numpy 2.3.x。

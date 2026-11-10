@@ -268,7 +268,7 @@ def test_template_and_site_load_together_and_the_three_fields_follow_site_yaml()
 
     两份 YAML 分工不同，不是同一份东西：``template.yaml`` 是随库分发的通用默认（取自
     ``overlay.py`` 的 ``AlohaMiniSettings``），``site.yaml`` 是本机现场值，也就是
-    ``docs/field-ops/10-health-baseline.md`` 第 4.3 节写的那个口径——现场数字以 ``configs/site.yaml``
+    ``docs/field-ops/runbook/1-prepare.md`` 第 4.3 节写的那个口径——现场数字以 ``configs/site.yaml``
     为唯一出口，文档不再另存一份。
 
     所以期望值**不在这里硬编码、也不借 ``SITE_VALUES``**（那是「取值被冻结」的另一条契约，

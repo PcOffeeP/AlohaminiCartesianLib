@@ -1,7 +1,12 @@
+# 3 只读体检（原 §4，不含 §4.3）
+
+本文件管什么：不动机械臂的只读体检——取 lerobot 版本、capture 指纹、校准字段与断电期间移位比对、左夹爪与全 18 电机寄存器，到库真机 dry-run。
+
 ## 4 只读确认（不动机器人）
 
 本节全部是只读动作：4.1 只请求观测，4.1b 只读 JSON，4.2 只读伺服寄存器（Host 已停、串口空闲），4.3 只在 Pi 上读代码与配置。
 
+<a id="sec-4-1b-lerobot"></a>
 ### 4.1b-lerobot-version 取 Pi 上 lerobot 版本（只读，先于 4.1 执行）
 
 4.1 的指纹 JSON 要记 Pi 端 Host 用的 lerobot 版本；Mac 上没装 lerobot，所以先从 Pi 取，4.1 时把取到的值传进去。
@@ -21,6 +26,7 @@ echo "PI_LEROBOT_VERSION=$PI_LEROBOT_VERSION"
 
 产物：`stdout/4.1b-lerobot-version-$STAMP.{cmd,log,exit}`。
 
+<a id="sec-4-1"></a>
 ### 4.1 capture 指纹
 
 ```bash
@@ -70,6 +76,7 @@ ssh "$PI" 'cd /tmp && PYTHONPATH=/home/pi5/lerobot_alohamini/src ~/miniconda3/en
 
 v2 宿主（HEAD `6aee1f81`）上 18 个电机的 `homing_offset` 与 `resolution` 全部有值，无 `null`。升级前的 v1 宿主给每个电机只写 6 个键，没有这两个字段。
 
+<a id="sec-4-1b"></a>
 ### 4.1b 校准字段齐全性探测（只读）
 
 先读 4.1 的 JSON，逐电机看校准字段是否齐全。这条不动机器人，只读盘上的文件：
@@ -108,6 +115,7 @@ PY
 
 产物：`stdout/4.1b-probe-*`。历史同类产物是 `stdout/5.1-probe21-20261025T094457Z.log`，输出为 18 个电机逐项 `missing=[] bad=[]`，即第二段未触发。
 
+<a id="sec-4-1c"></a>
 ### 4.1c 断电期间移位检查：标定字段与位置分开比对（只读）
 
 什么时候跑：**上一轮收工断电 → 本轮上电、Host 起来之后**，第一件只读动作就是这一节。它回答两个互不混同的问题：
@@ -115,20 +123,20 @@ PY
 1. 标定有没有被改过（`Min_Position_Limit` / `Max_Position_Limit` / `Homing_Offset` / `Drive_Mode` 一类）。任一不等 = **事故**，不是滑移。
 2. 断电期间关节有没有滑移（位置变了、标定没变）。
 
-前置：第 1 节 P0–P5 全过；Host 常驻（`capture` 要连 5556）；本轮授权含只读与启停 Host。本节不动机器人。
+前置：[§1](1-prepare.md#sec-1) P0–P5 全过；Host 常驻（`capture` 要连 5556）；本轮授权含只读与启停 Host。本节不动机器人。
 
 #### 第一步：采一份新指纹
 
-沿用第 4.1 节的 `capture`，产物名换掉，避免覆盖基线：
+沿用 [§4.1](#sec-4-1) 的 `capture`，产物名换掉，避免覆盖基线：
 
 ```bash
 run 4.1c-capture uv run --no-sync python benchmarks/alohamini_io/capture_robot_fingerprint.py --host "$PI_HOST" --out "$S4DIR/capture/fingerprint-postpower-$STAMP.json"
 ```
 
-命名口径：过程指纹固定 `fingerprint-$STAMP.json`，收尾断电前固定 `fingerprint-postpower-$STAMP.json`，两者后缀不同、互不覆盖；同一 STAMP 下还要采 §4.1c 的一份时，另存 `fingerprint-postpower-$STAMP.4.1c-preserved.json` 并在台账点名（2026-11-08 现场即此情形）。
+命名口径：过程指纹固定 `fingerprint-$STAMP.json`，收尾断电前固定 `fingerprint-postpower-$STAMP.json`，两者后缀不同、互不覆盖；同一 STAMP 下还要采 [§4.1c](#sec-4-1c) 的一份时，另存 `fingerprint-postpower-$STAMP.4.1c-preserved.json` 并在台账点名（2026-11-08 现场即此情形）。
 
-判据：exit 0，`robot_metadata.schema_version` 为 `2`。**本节故意不传 `--lerobot-version`**：那个变量由 §4.1b-lerobot-version 导出，而本节常被当成「上电后第一件事」跑；传空串会被 `capture_robot_fingerprint.py:310-315` 以 exit 2 拒（原文 `--lerobot-version must not be empty`）。本节只判 `schema_version`，不判版本字段，所以整条标志省掉最稳；`lerobot_version` 记成 `null` 是诚实缺失，不是失败（口径同 §4.1）。
-若主环境没有 `lerobot` 而以 **exit 3** 结束，改用第 4.1 节「capture 在 Pi 侧跑」的同一形态（Pi 侧解释器 + `PYTHONPATH=/home/pi5/lerobot_alohamini/src`），产物再用 `scp` 取回 `$S4DIR/capture/`。拿到 exit 2 说明命令本身写错了（多半是给了一个空变量），先修命令，别当成设备问题。
+判据：exit 0，`robot_metadata.schema_version` 为 `2`。**本节故意不传 `--lerobot-version`**：那个变量由 [§4.1b-lerobot-version](#sec-4-1b-lerobot) 导出，而本节常被当成「上电后第一件事」跑；传空串会被 `capture_robot_fingerprint.py:310-315` 以 exit 2 拒（原文 `--lerobot-version must not be empty`）。本节只判 `schema_version`，不判版本字段，所以整条标志省掉最稳；`lerobot_version` 记成 `null` 是诚实缺失，不是失败（口径同 [§4.1](#sec-4-1)）。
+若主环境没有 `lerobot` 而以 **exit 3** 结束，改用 [§4.1](#sec-4-1)「capture 在 Pi 侧跑」的同一形态（Pi 侧解释器 + `PYTHONPATH=/home/pi5/lerobot_alohamini/src`），产物再用 `scp` 取回 `$S4DIR/capture/`。拿到 exit 2 说明命令本身写错了（多半是给了一个空变量），先修命令，别当成设备问题。
 
 #### 第二步：一行能抄的比对命令
 
@@ -267,18 +275,19 @@ run 4.1c-postpower-diff uv run --no-sync python "$S4DIR/stdout/4.1c-postpower-di
 
 三条口径要点，写记录时必须带上：
 
-- **Punch 不在指纹里**。Feetech 的 Punch（起步力，寄存器名 `Minimum_Startup_Force`）只由 §4.2 的 `EXTRA_REGS` 读到，`robot_metadata.motors` 没有这个字段。要比 Punch，先跑 §4.2 并把两轮读数并列，不能拿指纹冒充。
+- **Punch 不在指纹里**。Feetech 的 Punch（起步力，寄存器名 `Minimum_Startup_Force`）只由 [§4.2](#sec-4-2) 的 `EXTRA_REGS` 读到，`robot_metadata.motors` 没有这个字段。要比 Punch，先跑 [§4.2](#sec-4-2) 并把两轮读数并列，不能拿指纹冒充。
 - **B 组只覆盖 14 个臂电机**。指纹 `observation_state` 的观测键里 `lift_axis` 是 `lift_axis.height_mm`（进 C 组），底盘三轴只有速度键、没有位置键（本机指纹里 `base_left_wheel` / `base_back_wheel` / `base_right_wheel` 在 `observation_state` 里没有键）。所以「18 电机位置比对」这个说法要写清是「14 个臂电机按 tick 比 + 升降轴按 mm 比 + 底盘三轴只有速度」。
 - **左夹爪的 tick 分辨率极粗**：`range_0_100` 下 `range_min..range_max` 是 `2021..2072`（51 tick），归一化值每变 1 单位约 0.51 tick，小位移会在 tick 上被吞掉。夹爪读数只能当「有没有大位移」看，不能当精细滑移证据。
 
 产物：`capture/fingerprint-postpower-$STAMP.json`、`stdout/4.1c-postpower-diff.py`、`stdout/4.1c-selfcheck-$STAMP.txt`、`stdout/4.1c-postpower-diff-$STAMP.txt`，以及每步的 `.cmd` / `.log` / `.exit` 三件套。
 
 
+<a id="sec-4-2"></a>
 ### 4.2 左夹爪 ID7 与全 18 电机只读确认
 
-前置条件：第 1 节 P0–P5 全过；按本节「现场确认项」表的 `3.7b2-serial-links` 确认两个串口别名在（`/dev/am_arm_follower_left` → `ttyACM0`、`/dev/am_arm_follower_right` → `ttyACM1`）；Host 已停（串口被 Host 占着时读不到）；授权记录里写明了「向 Pi 写文件」与「停 Host」。
+前置条件：[§1](1-prepare.md#sec-1) P0–P5 全过；按本节「现场确认项」表的 `3.7b2-serial-links` 确认两个串口别名在（`/dev/am_arm_follower_left` → `ttyACM0`、`/dev/am_arm_follower_right` → `ttyACM1`）；Host 已停（串口被 Host 占着时读不到）；授权记录里写明了「向 Pi 写文件」与「停 Host」。
 
-为什么别名要单独核：第 3.7 节的 `ls -l /dev/serial/by-id/` 只列出 by-id 名（2026-11-06 实测 `usb-1a86_USB_Single_Serial_5B14029263-if00 → ../../ttyACM0`、`…5B14111703-if00 → ../../ttyACM1`，`stdout/3.7b-serial-pi-20261106T062506Z.log`），从这份列表核不出 `am_arm_follower_*` 这两个别名是否存在、指向哪个口——两套名字不能互相代替。
+为什么别名要单独核：[§3.7](1-prepare.md#sec-3) 的 `ls -l /dev/serial/by-id/` 只列出 by-id 名（2026-11-06 实测 `usb-1a86_USB_Single_Serial_5B14029263-if00 → ../../ttyACM0`、`…5B14111703-if00 → ../../ttyACM1`，`stdout/3.7b-serial-pi-20261106T062506Z.log`），从这份列表核不出 `am_arm_follower_*` 这两个别名是否存在、指向哪个口——两套名字不能互相代替。
 
 背景一句：离线核对（`docs/field-results.md`「离线核对（无新采集）· 左右夹爪行程差异」）发现 `arm_left_gripper` 的 `range` 是 2021-2072，只有 51 tick（`range_0_100` 下 4.48°），而 `arm_right_gripper` 是 2010-3479，1469 tick（129.14°）。两侧同为 `sts3250`、`drive_mode` 同为 0，根因未确认。`docs/ADR.md` D14 已定本轮不重标定，本步只做只读确认，判成因落在哪一侧。
 
@@ -302,10 +311,10 @@ MOTORS = {
 执行方式有三件事，其中两件已定值，一件仍需现场确认：
 
 1. 投递方式：有「向 Pi 写文件」授权就走下面的 scp 支；没有授权就走 stdin 支（不向 Pi 落盘）。
-2. 解释器：`/home/pi5/miniconda3/envs/lerobot_alohamini/bin/python`，即 Host 自己用的解释器（第 6.1 节启动命令原文，上次现场已验证存在）。
-3. 端口别名：脚本里 `PORT = "/dev/am_arm_follower_left"` 是别名，原脚本注释写它指向 `ttyACM0`。第 3.7 节的输出若显示别名与实际节点不同，按实际改。
+2. 解释器：`/home/pi5/miniconda3/envs/lerobot_alohamini/bin/python`，即 Host 自己用的解释器（[§6.1](2-host.md#host-start) 启动命令原文，上次现场已验证存在）。
+3. 端口别名：脚本里 `PORT = "/dev/am_arm_follower_left"` 是别名，原脚本注释写它指向 `ttyACM0`。[§3.7](1-prepare.md#sec-3) 的输出若显示别名与实际节点不同，按实际改。
 
-把改好的脚本放到 Pi 的 `/tmp/` 属于向 Pi 写文件，需在第 3.9 节的授权记录里写明。
+把改好的脚本放到 Pi 的 `/tmp/` 属于向 Pi 写文件，需在 [§3.9](1-prepare.md#sec-3) 的授权记录里写明。
 
 本脚本 2026-11-05 已在真机执行两次：左臂、右臂各一次，两次都是 `EXIT_CODE: 0`（`stdout/4.2-gripper-regs-*`、`stdout/4.2-gripper-regs-right-*`）。实测读数：左臂 ID7 `Min_Position_Limit = 2021` / `Max_Position_Limit = 2072`，命中判据第一支（固件限位生效，成因在标定值，D14 维持不重标定）；右臂 ID7 `2010` / `3479`；两只都是 `Torque_Enable=0`、`Lock=1`。可比性限定：本轮 `Torque_Enable=0` 与 2026-10-25 读到的 ID1/2/3/6 `Torque_Enable=1` 不可比——测量对象不同（本轮读的是夹爪 ID7）。
 
@@ -540,9 +549,9 @@ MOTORS = {
 
 同时把存活探测的**两处**（probe 与波特率重试循环里那两次 `read_one`）都从 `"shoulder_pan"` 改成 `"arm_left_shoulder_pan"`（右总线那份对应改成 `"arm_right_shoulder_pan"`）：电机名改了，探测键必须跟着改，否则第一行就 `KeyError`。
 
-跑法照 §4.2 第一到第三步（Mac 上建脚本 → `scp` 或 stdin 投递 → 用 Host 同环境解释器跑），产物名分开：
+跑法照 [§4.2](#sec-4-2) 第一到第三步（Mac 上建脚本 → `scp` 或 stdin 投递 → 用 Host 同环境解释器跑），产物名分开：
 
-投递沿用 §4.2 第二步的两条路径之一（有「向 Pi 写文件」授权就 `scp`，没有就走 stdin）：
+投递沿用 [§4.2](#sec-4-2) 第二步的两条路径之一（有「向 Pi 写文件」授权就 `scp`，没有就走 stdin）：
 
 ```bash
 run 4.2-all18-scp scp "$S4DIR/stdout/4.2-all18-left-$STAMP.py" "$PI:/tmp/4.2-all18-left-$STAMP.py"
@@ -571,126 +580,15 @@ run 4.2-all18-right ssh "$PI" "~/miniconda3/envs/lerobot_alohamini/bin/python /t
 | --- | --- | --- |
 | 左 / 右总线别名的实际指向（复核） | `run 3.7b2-serial-links ssh "$PI" 'ls -l /dev/am_arm_follower_left /dev/am_arm_follower_right'` | 判据：两个别名都存在且分别指向 `ttyACM0` / `ttyACM1`，与 `configs/site.yaml` 的 `left_port` / `right_port` 一致。2026-11-06 实测 `left → ttyACM0`、`right → ttyACM1`（`stdout/3.7b2-serial-links-20261106T062506Z.log`）；换机、重插、换 USB 口后需复核 |
 | 左总线上 ID8–11 是否在线 | 本节左总线那份日志里 `base_*` / `lift_axis` 的 `Model_Number` 是否回读到 | 读到 = 与源码一致；读不到 = 记现象原文，暂按「这台的底盘 / 升降接在别处」追查，不改脚本去猜端口 |
-| vendor Host 启动输出里的端口 | Host 启动日志原文（§6.1 的启动命令骨架） | 若出现别的串口名，把原文抄进记录 |
+| vendor Host 启动输出里的端口 | Host 启动日志原文（[§6.1](2-host.md#host-start) 的启动命令骨架） | 若出现别的串口名，把原文抄进记录 |
 | 底盘三轴与升降是否带电 | 本节读到的 `Torque_Enable` | 三个轮子与 `lift_axis` 各自的 `Torque_Enable` 值 |
 
 产物：`stdout/4.2-all18-left-$STAMP.{cmd,log,exit}`、`stdout/4.2-all18-right-$STAMP.{cmd,log,exit}` 与两份脚本副本 `stdout/4.2-all18-*-$STAMP.py`。
 
-### 4.3 部署取值核对
-
-前置条件：Host 在跑（要读它的启动命令行）；不动机器人。
-
-#### 三个数值字段用命令取
-
-下面五条都在 Pi 侧跑：
-
-```bash
-run 4.3a-host-args ssh "$PI" 'pgrep -af alohamini'
-run 4.3a2-host-cmdline ssh "$PI" 'pid=$(pgrep -f alohamini_host.py | head -1); echo "pid=$pid"; [ -n "$pid" ] && ps -o pid,cmd -p "$pid" && tr "\0" " " < /proc/$pid/cmdline; echo'
-run 4.3b-host-config ssh "$PI" 'grep -rnE --include="*.py" --exclude-dir=__pycache__ "observation_request_window|watchdog_timeout_ms|max_loop_freq_hz" ~/lerobot_alohamini/src/lerobot/robots/alohamini/ | head -20'
-run 4.3c-config-args ssh "$PI" 'grep -n "add_argument" ~/lerobot_alohamini/src/lerobot/robots/alohamini/alohamini_host.py'
-run 4.3d-config-classes ssh "$PI" 'sed -n "95,145p" ~/lerobot_alohamini/src/lerobot/robots/alohamini/config_alohamini.py'
-```
-
-`4.3a2` 的两条配套判断规则：
-
-- `ps -o cmd` 的输出里必须出现 `python`，否则说明 Host 未运行、取到的是别的东西。此时该项记为「未取到」，不要当作实际启动参数。
-- 不要用 `pgrep -f alohamini`：2026-10-25 实测它会匹配到 ssh 远端那条 `bash -c …` 自己（当时 `pid=2060`），`/proc/$pid/cmdline` 读到的是探针自己的命令。必须写 `alohamini_host.py`。
-
-`4.3b` 的 `--include="*.py" --exclude-dir=__pycache__` 不能去掉：按目录 grep 会命中 `__pycache__` 的 `.pyc`，输出里多出 `grep: …: binary file matches` 并占掉 `head -20` 的名额（2026-10-25 实测混进 3 行）。
-
-`4.3c` 用来确认这三个字段有没有命令行入口。实测只有 5 处 `add_argument`（`--robot_model`、`--no_follower`、`--profile_timing`、`--camera-stream`、`--camera-stream-port`），都不涉及这三个字段。
-
-`4.3d` 用来看清默认值属于哪个 dataclass。实测 `AlohaMiniHostConfig` 与 `AlohaMiniClientConfig` 各有一个 `observation_request_window`（`config_alohamini.py:98` 与 `:123`），取 Host 那个。
-
-取值规则：
-
-- 先用 `4.3a2` 看实际启动命令行里有没有覆盖。当前 Pi 的 vendor 版本没有这三项的命令行入口，因此实际生效值等于 `AlohaMiniHostConfig` 的源码默认值，用 `4.3b` 取。
-- 将来厂商版本若新增入口，以 `4.3a2` 的实际输出为准。
-- 写进现场 YAML 的必须是「实际生效的那个值」，并在 `$S4DIR/stdout/` 里留下取得它的命令（`4.3a`–`4.3e-*.cmd`）与输出（`4.3a`–`4.3e-*.log`）。
-
-2026-10-25 结论：Host 实际启动命令为 `/home/pi5/miniconda3/envs/lerobot_alohamini/bin/python -m lerobot.robots.alohamini.alohamini_host --robot_model alohamini2pro`，不含任何覆盖这三个字段的参数，所以源码默认值就是实际生效值。
-
-#### 两份 YAML 的字段与分工
-
-字段名以 `src/alohamini_cartesian/config/overlay.py` 为准：
-
-| 字段 | 类型 | 校验规则 | 库内默认值 |
-| --- | --- | --- | --- |
-| `robot_model` | 非空字符串 | 空串抛 `ConfigError` | `alohamini1` |
-| `left_port` | 非空字符串 | 空串抛 `ConfigError` | `/dev/ttyUSB0` |
-| `right_port` | 非空字符串 | 空串抛 `ConfigError` | `/dev/ttyUSB1` |
-| `cameras` | 映射，名到字符串 | 非映射或值非字符串抛 `ConfigError` | `{}` |
-| `observation_request_window` | 整数 | 必须是 `int`（`bool` 被拒），不小于 1 | `1` |
-| `watchdog_timeout_ms` | 整数 | 必须是 `int`（`bool` 被拒），不小于 1 | `500` |
-| `max_loop_freq_hz` | 整数 | 必须是 `int`（`bool` 被拒），不小于 1 | `50` |
-
-未知键抛 `ConfigError`，不静默忽略。
-
-模板文件写到 `"$S4DIR/configs/template.yaml"`。下面每个值都取自 `overlay.py` 的 `AlohaMiniSettings` 默认值，可以直接落盘：
-
-```yaml
-robot_model: alohamini1
-left_port: /dev/ttyUSB0
-right_port: /dev/ttyUSB1
-cameras: {}
-observation_request_window: 1
-watchdog_timeout_ms: 500
-max_loop_freq_hz: 50
-```
-
-| 文件 | 是什么 | 三个数值字段 |
-| --- | --- | --- |
-| `configs/template.yaml` | 随库分发的通用默认，换机器可原样使用 | `1` / `500` / `50`，取自 `src/alohamini_cartesian/config/overlay.py` 的 `AlohaMiniSettings` 默认值 |
-| `configs/site.yaml` | 本机现场值，即 Host 进程实际生效的那份 | 数字本身以 `configs/site.yaml` 为准，本节不复制一份当权威 |
-
-`configs/site.yaml` 的注释里写「见 `docs/field-ops/10-health-baseline.md` 第 4.3 节」，指的就是本节。
-
-三个数值字段的来路（只记「这些数字怎么来的」，取值以 `configs/site.yaml` 为准）：
-
-| 字段 | 依据（来路） |
-| --- | --- |
-| `observation_request_window` | `config_alohamini.py:98`（`AlohaMiniHostConfig` 源码默认）；该项无命令行入口 |
-| `watchdog_timeout_ms` | `config_alohamini.py:110` |
-| `max_loop_freq_hz` | `config_alohamini.py:113` |
-
-另外四个字段的取法：
-
-| 字段 | 取法 |
-| --- | --- |
-| `robot_model` | 第 4.1 节产物 `$S4DIR/capture/fingerprint-$STAMP.json` 里 `robot_metadata.robot_model` 的值 |
-| `left_port` / `right_port` | 第 3.7 节的 `3.7b-serial-pi` 输出（看 `/dev/ttyACM*` 行） |
-| `cameras` | 第 3.7 节的 `3.7d-video-pi` 输出，再加实际相机接法 |
-
-覆盖顺序：默认值 → template → site → 环境变量（`ALOHAMINI_*`），由 `overlay.py` 的 `load_settings` 实现。两份一起加载的契约由 `tests/test_examples_and_configs.py` 的 `test_template_and_site_load_together_and_the_three_fields_follow_site_yaml` 锁定：三个字段的值等于直接从 `configs/site.yaml` 原文读出来的值。
-
-#### 读取校验
-
-```bash
-run 4.3e-load-check uv run --no-sync python -c "from pathlib import Path; from alohamini_cartesian.config.overlay import load_settings; print(load_settings(template=Path('$S4DIR/configs/template.yaml'), site=Path('$S4DIR/configs/site.yaml'), check_devices=False))"
-```
-
-判据：`.exit` 为 `0`，`.log` 里打印出合并后的 `AlohaMiniSettings`。
-
-设备路径填的是**将来运行本库那台机器**上的路径，换一台机器未必通用：
-
-- 真正部署时本库跑在接了机械臂的那台机器上（本项目是 Pi），YAML 里写 Pi 侧路径（`/dev/ttyACM0`、`/dev/ttyACM1`、`/dev/video*`），在这台机器上 `load_settings(check_devices=True)` 才成立。
-- 若只在 Mac 上做配置结构校验，用 `load_settings(check_devices=False)`（这是默认值），只验键名、类型、取值，**不验设备存在性**。此时设备存在性的证据来自 Pi 侧的 `3.7b`/`3.7d` 输出，不要因为本机 `ls` 为空就判「设备缺失」。
-- `check_devices=True` 在 Mac 上必然失败（本机没有这些 `/dev/` 节点），这不是配置写错，是跑错机器。
-
-`check_devices=True` 这一支本轮未跑：它需要在接了机械臂的 Pi 上跑，且 Pi 上要装了本库，命令未在本轮验证。
-
-#### 两个现场易错点
-
-`watchdog_timeout_ms` 两处默认值不同：本库 `src/alohamini_cartesian/config/overlay.py` 的 `AlohaMiniSettings` 默认 `500`，厂商 `config_alohamini.py` 默认 `1000`（不写死行号：行号随厂商提交变化，2026-10-25 在 Pi 上约 122 行）。核对宿主实参时不要混用，样例里写实际生效的那个值。
-
-`robot_model` 两处默认值不一致：本库 `overlay.py:51` 是 `alohamini1`；两个现场脚本的 `DEFAULT_ROBOT_MODEL` 都是 `alohamini2pro`（`benchmarks/alohamini_io/capture_robot_fingerprint.py:96`、`benchmarks/alohamini_io/measure_latency.py:537`）。现场机型是 AlohaMini 2 Pro，而代码 Gate C 要求宿主 metadata 的 `robot_model` 与 `--robot-model` 相等（比对在 `measure_latency.py:2382-2396`）。现场 YAML 必须显式写 `robot_model: alohamini2pro`，不能用模板里的 `alohamini1`，否则配置表达的意思与真机不符。
-
-本节产物：`configs/template.yaml`、`configs/site.yaml`，`stdout/4.3a-host-args-*`、`4.3a2-host-cmdline-*`、`4.3b-host-config-*`、`4.3c-config-args-*`、`4.3d-config-classes-*`、`4.3e-load-check-*`，以及第 4.1、4.1b、4.2 节的产物。
-
+<a id="sec-4-4"></a>
 ### 4.4 库真机 dry-run（只读观测，零下发）
 
-前置：Host 常驻（§3.4 的 5555 / 5556 在听）；本轮授权含「只读观测」；vendor 快照已在 `/tmp`（取法见 §5.3 的两行 `git clone` + `rev-parse HEAD`，应等于 Pi 运行时的 HEAD `6aee1f81`）。
+前置：Host 常驻（[§3.4](1-prepare.md#sec-3) 的 5555 / 5556 在听）；本轮授权含「只读观测」；vendor 快照已在 `/tmp`（取法见 [§5.3](../reference/env-rebuild.md#sec-5-3) 的两行 `git clone` + `rev-parse HEAD`，应等于 Pi 运行时的 HEAD `6aee1f81`）。
 
 这条命令验的是本库自己的 `connect(dry_run=True)` 真 client 路径：用厂商 `AlohaMiniClient` 注入本库，读观测、对升降轴下一条命令、断开——**`send_action` 一次都不该发生**。
 
@@ -719,28 +617,4 @@ run 4.4-robot-dry-run env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:/Users/pco
 另一种预期形态：脚本先调 `session.lift.height()`，若反馈失联会先抛 `FeedbackLost`（`examples/robot_dry_run.py:344-346` 自己写明这一点），**这不等于 adapter 门禁拒绝**，按 `FeedbackLost` 记（查 Host 是否在跑、观测是否在涨），不要记成「门禁按预期拒绝」。
 
 产物：`stdout/4.4-robot-dry-run-$STAMP.{cmd,log,exit}`。
-
-### 4.5 Pi 未提交文件调查（只读）
-
-背景一句：「未提交文件」指 Pi 现役目录 `/home/pi5/lerobot_alohamini` 里没进 git 的现场文件（配置、标定、临时脚本）。2026-10-25 的旧部署备份 `/home/pi5/lerobot_alohamini.legacy-ec65318f-20261025` 是「`ec65318f` 加 6 个未提交改动」，那 6 个文件是否还在，只能到现役目录里查。
-
-对象：`/home/pi5/lerobot_alohamini`（现役目录，不是 legacy 备份）。本节只读，不 checkout、不 stash pop、不 reset。
-
-```bash
-run 4.5a-stash ssh "$PI" 'cd ~/lerobot_alohamini && git stash list'
-run 4.5b-reflog ssh "$PI" 'cd ~/lerobot_alohamini && git reflog --date=iso | head -20'
-run 4.5c-status ssh "$PI" 'cd ~/lerobot_alohamini && git status --porcelain'
-```
-
-判据（三支，落到哪支写哪支）：
-
-| 现象 | 结论 | 记录怎么写 |
-| --- | --- | --- |
-| `git stash list` 里能认出那 6 条现场文件 | 文件还在，只是被 stash 了 | 记 `stash@{n}` 的哈希与条目原文；不 pop、不改工作树 |
-| stash 为空，`git reflog` 里有 `checkout` / `reset` 痕迹 | 可能是升级时被切走 | 记那几行 reflog 原文（含时间） |
-| stash 为空、reflog 也没有 | **确认丢失** | 记「确认丢失，以 2026-11-05 台账为准」，**不追**；台账数字见 `docs/field-results.md` |
-
-`git status --porcelain` 的输出本身就是第三份证据：与本轮的改动预期逐行对一遍，把非空行原文抄进记录（现役目录不该有我们这轮产生的东西，我们没有向 Pi 写代码）。
-
-产物：`stdout/4.5a-stash-$STAMP.*`、`stdout/4.5b-reflog-$STAMP.*`、`stdout/4.5c-status-$STAMP.*`（各三件套）。
 

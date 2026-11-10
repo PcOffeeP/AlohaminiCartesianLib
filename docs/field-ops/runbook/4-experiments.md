@@ -1,47 +1,344 @@
-## 10 退出码对照表
+# 4 实验卡 E1–E8（原 §5、§6、§7、§10.5–§10.8）
 
-**一码两义**：`6` 在 `capture` 里表示宿主 metadata 不可用、主动不写盘；在 `measure` 里表示运动门禁拒绝、零命令。现场拿到 6，先看是哪个脚本。
+本文件管什么：八张按顺序走的实验卡（E1→E2→E3→E4→E5→E6→E7→E8），每张给命令、判据、前置与产物指针。
 
-| 脚本 | 码 | 含义 |
+<a id="exp-e1"></a>
+## E1 零运动测量（原 §5）
+
+| 字段 | 内容 |
+| --- | --- |
+| 目的 | 只采样观测、不构造任何运动指令的零运动测量：部署形态与 RTT 形态各一条命令 |
+| 前置 | 见 [§2](1-prepare.md#sec-2) 的变量块与 `run` 函数；只读 SSH 的授权见 [§0](1-prepare.md#sec-0) 的授权表 |
+| 前置卡 | 无（开场 1-prepare.md） |
+| 后继卡 | E2 |
+| 命令 | 见本卡「5.1 部署形态（请求 30 Hz、窗口 3）」与「5.2 RTT 形态（请求 1000 Hz、窗口 1）」两小节 |
+| 判据 | 见本卡 5.1 与 5.2 各自的「判据」行 |
+| 预期剧本 | 本卡未单列 |
+| 失败处置 | 见 [§12](../reference/troubleshooting.md#sec-12) 与 [§10](../reference/gates.md#exit-codes) 的退出码对照 |
+| 产物 | 见本卡「产物」一行 / [§11](../reference/artifacts.md#sec-11) |
+
+三条命令都不构造任何运动指令：`measure --mode rtt` 只采样观测。三条都过 `run`：stdout 与 stderr 合并落到 `$S4DIR/stdout/<步骤号>-$STAMP.log`，退出码落到同名 `.exit`。
+
+<a id="sec-5-1"></a>
+### 5.1 部署形态（请求 30 Hz、窗口 3）
+
+```bash
+run 5.1-rtt-deploy env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python benchmarks/alohamini_io/measure_latency.py --host "$PI_HOST" --mode rtt --rate-hz 30 --request-window 3 --samples 500 --csv "$S4DIR/rtt/rtt-deploy-$STAMP.csv"
+```
+
+判据：exit 0，`$S4DIR/rtt/rtt-deploy-$STAMP.csv` 写出且有数据行。返回 `3` 是连接问题，按 [§12](../reference/troubleshooting.md#sec-12) 处置。
+
+解释器不用 `uv run --no-sync python`：主环境没装 `lerobot`，那样写会以 exit `3`、`No module named 'lerobot'` 失败（2026-11-05 实测）。隔离环境与 `PYTHONPATH` 快照的取法见 [§5.3](../reference/env-rebuild.md#sec-5-3) 的「解释器与 `PYTHONPATH`」小节。
+
+<a id="sec-5-2"></a>
+### 5.2 RTT 形态（请求 1000 Hz、窗口 1）
+
+```bash
+run 5.2-rtt-net env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python benchmarks/alohamini_io/measure_latency.py --host "$PI_HOST" --mode rtt --rate-hz 1000 --request-window 1 --samples 500 --csv "$S4DIR/rtt/rtt-net-$STAMP.csv"
+```
+
+解释器与 `PYTHONPATH` 的来由同 5.1（见 [§5.3](../reference/env-rebuild.md#sec-5-3)）；`uv run --no-sync python` 在主环境会以 exit `3` 失败，不是代码问题。
+
+判据：`exit 0` 且 CSV 有数据行。
+
+若返回 `9`：该时点这份 vendor 的 client 不发布 `latest_request_timing`，rtt 无法测量。这是设计行为，按 [§10](../reference/gates.md#exit-codes) 记录，不当故障、不重试改参数。升级后 HEAD `6aee1f81` 提供该面，实测 exit 0。
+
+在 Pi 上执行时，必须把 `PYTHONPATH` 指向被测代码，否则会 import 到已安装的旧版本。采集脚本的 `default_client_factory()` 直接 `import lerobot`，不经过本库 adapter。不设 `PYTHONPATH` 时有两种表现：指纹计时字段全 `null`，或 `measure --mode rtt` 返回退出码 `9`。两种都看着像代码缺陷，实际原因是跑错了代码。
+
+两条读法必须先定下来：
+
+- `--rate-hz` 低于 200 时，`age_s` 的主体是响应在客户端 socket 里等下一次 poll 的空闲时间，所以它测的是「端到端观测滞后」，不能当网络往返时间读。要测 RTT 必须用 `--rate-hz 1000`。脚本在低于 200 Hz 时自己打警告；打了警告不等于失败，但它封住了这一组数值当 RTT 读的用法。
+- `--request-window 1` 是 RTT 形态（无预取等待可减）；`--request-window 3` 是部署形态（控制栈实际用的窗口）。两者不可混为一谈，也不可互相替代。
+
+`--samples` 默认是 `500`，本文照样写出来，便于现场比对命令原文。参考值（2026-10-22）：部署形态组 `achieved_rate_hz=30.1`（请求 30 Hz）；RTT 形态组 `achieved_rate_hz=49.0`（请求 1000 Hz）。实际到达率受 Host 主循环节拍限制。
+
+产物：`rtt/rtt-deploy-$STAMP.csv`、`rtt/rtt-net-$STAMP.csv`，以及 `stdout/5.1-rtt-deploy-*`、`stdout/5.2-rtt-net-*`。
+
+[§5.3](../reference/env-rebuild.md#sec-5-3) 隔离环境与 `PYTHONPATH` 重建 8 步见 `../reference/env-rebuild.md#sec-5-3`。
+
+<a id="exp-e2"></a>
+## E2 量级验证：臂总线电流能不能判读（原 §6）
+
+| 字段 | 内容 |
+| --- | --- |
+| 目的 | 给出「臂总线电流能不能用来判负载」这条前置事实（取自原节首段） |
+| 前置 | 见本卡「6.2 短运动电流量级」的前置条件行；启停 Host 的前置与三步法见 [§6.1](2-host.md#host-start) |
+| 前置卡 | E1 |
+| 后继卡 | E3 |
+| 命令 | 见本卡「主路径」「支路」「6.2 短运动电流量级」三小节；启 Host 的三步法在 [§6.1](2-host.md#host-start) |
+| 判据 | 见本卡「主路径」的判据行与「6.2」的结论表 |
+| 预期剧本 | 见本卡 6.1 的「基线参考值」与 6.2 的「实测参考」两段 |
+| 失败处置 | [§12](../reference/troubleshooting.md#sec-12) |
+| 产物 | 见本卡两处「产物」一行 / [§11](../reference/artifacts.md#sec-11) |
+
+本节要给出一条前置事实：臂总线电流能不能用来判负载。后面所有依赖电流的判断（[§7.2](#exp-e3)）都以这个结论为准。取数主路径是客户端的 `latest_safety_status["currents_ma"]`；`[Currents]` 这条日志在当前 vendor 的日志级别下不打印（见 [§6.1](2-host.md#host-start)）。
+
+先固定三件已核对的事：
+
+- 打印值已经是 mA，不是 raw 刻度：Host 侧按 `int(raw × 6.5)` 截断后打印。
+- 电流读取本身正常：同一轮 Host 日志里升降轴 `Present_Current` 读到 `71.5 / 221.0 / 936.0 / 2639.0 mA`（`stdout/v2verify-host-20261025.log`）。
+- 局限在臂总线：2026-10-25 整份日志的 `[Currents]` 共 1278 行、11502 个元素（元素分布：`0` 11056 个、`6` 444 个、`13` 2 个），最大值 `13 mA`，等于 2 个 raw 刻度。静止与轻载下只有 0–2 个刻度，运动中的量级见 [§6.2](#exp-e2)（2026-11-05 实测）。计数须按整份日志复算，按前缀统计会偏小。
+
+`[Currents]` 数组下标与电机 ID 的映射**没有文档**：禁止按位置推断是哪个电机。要判具体电机的电流，用 sidecar 的 `current_ma` 列（带键名，见 [§11](../reference/artifacts.md#sec-11)）。厂商快照里的键叫 `currents_ma`，写进 sidecar 的列叫 `current_ma`，查代码时别把这两个名字互换。
+
+#### 主路径：`latest_safety_status["currents_ma"]`（2026-11-05 起）
+
+用一个小脚本连上客户端的观测面，逐帧读 18 个电机的 `currents_ma` 并汇总。脚本范式是 `stdout/6.1c-obs-idle-$STAMP.py`，只调 `connect()`、`get_observation(include_cameras=False)`、`disconnect()`，不发任何动作。本次参数 5 Hz × 20 s = 100 帧。运行方式与 [§4.2](3-health.md#sec-4-2) 同形（脚本投到 Pi 的 `/tmp`、用 Pi 侧 venv 解释器跑，`scp` 需「向 Pi 写文件」授权）：
+
+```bash
+run 6.1c-obs-idle ssh "$PI" 'cd /home/pi5 && PYTHONPATH=/home/pi5/lerobot_alohamini/src ~/miniconda3/envs/lerobot_alohamini/bin/python /tmp/6.1c-obs-idle-$STAMP.py'
+```
+
+产物：`stdout/6.1c-obs-idle-$STAMP.{cmd,log}`。日志末尾自动打两段汇总：`# per_motor_table`（逐电机 `n` / `min_mA` / `max_mA` / `mean_mA`）与 `# summary`（全局最大、`motors_seen`、恒 0 电机清单）。
+
+判据：`.exit` 为 `0`；`motors_seen=18`；`# per_motor_table` 有 18 行且每行 `n` 相同。
+
+基线参考值（2026-11-05 实测，18/18 电机 × 100 帧）：读数只有 `0` 与 `+6.50 mA` 两个值，7 只恒 0（`arm_left_gripper`、`arm_left_wrist_yaw`、`arm_right_gripper`、`arm_right_wrist_flex`、`arm_right_wrist_roll`、`base_left_wheel`、`base_right_wheel`），全局最大 `+6.50 mA`。
+
+#### 支路：`[Currents]` grep（当前 vendor 日志级别压制，不可依赖）
+
+```bash
+run 6.1b-currents-idle ssh "$PI" 'sleep 30; HOSTLOG=/tmp/site-host-<启动该 Host 时的 STAMP>.log; grep -c "\[Currents\]" "$HOSTLOG"; grep "\[Currents\]" "$HOSTLOG" | tail -3'
+```
+
+日志路径里的 `<启动该 Host 时的 STAMP>` 按实际文件名填，同一会话里就是上一条命令里的 `$STAMP`。
+
+这一支**不可依赖**：2026-11-05 实测整份 Host 日志的 `[Currents]` 行数为 0（`stdout/6.1b-currents-dist-*` 打出 `lines 0` / `elements 0`），原因是厂商 client 里 `logging.basicConfig(... level=logging.INFO)` 的 level 那行被注释、root logger 停在 WARNING；同类 INFO 行（`[HOST TRACKING]`）同样不打印（`stdout/7.2b-host-tracking-count-*` 计数 `0`）。所以「有 `[Currents]` 原文」不再作判据，取数走上面的主路径。
+
+产物：`stdout/6.1a-host-start-*`（若启了 Host）、`stdout/6.1c-obs-idle-*`、`stdout/6.1b-currents-idle-*`（支路，当前 vendor 下通常为空）。
+
+### 6.2 短运动电流量级（原 §6.2）
+
+前置条件：6.1 的基线已在盘；第 [§7.1](#exp-e3) 的勾选单已过（至少「授权」与「断电开关在手」两条）；运动授权在手。
+
+跑 2 步单关节步进：
+
+```bash
+run 6.2-currents-move env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python benchmarks/alohamini_io/measure_latency.py --host "$PI_HOST" --mode tracking --enable-motion --joint arm_left_shoulder_pan.pos --delta-deg 1.0 --steps 2 --control-hz 50.0 --settle-tolerance-deg 0.05 --settle-timeout-s 2.0 --timeout-s 60 --csv "$S4DIR/tracking/tracking-6.2-$STAMP.csv"
+```
+
+解释器与 [§5.3](../reference/env-rebuild.md#sec-5-3) 的「解释器与 `PYTHONPATH`」小节一致；写成 `uv run --no-sync python` 会以 exit `3`、`No module named 'lerobot'` 失败。
+
+跑完取数走 sidecar 主路径：按 [§6.1](2-host.md#host-start) 的脚本范式（`stdout/6.1c-obs-idle-$STAMP.py`）统计运动窗口内的 `current_ma`，或直接分析本次 tracking 的 sidecar `tracking/tracking-6.2-$STAMP-safety.csv`。要统计三项：运动窗口内 `current_ma` 的最大值、取值分布、`≥20 mA` 的样本数。
+
+`[Currents]` 的 grep 支保留为旁证（当前 vendor 日志级别压制，整份日志 0 行，不可依赖）：
+
+```bash
+run 6.2b-currents-move ssh "$PI" 'HOSTLOG=/tmp/site-host-<STAMP>.log; grep "\[Currents\]" "$HOSTLOG" | tail -20'
+```
+
+判据（必须写出结论，不写「看起来正常」）：
+
+| 运动窗口内 sidecar `current_ma` 的读数 | 结论 | 后续怎么用 |
 | --- | --- | --- |
-| 两者 | 2 | 参数解析失败，一律 `2`，不经过任何 `EXIT_*` 常量；触发点全部列在表下「退出码 2 的全部触发点」小节 |
-| capture | 0 | payload 已写盘 |
-| capture | 3 | 建客户端、`connect()` 或观测传输失败 |
-| capture | 4 | `--timeout-s` 到期仍不够 `--samples` |
-| capture | 5 | 写盘失败（`OSError`、`bytes`、`NaN`/`Inf`） |
-| capture | 6 | 宿主 metadata 不可用：为空、`schema_version` 不等于 2、或 `motors` 非空映射不成立 |
-| measure | 0 | 跑完且 CSV 已写 |
-| measure | 1 | 有证据在盘上的提前停止（命令被拒 / 超时 / 反馈失联 / Ctrl-C） |
-| measure | 3 | 连接失败 |
-| measure | 5 | CSV 写不出 |
-| measure | 6 | 代码 Gate A–F 拒绝 |
-| measure | 7 | rtt 模式样本不足 |
-| measure | 8 | 收尾 hold 被拒，停命令没到 |
-| measure | 9 | 客户端不发布 rtt 模式所测量的能力（`latest_request_timing`），或发布了但内容填不满。三种形态都返回 `9`、都不写 CSV，形态与触发点见下表 |
+| 出现 ≥3 个 raw 刻度（≥20 mA） | 臂总线电流可判读 | 7.2 的电流走势可以当负载旁证用 |
+| 仍是 0–2 个刻度 | 臂总线电流不能判负载 | 后续所有依赖电流的判断降级为「无电流证据」，不要拿它下结论 |
 
-`capture_robot_fingerprint.py` 不产生 `9`：缺 `latest_request_timing` 时它继续采集并把计时字段记 `null`。
+`13 mA` 是 2 个 raw 刻度，`20 mA` 对应 3 个刻度，判读门槛就卡在这一档。
 
-### 退出码 2 的全部触发点
+实测参考（2026-11-05，同一参数集）：腕部 run 的运动窗口 1638 个（帧×电机）样本，最大 `6.5 mA`，`≥20 mA` 样本 0 个；`pan` / `lift` 两次 run 窗口内最大 `19.5 mA`，取值只有 `0` / `6.5` / `13.0` / `19.5` → 结论「臂总线电流不能判负载」。
 
-参数解析失败，一律 `2`，不经过任何 `EXIT_*` 常量；所有判定都在打开任何 socket 与调用 `client_factory(...)` 之前完成。`measure`（rtt 与 tracking 共用同一个 `parse_args`，rtt 也查这些旋钮）：argparse 自身产生的用法错误 —— 未知选项、缺少 `--host`、`--mode` 不在 `rtt`/`tracking`、`--anchor` 不在 `{present,command}`（stderr 原文 `measure_latency.py: error: argument --anchor: invalid choice: 'bogus' (choose from present, command)`，`--mode rtt` 接受该参数并忽略）、任一 `type=` 转换失败（`--port` / `--samples` / `--request-window` / `--steps` 非整数，或任一 `type=float` 选项不是可解析的数值文本；`--csv` 的 `type=Path` 对命令行字符串不会抛，不在此列）；整数下界 3 项 —— `--samples < 1`、`--request-window < 1`、`--steps <= 0`；「有限且带符号」同查 7 项 —— `--rate-hz`（有限且 `> 0`）、`--control-hz`（有限且 `>= 1`）、`--host-loop-hz`（有限且 `> 0`）、`--timeout-s`（有限且 `> 0`）、`--settle-timeout-s`（有限且 `> 0`）、`--settle-tolerance-deg`（有限且 `>= 0`，`0` 合法即最严格设置）、`--delta-deg`（有限且**非零**，`0` 与 `-0.0` 都落 `2`，负值合法；判据 `measure_latency.py:1798`），非有限值（`nan` / `inf`，含 `float()` 后变成 `inf` 的 `1e400`）与不满足符号条件的值都落 `2`；交叉校验 1 项 —— `--settle-tolerance-deg >= abs(resolve_delta_deg(args))`（与钳到 1.0° 幅度上限之后的**有效 delta 的绝对值**比较，`measure_latency.py:1812-1817`；实测 stderr 原文 `must be below the effective --delta-deg magnitude`）。`capture` 的数值校验只有 2 项 —— `--samples < 1`、`--timeout-s` 有限且 `> 0`（不查 `--rate-hz` / `--control-hz` 之类），另加同一形状的 argparse 用法错误（未知选项、缺少 `--host`、`--port` 非整数）。以上为 `2` 的全部触发点。幅度钳位本身不产生 `2`：超过 `1.0°` 的 `--delta-deg` 由 `resolve_delta_deg` 静默钳（`measure_latency.py:1784-1793` 的注释写明这是有意的），只有 `0` 才拒。合法预算在运行中到期不走 `2`：`capture` 落 `4`，`measure` 的 rtt 落 `7`、tracking 落 `1`
+两点必须一起写进记录：打印值是 mA，不是 raw 刻度；`[Currents]` 的数组下标与电机 ID 没有映射文档，禁止按位置推断是哪个电机。要判具体电机，用 sidecar 的 `current_ma`（带键名，列定义见 [§11](../reference/artifacts.md#sec-11)）。
 
-### 退出码 `9` 的三种形态
+判据另一半：主 CSV 与 sidecar 都写出。产物：`tracking/tracking-6.2-$STAMP.csv` 与其 sidecar、`stdout/6.2-currents-move-*`、`stdout/6.2b-currents-move-*`、`stdout/6.2b-analysis-*`、`stdout/7.2-analysis-*`。
 
-| 形态 | 何时触发 | 是否发过请求 |
+<a id="exp-e3"></a>
+## E3 受控试动：唯一动机器人的节（原 §7.1、§7.2）
+
+| 字段 | 内容 |
+| --- | --- |
+| 目的 | 单关节受控步进：开跑勾选单、单关节步进、肩部目标接受判定（原 7.1 与 7.2 两节） |
+| 前置 | 见本卡「7.1 开跑勾选单与命令」的勾选单与参数表 |
+| 前置卡 | E2 |
+| 后继卡 | E4 |
+| 命令 | 见本卡「7.1 开跑勾选单与命令」 |
+| 判据 | 见本卡「7.2 肩部 hold 与目标接受判定」的结论表与判据行 |
+| 预期剧本 | 本卡未单列 |
+| 失败处置 | 见 [§12](../reference/troubleshooting.md#sec-12)（exit 8 的处置同本卡 7.1 末条） |
+| 产物 | 见本卡两处「产物」一行 / [§11](../reference/artifacts.md#sec-11) |
+
+### 7.1 开跑勾选单与命令
+
+开跑前逐条勾选，勾不全不开跑：
+
+- [ ] 现场授权到手，授权范围写明（哪个关节、多少度、谁在旁），已落进 [§3.9](1-prepare.md#sec-3) 的 `scope-*`
+- [ ] 单臂：另一臂不参与本次运动
+- [ ] 空场：人物离场
+- [ ] 无负载：末端无负载
+- [ ] 行程按「1° × 更多步」规划：常量 `MAX_STEP_DELTA_DEG = 1.0`（`benchmarks/alohamini_io/measure_latency.py:504`）钳的是每步**幅度**、不钳符号——`resolve_delta_deg`（`:2118-2126`）返回 `min(max(delta, -1.0), 1.0)`，所以 `--delta-deg 2.0` 按 `1.0` 执行、`--delta-deg -2.0` 按 `-1.0` 执行、`--delta-deg -1.0` 原样执行。stdout 同时打印实际值与请求值，原文形如 `delta_deg=1.000 (requested 2.000)`。要更大总行程只能加 `--steps`，加大 `--delta-deg` 的幅度不产生更大位移
+- [ ] **手臂低位或有承托**：抬高的手臂在 lead 一次性释放时会被带走，幅度不可控
+- [ ] **有能按断电开关的人在机器人旁**：远程且无人在场时**禁止**跑 `--anchor command`（此时只能跑 `--anchor present`）
+- [ ] 断电开关在手边，可随时按下
+
+六道代码 Gate A–F 的定义表在 [reference/gates.md#gate-a](../reference/gates.md#gate-a)（原 §7.1 的 Gate 表）；本节按那张表执行。
+
+命令：
+
+```bash
+run 7.1-tracking env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python benchmarks/alohamini_io/measure_latency.py --host "$PI_HOST" --mode tracking --enable-motion --joint arm_left_shoulder_pan.pos --delta-deg 1.0 --steps 5 --control-hz 50.0 --settle-tolerance-deg 0.05 --settle-timeout-s 2.0 --timeout-s 60 --csv "$S4DIR/tracking/tracking-$STAMP.csv"
+```
+
+解释器与 `PYTHONPATH` 的来由同 [§5.3](../reference/env-rebuild.md#sec-5-3)：主环境没装 `lerobot`，`uv run --no-sync python` 会以 exit `3` 失败（2026-11-05 实测）。
+
+参数与理由：
+
+| 参数 | 建议值 | 为什么 |
 | --- | --- | --- |
-| 属性不存在 | `connect()` 返回后、窗口预热之前 | 没发过 |
-| 属性存在但从未填充（整轮是空 dict，`observation_sequence` 不增长） | 窗口预热之后，采样循环放弃那一刻才判，要等满 `--timeout-s` | 发过 1 次 state-only 预热，并至少观测 1 帧 |
-| 半填充（缺 `token` / `sent_monotonic_s` / `received_monotonic_s` / `age_s` 任一） | 写行之前逐帧复查，`observation_sequence` 每次增长都查一次 | 已发过请求，并在该帧拒绝 |
+| `--mode tracking` | 必填 | 不写就落回 `rtt`，只采观测 |
+| `--enable-motion` | 必填 | 代码 [Gate A](../reference/gates.md#gate-a) 的第一个条件 |
+| `--joint` | `arm_left_shoulder_pan.pos`（先左臂单关节） | 代码 [Gate A](../reference/gates.md#gate-a) 的第二个条件；`.pos` 后缀可省 |
+| `--delta-deg` | `1.0` | 幅度被硬性钳到 `1.0°`（常量 `MAX_STEP_DELTA_DEG`，`measure_latency.py:504`），**符号保留**：`-1.0` 按 `-1.0` 执行、`-2.0` 钳成 `-1.0`；`0` 是用法错误（exit 2）。负值即朝反方向 |
+| `--anchor` | `present`（默认；验证误差累积形态时用 `command`） | 两模式只差目标锚在哪：`present` 每步重读实测位置、把目标放在「实测加 `delta_deg`」上，lead 只有一步、不跨步累积；`command` 锚在上一步发出的 target（首步落回实测），lead 跨步累积。指标受影响：`command` 的一步可能补掉跨了几步的 lead，`rise_90_time_s` 提前记满、`overshoot_deg` 变成（行程 − 一步 delta）、`error_deg` 停在累积 lead 上，所以这三个量与 `present` 不能横向比较。CSV 与 sidecar 没有锚点列，只能靠 stdout 那行 `note: anchor=command: …` 区分模式，归档时 stdout 必须与 CSV 一起存。物理风险：`command` 下 Gate E 仍按 `\|delta\| × steps <= 20.0` 判，`--steps 20 --delta-deg 1.0` 合法、lead 可积到 20°，静摩擦一旦破开，整段 lead 可能一次性释放；首跑用 3–5 步 |
+| `--steps` | 先 `5`，成功后再说 | `\|delta\| × steps` 必须不超过 20.0°；默认 20 步、每步 1.0° 正好顶在上限；`--delta-deg` 传负值时上限按绝对值算，符号不影响上限 |
+| `--control-hz` | `50.0`（默认） | 两条命令最小间隔 1/50 s = 20 ms；必须有限且不小于 1，`inf`/`nan` 被拒 |
+| `--settle-tolerance-deg` | `0.05`（本次实测；容差小不是 `rise_90` 有值的充分条件） | 默认 `0.15`。2026-11-05 用 `0.05`（小于 `0.1 × delta`，即小于 `0.1°`）跑三轴，`rise_90_ms` 仍报 `count=0`、`p50=nan`：原先「容差不小于 `0.1 × delta` 时 settle 循环先退、于是 `rise_90_ms` 报 `count=0`」的推论被实测推翻，容差取小也补不上这一列 |
+| `--settle-timeout-s` | `2.0` | 默认 `1.0` s，20 ms 命令节奏下每步预算偏紧 |
+| `--timeout-s` | `60` | 默认 `30` s 对多步加 settle 偏紧，中途超时会以 exit 1 结束 |
 
-三种都不写 CSV，连表头都不写。stderr 分得开：第一种是 `it publishes no latest_request_timing`，后两种是 `it publishes latest_request_timing but never fills it completely`，并跟一句 `missing key(s): …` 点名缺的键。只看退出码分不出这三种，要读 stderr。
+本表只讲建议值与理由；每个参数的**默认值与合法性约束**以 [附录 A：两个脚本的完整参数表](../reference/params.md#param-capture) 为单一来源，本表不重复。
 
-退出码同时写在每步的 `$S4DIR/stdout/<步骤号>-$STAMP.exit` 里，查表前先看这个文件。
+`--delta-deg` 的幅度上限与 stdout 表现：常量 `MAX_STEP_DELTA_DEG = 1.0`（`benchmarks/alohamini_io/measure_latency.py:504`），`resolve_delta_deg`（`:2118-2126`）的实现是 `min(max(delta, -MAX_STEP_DELTA_DEG), MAX_STEP_DELTA_DEG)`——**钳的是幅度，不钳符号**。请求 `--delta-deg 2.0` 时按 1.0 执行，请求 `-2.0` 时按 -1.0 执行，请求 `-1.0` 时原样执行。report 首部把实际值与请求值都打印出来，原文形如 `delta_deg=1.000 (requested 2.000)`（打印在 `measure_latency.py:3369-3370`）。要凑更大总行程，只能改成「1° × 更多步」，加大 `--delta-deg` 的幅度无效。
 
-## 10.5 肩部定性专项（M0 已离线复算并立台账；teleop oracle / M1 / M2 走法已写死，待有人到场）
+横幅里那句 `note: settle tolerance <X> deg >= 0.1 * delta (<Y> deg)`（`measure_latency.py:3427-3431`）有一处既有文案瑕疵：标签写的是 `0.1 * delta`，括号里的 `<Y>` 打印的却是 **`delta` 本身**。判读时按 `delta` 本身读那个数，不要把它当成「0.1 × delta 的下限值」。该瑕疵已登记在 `TODO.md`。
 
-本节接第 7.2 节：那里已把停滞定位到「不在 PC→Host 值传递段」，Host→总线写入段与伺服 / 机械侧仍无观测。本节是要有人到机器人跟前才能做的跟进动作；2026-11-05 远程会话（无人在机器人现场）只完成了 M0。
+负值合法这条与退出码的关系：`--delta-deg 0` 才是用法错误（exit 2，stderr 原文 `--delta-deg must be a finite and non-zero number (got 0.0); negative steps are legal, a zero step commands nothing`，判据在 `measure_latency.py:1798`）；`--delta-deg -1` 一路过到 connect，本地实测主环境无 `lerobot` 时以 exit 3 结束，不是 2。
 
-复现遥操作那种误差累积形态用 `--anchor command`，这也是现场验证肩部静摩擦能否被累积 lead 破开的用法。§7.1 参数表给的默认值是 `present`（每步重锚实测、lead 只有一步），两者构成对照。首跑用 3–5 步，且 `command` 模式下的 `rise_90_time_s` / `overshoot_deg` / `error_deg` 不与 `present` 横向比较。
+关于 `rise_90_time_s` 为空：源码的说法是这一列 can be empty，即**可能**为空。是否为空取决于该关节是否在同一次轮询里越过 90% 线；容差取小未必空，取大也未必不空。
+
+运动学事实：
+
+- 方向：默认 `--anchor present` 下每步目标是当前实测基线加 `delta_deg`；`--anchor command` 下每步目标是上一步发出的 target 加 `delta_deg`，锚是命令值而不是实测值，因此每步的 lead 跨步累积。`--delta-deg` 允许负值（只有零被拒），负值即朝反方向，同一轮内各步符号相同，所以每步朝同一方向累积。
+- 脚本不检查关节限位。源码里没有任何对 URDF 或 adapter 限位的比较。方向与累计行程是否安全，只能靠人。
+- 反馈失联保护：连续 3 次 `observation_sequence` 不增长就中止（exit 1）。中止前仍会发收尾 hold。
+- 收尾 hold 从 `finally` 发，正常结束、命令被拒、反馈死、Ctrl-C 都会发。只有一次 `*.pos` 都没测到时才不发。
+- hold 是就地冻结：把实测 `*.pos` 当目标，三轴速度钉 0，反馈带高度就回写实测高度。报告里只写 `hold_issued`，不写「sent」，因为 action socket 是 PUSH/CONFLATE 无确认。
+- exit 8 表示 hold 被拒，也就是停命令没到。这一条按「机器可能仍在动」处置：先断电，再排查。处置见 [§8.1](2-host.md#sec-8-1) 与 [§12](../reference/troubleshooting.md#sec-12)。
+
+一处未核实：电机名到关节观测键（如 `arm_left_shoulder_pan.pos`）的对应关系本文没有核实过。`--joint` 写错时由代码 [Gate B](../reference/gates.md#gate-b) 拒绝（exit 6、零命令），不会动机器人。
+
+产物：`tracking/tracking-$STAMP.csv`、其 sidecar `tracking-$STAMP-safety.csv`、report 原文与 `stdout/7.1-tracking-*`。
+
+### 7.2 肩部 hold 与目标接受判定
+
+试动后立刻取 sidecar 与 Host 追踪行，不要隔一轮再取。
+
+背景：2026-10-25 五次运行都是左臂单关节、每步 1°：腕部 `arm_left_wrist_roll` 达成 87.9%（两步 `settled=True`），肩部 `arm_left_shoulder_pan` 与 `arm_left_shoulder_lift` 5.9%–13.2%、全部 `settled=False`。完整数字见 `docs/field-results.md`。本步要判的是：这两轴的停滞发生在 Host 侧还是 Host 下游。
+
+达成率口径（`docs/ADR.md` D20）：分母统一取命令行给的名义指令行程 `abs(--delta-deg) × --steps`；实测净行程 = 末步 `measured_deg` − 首步 `baseline_deg`；达成率 = 实测净行程 ÷ 名义指令行程。
+
+为什么不再用 `Σ(cmd_deg − baseline_deg)`：`--anchor command` 下每步的 `cmd_deg − baseline_deg` 含跨步累积的 lead，逐步求和会把同一段行程重复计入（2026-11-08 路 A：同一份数据用该分母得左 `43.0108%` / 右 `48.6417%`，用名义分母得左 `79.1209%` / 右 `82.6374%`）。
+
+**例外**：`--anchor present` 且逐步实际命令增量与 `--delta-deg` 不等时（腕部已记录的形态：每步实际只下 `0.879120879°`，`delta=1.0°`），分母改用 `Σ(cmd_deg − baseline_deg)`，并在记录里写明这一次用的是哪个分母。原因见 `docs/field-results.md` 2026-11-06 节「腕部同参数对照」与 `TODO.md` 的「腕与肩的 deg→units 换算不自洽」条。
+
+残余门槛同样见 D20：肩类（`shoulder_pan` / `shoulder_lift`）按 `≤2°` 判，其余轴按 `≤2 tick（0.1758°）` 判。
+
+主依据三项，全部来自 sidecar（列定义见 [§11](../reference/artifacts.md#sec-11)）：
+
+1. `target_source`（末列，整帧属性）：取值 `none` / `command` / `watchdog` / `protection`，点名该帧的目标由哪一层给出。同一 `sample_sequence` 的每一行同值。
+2. `requested_target` 与 `accepted_target`：同一行内两者不相等，说明 Host 收到的目标与它真正采纳的目标不同，即目标在半路被改过（电流限幅是两列之间那一道）。
+3. `current_ma` 逐帧走势：按 `sample_sequence` 递增、固定一个 `motor` 取序列，与主 CSV 同一步的 `measured_deg − baseline_deg` 对照。判据是「持续非零且随步进不回落」。
+
+结论只有三类，现场必须落到其中一类并写明：
+
+| 结论 | 判据 | 记录怎么写 |
+| --- | --- | --- |
+| ① 目标被接受，停滞在伺服或机械侧 | 全步 `target_source=command`，且同一步内 `requested_target == accepted_target` 全段成立 | 写明「目标已被 Host 采纳」；电流走势作为旁证，并注明电流判读是否可用（[§6.2](#exp-e2) 的结论） |
+| ② 目标被底层接管 | 任一步出现 `target_source` 为 `protection` 或 `watchdog` | 写明出现该值的 `step_index` 与帧数。早于该轮第一条命令帧的那一帧不算：它记的是上一轮遗留的 `watchdog`（上一轮客户端结束后 Host 看门狗触发过，`target_source` 一直保持到下一个合法命令），与本轮无关，见 [§10.5](#exp-e5) M1 的「首帧 `target_source=watchdog`」段与 `docs/field-results.md` 2026-11-06 节 |
+| ③ 目标未及时接受 | `accepted_target` 相对 `requested_target` 滞后于同一序列的目标（同一行不相等，或目标要到后续帧才出现） | 写明首次出现差异的 `sample_sequence` |
+
+必须现场核实的一条：`hold_active` 在这版固件上是否恒 `False`。用 grep 取原文：
+
+```bash
+run 7.2-joint-hold-write ssh "$PI" 'grep -n "_joint_hold_goal\[" ~/lerobot_alohamini/src/lerobot/robots/alohamini/alohamini.py'
+```
+
+判法：
+
+- 命中的只有读用法（`self._joint_hold_goal[...]` 在等号右边，或 `dict(...)`、`.get(...)`、`.pop(...)`）→ 没有写入点，`hold_active` 恒 `False`，**不作判据**。出处写进记录。
+- 命中里出现写用法（等号左边是 `self._joint_hold_goal[...]`）→ 有写入点，`hold_active` 可作判据，按 sidecar 的 `True` / `False` 文本判读。
+
+本地 fork（HEAD `ec65318f`）的读法结论是「无写入点」，行号清单见 `docs/ADR.md` D18 与 `docs/field-results.md` 2026-11-05 节。Pi 上跑的是合并后的 `6aee1f81`，是否相同以本步输出为准，不要沿用本地结论。
+
+旁证是 Host stdout 的 `[HOST TRACKING][<joint>]` 行，行内含 `target= / command= / measured= / error= / current=`。从 Host 日志里 grep 该前缀，把原文落盘：
+
+```bash
+run 7.2b-host-tracking ssh "$PI" 'HOSTLOG=/tmp/site-host-<STAMP>.log; grep "\[HOST TRACKING\]" "$HOSTLOG" | grep "shoulder_pan\|shoulder_lift" | tail -30'
+```
+
+判据：三类结论落到一类；`hold_active` 可用与否有 grep 原文为证；`[HOST TRACKING]` 行原文在盘。
+
+产物：sidecar CSV（`tracking/tracking-$STAMP-safety.csv`）、`stdout/7.1-tracking-*`、`stdout/7.2-joint-hold-write-*`、`stdout/7.2b-host-tracking-*`。
+
+<a id="exp-e4"></a>
+## E4 Gate C 反向拒绝（原 §7.1b）
+
+| 字段 | 内容 |
+| --- | --- |
+| 目的 | 拿一次「模型名不一致 → 不动机器人」的反向拒绝记录（原节首段） |
+| 前置 | 见本卡「目的」一段；开跑前置同 [§7.1](#exp-e3) 的勾选单（本卡零下发） |
+| 前置卡 | E3（并列反向取证） |
+| 后继卡 | E5 |
+| 命令 | 见本卡开头的命令块（「目的」一段之后） |
+| 判据 | 见本卡「取证三件套」小节 |
+| 预期剧本 | 见本卡「实测结果（2026-11-06）：真机落 Gate B，不是 Gate C」小节 |
+| 失败处置 | [§12](../reference/troubleshooting.md#sec-12) |
+| 产物 | 见本卡「产物」一行 / [§11](../reference/artifacts.md#sec-11) |
+
+
+目的：拿一次「宿主与 `--robot-model` 不一致 → 不动机器人」的记录，补 V10 的反向证据。
+
+```bash
+run 7.1b-gatec-reverse env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python benchmarks/alohamini_io/measure_latency.py --host "$PI_HOST" --mode tracking --enable-motion --joint arm_left_shoulder_pan.pos --robot-model alohamini2 --delta-deg 1.0 --steps 1 --control-hz 50.0 --settle-tolerance-deg 0.05 --settle-timeout-s 2.0 --timeout-s 60 --csv "$S4DIR/tracking/tracking-7.1b-$STAMP.csv"
+```
+
+`--robot-model alohamini2` 是故意写的错值：宿主报的是 `alohamini2pro`（`configs/site.yaml:12`）。两个值都是 vendor 的合法 SKU（vendor 那份型号表 `model_specs.py:65-80`，`ec65318f` 里 `alohamini2` 与 `alohamini2pro` 两段），且两侧的关节键名集合相同（同文件 `model_specs.py:33-50`，`am-follower-6dof` 与 `am-follower-6dof-hd` 两个关节元组逐项同名），按代码顺序看 Gate B（键在不在）不会先拒——**2026-11-06 实测推翻这一预判**，理由见本节「实测结果」。
+
+#### 实测结果（2026-11-06）：真机落 Gate B，不是 Gate C
+
+原先按代码顺序预判的两支，实测只成立一支，且与预判相反：exit `6`，但拦下来的是 **Gate B**（键在不在），不是 Gate C（模型名）。
+
+| 分支 | 现象 | 结论与记录 |
+| --- | --- | --- |
+| ① 真机主支（2026-11-06 实测） | exit **6**；stderr 原文四行：厂商客户端先打 `ERROR:root:Error processing observation data, serving last observation: Host robot_model does not match the client configuration`，随后本库打 `Gate B refused: 'arm_left_shoulder_pan.pos' is not part of the connected state schema.`（`available: forward, wrist_right`）与 `Check --joint and --robot-model against the host side; nothing was commanded.`；无 CSV（`ls` 报 `No such file or directory`） | 记 Gate B 反向拒绝成立：厂商客户端先按 `robot_model` 把观测 schema 降级成只剩相机键，本库的键存在性检查先拦下，命令一次没下发 |
+| ② 不可达 | Gate C 文案 `Gate C refused: the host reports robot_model='alohamini2pro' but --robot-model='alohamini2' was requested.`（`benchmarks/alohamini_io/measure_latency.py:2392-2396`） | **真机链路不可达**：Gate B 在它之前就拒了。Gate C 的零命令拒绝只能由离线测试锁定（见下） |
+
+机理：厂商客户端解每一帧观测时拿 metadata 的 `robot_model` 与自己的配置比对，不一致就打一条 ERROR 并退回上一帧观测（`serving last observation`），此时状态 schema 里已没有关节键；本库的键存在性检查（Gate B）按 `--joint` 找不到键，直接以 `6` 退出，Gate C 的模型名比对根本没走到。**这是厂商行为，不改 vendor，也不为凑 Gate C 去改本库代码。** Gate B 同样是有效的「零命令」证据。
+
+原文此处曾写「两侧关节键名集合相同，所以 Gate B（键在不在）不会先拒」——2026-11-06 实测推翻：厂商先在客户端侧把 schema 降级，键集合随之改变，Gate B 反而先拒。V10 的 Gate C 专属实机子项在真机上不可达，是否接受 Gate B 替代由上层裁决（已登记进 `TODO.md`）。
+
+Gate C 本身的零命令拒绝由离线测试锁住（现场拿不到就以它们为据）：`tests/benchmarks/test_measure_latency.py::test_main_should_refuse_tracking_when_the_host_reports_another_robot_model`（退出码 `6`、`sent_actions == []`、不写 CSV）、`::test_main_should_refuse_tracking_when_the_host_cannot_name_its_model[empty_metadata|no_robot_model|null_robot_model]`（宿主报不出型号时 fail closed）。
+
+#### 取证三件套
+
+真机上只可能落到第 ① 支（Gate B）；第 ② 支（Gate C 专属文案）在真机链路不可达，只由离线测试锁定。现场这三件照样取：
+
+1. **stderr 原文**（`.log` 里那两行）；
+2. **无 CSV 产物**：`run 7.1b-no-csv ls -l "$S4DIR/tracking/tracking-7.1b-$STAMP.csv"`，期望 `No such file or directory`；
+3. **命令行回显**：`.cmd` 文件里那条完整命令。
+
+「零命令」在现场的可取证形态就是这三件；V10 的 `send_action` 计数只能在离线测试里锁（现场没有计数钩子，`--mode tracking` 的真 client 也不暴露下发计数）。
+
+产物：`stdout/7.1b-gatec-reverse-$STAMP.{cmd,log,exit}`、`stdout/7.1b-no-csv-$STAMP.*`。
+
+<a id="sec-10-5"></a>
+<a id="exp-e5"></a>
+## E5 肩部定性专项（原 §10.5）
+
+| 字段 | 内容 |
+| --- | --- |
+| 目的 | 肩部停滞发生在 Host 侧还是 Host 下游：teleop oracle、M1、M2 三段走法 |
+| 前置 | 见本卡「M1（有人在场）」的硬前置段；开跑勾选单见 [§7.1](#exp-e3) |
+| 前置卡 | E4 |
+| 后继卡 | E6 |
+| 命令 | 见本卡「teleop oracle（有人最先做，成本最低）」「M1（有人在场）」「M2（有人在场）」三小节 |
+| 判据 | 见本卡 M1 / M2 两张判据表与「产物名与留痕要求」小节 |
+| 预期剧本 | 本卡未单列 |
+| 失败处置 | 见 [§12](../reference/troubleshooting.md#sec-12) 与 [§8.1](2-host.md#sec-8-1)（强杀后扭矩保持） |
+| 产物 | 见本卡「产物名与留痕要求」小节 / [§11](../reference/artifacts.md#sec-11) |
+
+本节接 [§7.2](#exp-e3)：那里已把停滞定位到「不在 PC→Host 值传递段」，Host→总线写入段与伺服 / 机械侧仍无观测。本节是要有人到机器人跟前才能做的跟进动作；2026-11-05 远程会话（无人在机器人现场）只完成了 M0。
+
+复现遥操作那种误差累积形态用 `--anchor command`，这也是现场验证肩部静摩擦能否被累积 lead 破开的用法。[§7.1](#exp-e3) 参数表给的默认值是 `present`（每步重锚实测、lead 只有一步），两者构成对照。首跑用 3–5 步，且 `command` 模式下的 `rise_90_time_s` / `overshoot_deg` / `error_deg` 不与 `present` 横向比较。
 
 ### 背景：M0 已离线排除换算链
 
@@ -71,15 +368,15 @@ python examples/alohamini/teleoperate_bi.py \
 
 三条必须对上的口径：
 
-- `--robot.robot_model` 必须与宿主实报值一致（本机 `configs/site.yaml:12` 是 `alohamini2pro`）；写错会撞厂商客户端自己的模型校验（`alohamini_client.py:417-420` 抛 `ValueError: Host robot_model does not match the client configuration`），见第 7.1b 节的同一条机理。
+- `--robot.robot_model` 必须与宿主实报值一致（本机 `configs/site.yaml:12` 是 `alohamini2pro`）；写错会撞厂商客户端自己的模型校验（`alohamini_client.py:417-420` 抛 `ValueError: Host robot_model does not match the client configuration`），见 [§7.1b](#exp-e4) 的同一条机理。
 - `--teleop.arm_profile am-leader-6dof` 是 6 自由度主臂档；只支持 `so-arm-5dof` / `am-leader-6dof` 两个取值（`examples/alohamini/teleoperate_bi.py:55-63`）。
 - 主臂串口在 vendor 脚本的**提交口径**里是写死的常量，不按平台取、也不可覆盖：`left_arm_config.port="/dev/am_arm_leader_left"`（`examples/alohamini/teleoperate_bi.py:90`）、`right_arm_config.port="/dev/am_arm_leader_right"`（`:94`），两支提交 `ec65318f` 与 `6aee1f81` 上逐字相同；`--teleop.left_port` / `--teleop.right_port` 在这两支上不存在（全仓 `git grep` 零命中）。**但本地 fork 的工作区不是这样**：那 6 个未提交改动已给 `examples/alohamini/teleoperate_bi.py` 加上 `--teleop.left_port`（`:57`）与 `--teleop.right_port`（`:63`），默认值按平台取（`:59` / `:65`：macOS 是 `/dev/tty.usbmodem…`、其它平台是 `/dev/am_arm_leader_*`），并把写死的端口改成读参数（`:103` / `:107`）。现场用哪份检出决定有没有这两个参数：先 `git -C <fork> status --porcelain` 看——输出 6 行（6 个未提交改动在）就是工作区口径，有两个参数且默认按平台取；输出 0 行（干净检出）就是提交口径，没有这两个参数。两种情形都不要自己造端口参数：按提交口径现场只能按写死的取值确认设备是否在位：`ls -l /dev/am_arm_leader_left /dev/am_arm_leader_right`，两条都在才谈 teleop；不在位就记「未测」。
 
-冲突与失败：若遥操作连不上 Host、或报端口被占用，把 stderr 原文记下来，先查 Host 是否真的在跑（§3.4 的 5555 / 5556 `LISTEN`）与 `remote_ip` 是否写对；仍不通就记「未测」，**不要改 vendor 代码、不要猜命令**。
+冲突与失败：若遥操作连不上 Host、或报端口被占用，把 stderr 原文记下来，先查 Host 是否真的在跑（[§3.4](1-prepare.md#sec-3) 的 5555 / 5556 `LISTEN`）与 `remote_ip` 是否写对；仍不通就记「未测」，**不要改 vendor 代码、不要猜命令**。
 
 物理前提（人工确认项）：**主臂手柄（leader）需在现场**、且需先按 vendor 流程标定过（`docs/alohamini/commands.md:149-157` 说明 Pi 侧的 `alohamini_calibrate` 标的是从臂、不是 Mac 侧主臂）。手柄不在场，整条 teleop 不可执行，直接跳到 M1。
 
-判据：位移 **> 20 tick**（≈ 1.76°）算「能动」。读数取动前 / 动后各一次 `Present_Position`，只读，范式同第 4.2 节。
+判据：位移 **> 20 tick**（≈ 1.76°）算「能动」。读数取动前 / 动后各一次 `Present_Position`，只读，范式同 [§4.2](3-health.md#sec-4-2)。
 
 二分结论：
 
@@ -92,11 +389,11 @@ python examples/alohamini/teleoperate_bi.py \
 
 ### M1（有人在场）：`--steps 10` 整轮 10° + `kill -9` 后读寄存器
 
-硬前置（先满足再动手）：**把手臂放到低位，或有人承托**。`kill -9` 之后扭矩保持，但**没有看门狗**——Host 死了不会再兜住下垂，手臂可能重力下垂。风险同第 8.1 节。
+硬前置（先满足再动手）：**把手臂放到低位，或有人承托**。`kill -9` 之后扭矩保持，但**没有看门狗**——Host 死了不会再兜住下垂，手臂可能重力下垂。风险同 [§8.1](2-host.md#sec-8-1)。
 
 步骤：
 
-1. 发一条整轮命令：`--steps 10` + `--delta-deg 1.0`，即 10 步 × 1°，走的是第 7.1 节已跑通的连续路径。关节取 `arm_left_shoulder_pan` 或 `arm_left_shoulder_lift`。**不要试图用 `--delta-deg 10` 一次下发 10°**：常量 `MAX_STEP_DELTA_DEG = 1.0`（`benchmarks/alohamini_io/measure_latency.py:504`）把幅度钳回 1.0°，`--delta-deg 10` 只会按 1.0° 执行。
+1. 发一条整轮命令：`--steps 10` + `--delta-deg 1.0`，即 10 步 × 1°，走的是 [§7.1](#exp-e3) 已跑通的连续路径。关节取 `arm_left_shoulder_pan` 或 `arm_left_shoulder_lift`。**不要试图用 `--delta-deg 10` 一次下发 10°**：常量 `MAX_STEP_DELTA_DEG = 1.0`（`benchmarks/alohamini_io/measure_latency.py:504`）把幅度钳回 1.0°，`--delta-deg 10` 只会按 1.0° 执行。
 
    ```bash
    run 10.5-m1 env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python benchmarks/alohamini_io/measure_latency.py --host "$PI_HOST" --mode tracking --enable-motion --joint arm_left_shoulder_pan.pos --delta-deg 1.0 --steps 10 --control-hz 50.0 --settle-tolerance-deg 0.05 --settle-timeout-s 2.0 --timeout-s 60 --csv "$S4DIR/tracking/tracking-10.5-m1-$STAMP.csv"
@@ -108,15 +405,15 @@ python examples/alohamini/teleoperate_bi.py \
    run 10.5-m1-kill ssh "$PI" 'sleep 3; kill -9 <PID>; echo kill_exit=$?'
    ```
 
-   `<PID>` 取第 3.2 节 `3.2-host-procs` 读到的 Host 进程号。为什么用固定墙钟而不是「等 `.log` 里出现某一行」：`--mode tracking` 在跑动期间不打印逐步进度（`benchmarks/alohamini_io/measure_latency.py` 全文无 `flush=True`，跑动期只有 `:3418-3421` 的横幅，明细要等 `:3555` 的报告），而第 2 节的 `run` 把 stdout 重定向进 `.log` 并在命令返回后才 `cat`，所以 `.log` 不是活的监视面。时间预算：`--steps 10`、每步 settle 上限 `2.0 s`，整轮最长约 `20 s`，`sleep 3` 时一定还在跑。若现场改小了 `--settle-timeout-s`，把 `sleep` 按同一比例改小，保持「不超过整轮预算的 1/3」。
+   `<PID>` 取 [§3.2](1-prepare.md#sec-3) 的 `3.2-host-procs` 读到的 Host 进程号。为什么用固定墙钟而不是「等 `.log` 里出现某一行」：`--mode tracking` 在跑动期间不打印逐步进度（`benchmarks/alohamini_io/measure_latency.py` 全文无 `flush=True`，跑动期只有 `:3418-3421` 的横幅，明细要等 `:3555` 的报告），而 [§2](1-prepare.md#sec-2) 的 `run` 把 stdout 重定向进 `.log` 并在命令返回后才 `cat`，所以 `.log` 不是活的监视面。时间预算：`--steps 10`、每步 settle 上限 `2.0 s`，整轮最长约 `20 s`，`sleep 3` 时一定还在跑。若现场改小了 `--settle-timeout-s`，把 `sleep` 按同一比例改小，保持「不超过整轮预算的 1/3」。
 
-3. 立刻读寄存器（Host 已死，串口空闲），读法沿用第 4.2 节的只读脚本范式（同一套 `run` 包装、同一套脚本副本落 `$S4DIR/stdout/` 的纪律）。
+3. 立刻读寄存器（Host 已死，串口空闲），读法沿用 [§4.2](3-health.md#sec-4-2) 的只读脚本范式（同一套 `run` 包装、同一套脚本副本落 `$S4DIR/stdout/` 的纪律）。
 
    ```bash
    run 10.5-m1-regs ssh "$PI" "~/miniconda3/envs/lerobot_alohamini/bin/python /tmp/4.2-gripper-regs-$STAMP.py"
    ```
 
-   这份脚本的 `MOTORS` 含 ID1 / ID2 / ID3 / ID6 / ID7，六个要读的寄存器都在其 `REQUIRED_REGS` + `EXTRA_REGS` 里；若 §4.2 当时投的是 18 电机版，用 `/tmp/4.2-all18-left-$STAMP.py`。
+   这份脚本的 `MOTORS` 含 ID1 / ID2 / ID3 / ID6 / ID7，六个要读的寄存器都在其 `REQUIRED_REGS` + `EXTRA_REGS` 里；若 [§4.2](3-health.md#sec-4-2) 当时投的是 18 电机版，用 `/tmp/4.2-all18-left-$STAMP.py`。
 
 **禁用 `SIGTERM`，只用 `kill -9`**：Host 干净退出会走 `disable_torque`（失力），之后读到的 `Torque_Enable` 是退出后的状态，不是运动中的状态——读数是假的。`kill -9` 不给进程处理机会，扭矩保持，读到的才是运动中的状态。
 
@@ -141,7 +438,7 @@ python examples/alohamini/teleoperate_bi.py \
    tr -d '\r' < "$CSV" | awk -F, -v last="$LASTCMD" 'NR>1 && $9=="watchdog" && $2+0>last+0 {print $2}' | sort -un
    ```
 
-   判据：最后那条 `awk` 空输出 → 过了这一关；打印出任何 `sample_sequence` → 说明该客户端当时还在采样、却已 ≥1 s 没有发出被接受的命令（那几帧的 `target_source` 是 Host 的保持位改写），该轮读数**不能**用于分支③，改判「未落到分支」并重跑。两条实现要点：sidecar 是 CRLF 行尾，`tr -d '\r'` 不能省（不删 `\r` 时 `$9` 永远不等于 `watchdog`，检查会静默「通过」）；`$9` 是 `target_source`、`$2` 是 `sample_sequence`（列义见第 11 节）。
+   判据：最后那条 `awk` 空输出 → 过了这一关；打印出任何 `sample_sequence` → 说明该客户端当时还在采样、却已 ≥1 s 没有发出被接受的命令（那几帧的 `target_source` 是 Host 的保持位改写），该轮读数**不能**用于分支③，改判「未落到分支」并重跑。两条实现要点：sidecar 是 CRLF 行尾，`tr -d '\r'` 不能省（不删 `\r` 时 `$9` 永远不等于 `watchdog`，检查会静默「通过」）；`$9` 是 `target_source`、`$2` 是 `sample_sequence`（列义见 [§11](../reference/artifacts.md#sec-11)）。
 
    这一检查管不了「客户端先死」：sidecar 只记客户端收到的帧，客户端一断采样就不再落行（本仓库 `benchmarks/alohamini_io/measure_latency.py` 的 `_observe` 按新帧计快照，约 `:3120`），所以那种情形在本轮 sidecar 里根本看不到 `watchdog`——主判据只能靠第 1 步。首帧 `watchdog` 之所以也不算：它在第一条命令之前，是上一轮遗留（见上一段），与本轮客户端死活无关。
 3. **没有 sidecar 时以 Host 日志 + 时刻先后为准。** 按本节的跑动中 `kill -9` 流程（先杀 Host）时，客户端多半在收尾前就断了，`tracking/tracking-10.5-m1-$STAMP.csv` 与 sidecar 通常都不落盘——2026-11-06 的 07:26 那轮即是：`tracking/` 下没有任何 `tracking-10.5-m1-20261106T072606Z*`，该轮判读自记「无 CSV、无每步日志」（`stdout/10.5-m1-verdict-20261106T072606Z.md`「有效性质疑」段）。这种情况下第 2 步无从执行，判定只靠第 1 步的时刻先后，并查 Host 日志里有无 `Host command watchdog expired` 行（有则该轮视为目标被改写，不得当「写没到总线」的证据）。
@@ -183,20 +480,34 @@ run 10.5-m2 env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pcoffeep/pi-w
 
 2026-11-06 实测落在新增的「介于两档之间」那一档：左肩正向 15.82%（18.0 / 113.7527 tick，10 步合计 1.8 tick/步）、左肩反向 36.92%（42.0 tick，4.2 tick/步，反向/正向 2.33 倍）、右肩正向 11.43%（13.0 tick），三轮 10/10 步 `settled=False`。判读见 `stdout/10.5-m2r1-verdict-20261106T075623Z.md`（第 1.4、2.2 节）、`stdout/10.5-rightpan-judge-20261106T084419Z.txt`（第 3 节）。这一档只写「阈值型为主、叠加方向不对称」，不得据此判单向机械阻挡。
 
-留痕：`stdout/10.5-m2-$STAMP.{cmd,log,exit}`、`stdout/10.5-m2-kill-$STAMP.*`、`stdout/10.5-m2-regs-$STAMP.log` + 一份主 CSV（沿用 `--mode tracking` 的 tracking CSV 命名，见第 11 节）。
+留痕：`stdout/10.5-m2-$STAMP.{cmd,log,exit}`、`stdout/10.5-m2-kill-$STAMP.*`、`stdout/10.5-m2-regs-$STAMP.log` + 一份主 CSV（沿用 `--mode tracking` 的 tracking CSV 命名，见 [§11](../reference/artifacts.md#sec-11)）。
 
 ### 产物名与留痕要求
 
 - 所有产物落 `$S4DIR/stdout/` 与 `$S4DIR/tracking/`，命名 `10.5-<子项>-<STAMP>.<ext>`（子项取 `teleop` / `m1` / `m1-kill` / `m1-regs` / `m2` / `m2-kill` / `m2-regs`）。
-- 每步必须有 `.cmd` / `.log` / `.exit` 三件套，写法同第 2 节的 `run` 包装。
+- 每步必须有 `.cmd` / `.log` / `.exit` 三件套，写法同 [§2](1-prepare.md#sec-2) 的 `run` 包装。
 - 每条结论必须落到本节的分支之一（teleop 的二分、M1 的三分支、M2 的三种形态），并把对应的寄存器原文或 CSV 行号写进记录；没落到分支的记录不算结论。
 - 现场若拿到与本文不符的输出形态，按实际输出修正并回写到本小节（沿用本文档原有的回写约定）。
 
-## 10.6 ik 通路与 Gate D：`measure_latency.py` 没有 ik 模式（预写，未真机执行）
+<a id="sec-10-6"></a>
+<a id="exp-e6"></a>
+## E6 ik 通路与 Gate D（原 §10.6）
+
+| 字段 | 内容 |
+| --- | --- |
+| 目的 | 回答 `measure_latency.py` 有没有 ik 模式，以及 Gate D 在真机上唯一可能的触发形态 |
+| 前置 | 见本卡「安全：本节不动电机」一小节（本卡不动电机） |
+| 前置卡 | E5 |
+| 后继卡 | E7 |
+| 命令 | 本卡无现场命令，见本卡「ik 通路怎么验：不在 `measure_latency.py` 里」一小节 |
+| 判据 | 见本卡「Gate D 的定义、唯一触发路径与三处限制」与「现场确认项」两小节 |
+| 预期剧本 | 本卡未单列 |
+| 失败处置 | [§12](../reference/troubleshooting.md#sec-12) |
+| 产物 | 见本卡「现场确认项」表 / [§11](../reference/artifacts.md#sec-11) |
 
 本节是跑法预写，一次真机记录都还没有，判据与预期值未经现场校验。
 
-本节接 §10.5 之后，回答两件事：`measure_latency.py` 里有没有「ik 模式」（结论：没有），以及 Gate D（baseline 反馈缺失或非有限即拒绝）在真机上唯一可能的触发形态、取证边界与替代证据。
+本节接 [§10.5](#exp-e5) 之后，回答两件事：`measure_latency.py` 里有没有「ik 模式」（结论：没有），以及 Gate D（baseline 反馈缺失或非有限即拒绝）在真机上唯一可能的触发形态、取证边界与替代证据。
 
 ### 本轮 brief 的假设与代码不符：`--mode` 只有两个取值
 
@@ -216,10 +527,10 @@ run 10.5-m2 env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pcoffeep/pi-w
 | `--mode` 取值 | 一句话人话 | 动机器人 | 走哪套门禁 |
 | --- | --- | --- | --- |
 | `rtt`（默认） | 只测请求年龄 | 否 | 无运动门禁，Gate A–F 不执行 |
-| `tracking` | 单关节阶跃响应 | 是 | Gate A–F（§7.1 的表） |
+| `tracking` | 单关节阶跃响应 | 是 | Gate A–F（[§7.1](#exp-e3) 的表） |
 | `ik`（**不存在**） | — | — | 传进来即参数解析失败，退出码 `2` |
 
-附录 A 的 measure 参数表里 `--mode` 一行也只写 `rtt` 或 `tracking`，与源码一致。结论：「`measure_latency.py --mode ik`」这种写法不存在；现场照 brief 字面去试，拿到的是 argparse 的用法错误（退出码 `2`，不连设备、不开 socket，触发点清单见 §10 的「退出码 2 的全部触发点」）。
+附录 A 的 measure 参数表里 `--mode` 一行也只写 `rtt` 或 `tracking`，与源码一致。结论：「`measure_latency.py --mode ik`」这种写法不存在；现场照 brief 字面去试，拿到的是 argparse 的用法错误（退出码 `2`，不连设备、不开 socket，触发点清单见 [§10](../reference/gates.md#exit-codes) 的「退出码 2 的全部触发点」）。
 
 ### Gate D 的定义、唯一触发路径与三处限制
 
@@ -256,7 +567,7 @@ Gate D refused: baseline feedback for 'arm_left_shoulder_pan.pos' is missing or 
 | 存在 | `nan` / `inf` / 非数值文本 | **Gate D** | `6` |
 | 存在 | `None` | **Gate D**（`float(None)` 抛 `TypeError`） | `6` |
 
-退出码常量是 `EXIT_MOTION_GATE_REFUSED = 6`（`benchmarks/alohamini_io/measure_latency.py:472`），与 §10 的「measure 6 = 代码 Gate A–F 拒绝」同一格。
+退出码常量是 `EXIT_MOTION_GATE_REFUSED = 6`（`benchmarks/alohamini_io/measure_latency.py:472`），与 [§10](../reference/gates.md#exit-codes) 的「measure 6 = 代码 Gate A–F 拒绝」同一格。
 
 离线复现（本轮实测，一次性探针落 `/tmp`，不入库）：把步进关节的反馈改成 `nan`（键仍在观测里；元数据照 `_TrackingFake` 的形状：`schema_version` 2 加该关节的 `range_min` / `range_max` / `resolution`）、跑一次 `--mode tracking`。
 
@@ -392,7 +703,7 @@ grep -rn "baseline feedback" tests/ --include=*.py
 
 `measure_latency.py` 全文没有 IK：没有 `placo`、没有 `ArmIK`、没有正向运动学。它的每步目标是「锚点角度 + `--delta-deg`」的算术（`benchmarks/alohamini_io/measure_latency.py:3155-3168`），一次只动一个关节。
 
-「笛卡尔目标 → IK → 六关节角 → 下发」这一段在库侧：`ArmHandle.move_to`（`src/alohamini_cartesian/control/api.py:214`）。要验这一段只能走库 API，跑法见 §10.7。两条通路的对照：
+「笛卡尔目标 → IK → 六关节角 → 下发」这一段在库侧：`ArmHandle.move_to`（`src/alohamini_cartesian/control/api.py:214`）。要验这一段只能走库 API，跑法见 [§10.7](#exp-e7)。两条通路的对照：
 
 | 项 | `measure_latency --mode tracking` | `ArmHandle.move_to` |
 | --- | --- | --- |
@@ -400,7 +711,7 @@ grep -rn "baseline feedback" tests/ --include=*.py
 | 解算 | 无 IK，直接加减角度 | 每周期 `ArmIK.solve`（`placo`）解六关节 |
 | 目标关节数 | 1 | 6 |
 | 门禁来源 | `benchmarks/alohamini_io/measure_latency.py` 的 Gate A–F | 库内 step gate、lead 钳位、`JOINT_LIMIT`、follow-error 监督、`move_to` 超时 |
-| 产物 | `tracking-*.csv` 与其 sidecar | 调用方自己留痕（§10.7 的脚本写 JSON） |
+| 产物 | `tracking-*.csv` 与其 sidecar | 调用方自己留痕（[§10.7](#exp-e7) 的脚本写 JSON） |
 
 **两套门禁不同名、不同源，不得互相替代为证据**：tracking 的记录证明不了 `move_to` 的门禁，`move_to` 的记录也证明不了 Gate A–F。
 
@@ -408,14 +719,14 @@ grep -rn "baseline feedback" tests/ --include=*.py
 
 | 动作 | 是否动机器人 | 前置 |
 | --- | --- | --- |
-| 离线 IK / 预检求解（含 §10.7 的 `--dry-run`） | 否，纯数值 | 无 |
+| 离线 IK / 预检求解（含 [§10.7](#exp-e7) 的 `--dry-run`） | 否，纯数值 | 无 |
 | `measure_latency --mode rtt` | 否 | 现场网络与登录授权 |
-| `measure_latency --mode tracking` | **是** | 运动档：`--enable-motion` + §7.1 的开跑勾选单 + 现场运动授权 |
-| `ArmHandle.move_to` 真跑 | **是** | 见 §10.7 的「安全前置」 |
+| `measure_latency --mode tracking` | **是** | 运动档：`--enable-motion` + [§7.1](#exp-e3) 的开跑勾选单 + 现场运动授权 |
+| `ArmHandle.move_to` 真跑 | **是** | 见 [§10.7](#exp-e7) 的「安全前置」 |
 
-本节自身不引入任何运动命令；若现场为取证 Gate D 而跑 `--mode tracking`，按 §7.1 的既有前置与授权走，不另立口径。
+本节自身不引入任何运动命令；若现场为取证 Gate D 而跑 `--mode tracking`，按 [§7.1](#exp-e3) 的既有前置与授权走，不另立口径。
 
-### 现场确认项（§10.6）
+### 现场确认项（[§10.6](#exp-e6)）
 
 | # | 确认项 | 怎么确认 | 确认不了怎么办 |
 | --- | --- | --- | --- |
@@ -423,34 +734,48 @@ grep -rn "baseline feedback" tests/ --include=*.py
 | 2 | Gate D 的现场形态只能被动等待（无注入路径） | 现场 stderr 出现 `Gate D refused:` 即触发 | 等不到就记「未触发」，判据不因此作废 |
 | 3 | Gate D 文案没有离线用例锁定（遗留项） | `grep -rn "Gate D" tests/ --include=*.py` 命中两处，均为注释或 docstring，无断言 | 不在现场补测；交回仓库侧处理 |
 | 4 | 真触发到 Gate D 时证据要齐 | stderr 原文 + 退出码 + 是否落 CSV，三件一起存 | 缺任一件则该次不算证据 |
-| 5 | tracking 的记录不能当 `move_to` 的证据 | 对照本节「ik 通路怎么验」的表 | 需要 `move_to` 证据时按 §10.7 跑 |
+| 5 | tracking 的记录不能当 `move_to` 的证据 | 对照本节「ik 通路怎么验」的表 | 需要 `move_to` 证据时按 [§10.7](#exp-e7) 跑 |
 
-## 10.7 `move_to` 与笛卡尔路径：手册内嵌驱动脚本（预写，未真机执行）
+<a id="sec-10-7"></a>
+<a id="exp-e7"></a>
+## E7 move_to 与笛卡尔路径（原 §10.7）
+
+| 字段 | 内容 |
+| --- | --- |
+| 目的 | 把库 API `move_to` 跑起来的完整跑法：内嵌驱动脚本、命令、判据与预期值 |
+| 前置 | 见本卡「硬前置（先满足再动手）」段、「环境前置：两个 venv 都不够用」与「安全前置（真实运动档）」 |
+| 前置卡 | E6 |
+| 后继卡 | E8 |
+| 命令 | 见本卡「命令（①b 逐字可抄；①a/②/③ 待前置落地）」小节 |
+| 判据 | 见本卡「判据表」与「预期值表（两种形态）」两小节 |
+| 预期剧本 | 见本卡「预期值表（两种形态）」与「现场最可能的形态」段 |
+| 失败处置 | 见 [§12](../reference/troubleshooting.md#sec-12) 与本卡「判据表」的退出码一节 |
+| 产物 | 见本卡「命令」小节末段的产物约定 / [§11](../reference/artifacts.md#sec-11) |
 
 本节是跑法预写，一次真机记录都还没有，判据与预期值未经现场校验。
 
-本节接 §10.6：ik 通路只有库 API 这一条路，所以这里给的是「怎么把库 API 跑起来」的完整跑法，而不是某个现成脚本的参数表。
+本节接 [§10.6](#exp-e6)：ik 通路只有库 API 这一条路，所以这里给的是「怎么把库 API 跑起来」的完整跑法，而不是某个现成脚本的参数表。
 
-**硬前置（先满足再动手）：本节 ①a / ② / ③ 三条命令的前置当前不满足。** 这三条都强制 `--signs-json` / `--zeros-json`，而 `signs`（六关节 ±1）/ `zeros`（六关节零点，度）的**产出流程见 §10.8（预写，未真机执行）；未标定前 ①a / ② / ③ 不可执行**。仓库侧现状照旧：`tools/` 只有 `verify_unit_consistency.py`（离线核对指纹与标定的单位口径），`benchmarks/` 下两个脚本不产出它们，仓库内的 `.py` 文件对 `signs-json` / `zeros-json` 零命中（`grep -rn "signs-json\|zeros-json" --include=*.py .` 无输出，只有本手册提到这两个选项名）；`examples/robot_dry_run.py:46` 自述「`JointKinematicAdapter` 需要每侧六关节完整的 `signs`/`zeros`，现场没有标定值」。因此：
+**硬前置（先满足再动手）：本节 ①a / ② / ③ 三条命令的前置当前不满足。** 这三条都强制 `--signs-json` / `--zeros-json`，而 `signs`（六关节 ±1）/ `zeros`（六关节零点，度）的**产出流程见 [§10.8](#exp-e8)（预写，未真机执行）；未标定前 ①a / ② / ③ 不可执行**。仓库侧现状照旧：`tools/` 只有 `verify_unit_consistency.py`（离线核对指纹与标定的单位口径），`benchmarks/` 下两个脚本不产出它们，仓库内的 `.py` 文件对 `signs-json` / `zeros-json` 零命中（`grep -rn "signs-json\|zeros-json" --include=*.py .` 无输出，只有本手册提到这两个选项名）；`examples/robot_dry_run.py:46` 自述「`JointKinematicAdapter` 需要每侧六关节完整的 `signs`/`zeros`，现场没有标定值」。因此：
 
 | 档 | 可执行性 | 依据 |
 | --- | --- | --- |
 | ①b（纯离线 `--dry-run`） | **可执行**：只用 URDF 与 seed，不读 `signs` / `zeros` | `_run_dry` 只调 `_build_ik` / `_urdf_limits_deg`，不建 adapter、不建 client |
 | ①a / ② / ③ | **暂不可执行**：缺 `signs` / `zeros` 就直接按 `15` 退出 | `_load_side_json` 的 `path is None` 分支 |
 
-`signs` / `zeros` 的产出流程已在 §10.8 预写、待现场执行并回写；在这之前这三条记为「**暂不可执行**」，且**不得为了让命令跑起来去手写或猜 `signs` / `zeros`**（那是伪标定，违反 `AGENTS.md` 第 3 节的证据纪律）。本节其余内容（判据表、预期值表、安全前置、现场确认项）仍按预写保留，等 §10.8 现场执行并回写后照原样执行。
+`signs` / `zeros` 的产出流程已在 [§10.8](#exp-e8) 预写、待现场执行并回写；在这之前这三条记为「**暂不可执行**」，且**不得为了让命令跑起来去手写或猜 `signs` / `zeros`**（那是伪标定，违反 `AGENTS.md` 第 3 节的证据纪律）。本节其余内容（判据表、预期值表、安全前置、现场确认项）仍按预写保留，等 [§10.8](#exp-e8) 现场执行并回写后照原样执行。
 
 ### 调用途径判定：仓库里没有现成入口
 
 | 候选入口 | 有什么 | 能不能下发 `move_to` |
 | --- | --- | --- |
-| `benchmarks/alohamini_io/measure_latency.py` | `--mode rtt` / `--mode tracking` | 不能：两个模式都不碰 IK（§10.6） |
+| `benchmarks/alohamini_io/measure_latency.py` | `--mode rtt` / `--mode tracking` | 不能：两个模式都不碰 IK（[§10.6](#exp-e6)） |
 | `tools/` | 只有 `verify_unit_consistency.py`（离线核对指纹与标定的单位口径，只读两个 JSON） | 不能 |
 | `examples/minimal_dry_run.py` | 内存假 transport 演示 `move_by` 全链路 | 不能：不连设备 |
 | `examples/robot_dry_run.py` | 真 client 注入 + 零发送 dry-run | 不能：不注入 adapter 与 IK 工厂，命令在状态机之前就被拒 |
 | `connect(...)` + `ArmHandle.move_to` | 唯一真下发路径 | 能，但仓库里没有调用方脚本 |
 
-结论：最小改动路径 = 本节内嵌的 Python 驱动脚本，落 `/tmp`（照 §4.2「脚本副本落 `$S4DIR/stdout/`」的同一套纪律，不新建仓库文件）。写法照 `examples/robot_dry_run.py` 的姿势：厂商客户端由 `client_factory` 注入，`lerobot` 的 import 只发生在最内层工厂函数体内。「`src/` 不许 import `lerobot`」那条边界只约束 `src/`；驱动脚本作为手册内嵌代码，按 `examples/` 的既有写法注入。
+结论：最小改动路径 = 本节内嵌的 Python 驱动脚本，落 `/tmp`（照 [§4.2](3-health.md#sec-4-2)「脚本副本落 `$S4DIR/stdout/`」的同一套纪律，不新建仓库文件）。写法照 `examples/robot_dry_run.py` 的姿势：厂商客户端由 `client_factory` 注入，`lerobot` 的 import 只发生在最内层工厂函数体内。「`src/` 不许 import `lerobot`」那条边界只约束 `src/`；驱动脚本作为手册内嵌代码，按 `examples/` 的既有写法注入。
 
 ### 环境前置：两个 venv 都不够用（本轮实测）
 
@@ -476,7 +801,7 @@ ModuleNotFoundError: No module named 'placo'
 | 路 | 命令 | 风险与判据 |
 | --- | --- | --- |
 | A（首选） | `uv pip install --python .venvs/alohamini-lerobot/bin/python "placo==0.10.1"` | 可能挪 `numpy`（该环境现为 `2.2.6`，主 `.venv` 是 `2.3.5`）。装前装后各存一份 `uv pip list`；判据：`import lerobot` 与 `import placo` 同时成功且差异只在预期内，否则回退 |
-| B（隔离） | `cp -a .venvs/alohamini-lerobot .venvs/s4-move-to` 后在副本里装 `placo` | vendor 环境零改动；代价是多一份同量级副本（§5.3 记录过 875 M 这一量级） |
+| B（隔离） | `cp -a .venvs/alohamini-lerobot .venvs/s4-move-to` 后在副本里装 `placo` | vendor 环境零改动；代价是多一份同量级副本（[§5.3](../reference/env-rebuild.md#sec-5-3) 记录过 875 M 这一量级） |
 
 两条都不改仓库文件，也不改 Pi 上的部署。
 
@@ -484,7 +809,7 @@ ModuleNotFoundError: No module named 'placo'
 
 把下面整段存成 `/tmp/s10-7-move-to.py`，后面三条命令都用它。三档：`--dry-run`（纯离线）、`--limits-only`（只读限位窗口）、默认（真跑，必须显式给 `--enable-motion`）。
 
-**留存一份脚本本体**：`/tmp` 不归档，证据目录里只留得住输出、留不住脚本。第一次跑本节前先把它另存一份到证据目录（与 §4.2 / §4.2c 的脚本副本纪律一致）：
+**留存一份脚本本体**：`/tmp` 不归档，证据目录里只留得住输出、留不住脚本。第一次跑本节前先把它另存一份到证据目录（与 [§4.2](3-health.md#sec-4-2) / [§4.2c](3-health.md#sec-4-2) 的脚本副本纪律一致）：
 
 ```bash
 mkdir -p "$S4DIR/stdout" && cp -p /tmp/s10-7-move-to.py "$S4DIR/stdout/10.7-script-$STAMP.py"
@@ -500,7 +825,7 @@ mkdir -p "$S4DIR/stdout" && cp -p /tmp/s10-7-move-to.py "$S4DIR/stdout/10.7-scri
 #!/usr/bin/env python3
 """§10.7 驱动脚本草案（预写，未真机执行）。
 
-手册 docs/field-ops/50-experiments.md §10.7 内嵌这份脚本，仓库里不新建文件。三种跑法：
+手册 docs/field-ops/runbook/4-experiments.md §10.7 内嵌这份脚本，仓库里不新建文件。三种跑法：
 
   --dry-run       纯离线：读 URDF 限位、解 IK、逐毫米预检；不建客户端、零网络、零发送
   --limits-only   只读：连真机读 metadata，打印两侧有效限位窗口；dry_run=True，零发送
@@ -962,11 +1287,11 @@ if __name__ == "__main__":
 
 ### 命令（①b 逐字可抄；①a/②/③ 待前置落地）
 
-Host 起法见 §6.1（本节不重启 Host：只要它已在跑）。产物一律显式 `--out`，照 §3.8 的路径纪律。
+Host 起法见 [§6.1](2-host.md#host-start)（本节不重启 Host：只要它已在跑）。产物一律显式 `--out`，照 [§3.8](1-prepare.md#sec-3) 的路径纪律。
 
-产物与输入都落 `$S4DIR/stdout/`（`scope-*` 同目录；§11 的五个子目录不变，本节不新增目录）。`signs` / `zeros` 两份 JSON 是**输入**，不是本节产物：它们是六关节的 sign（±1）与 zero（度）映射，只能来自真实标定，**产出流程见 §10.8（预写，未真机执行；本仓库无产出脚本）**，来源见本节「现场确认项」第 6 条；缺文件时脚本按 `15` 退出、不跑、不造假值。
+产物与输入都落 `$S4DIR/stdout/`（`scope-*` 同目录；[§11](../reference/artifacts.md#sec-11) 的五个子目录不变，本节不新增目录）。`signs` / `zeros` 两份 JSON 是**输入**，不是本节产物：它们是六关节的 sign（±1）与 zero（度）映射，只能来自真实标定，**产出流程见 [§10.8](#exp-e8)（预写，未真机执行；本仓库无产出脚本）**，来源见本节「现场确认项」第 6 条；缺文件时脚本按 `15` 退出、不跑、不造假值。
 
-三条真机档命令的 `PYTHONPATH` 比 §10.5 多一截 `:…/src`：本库没装进 vendor 环境（本轮实测 `find_spec('alohamini_cartesian')` 在该环境返回 `None`），而这三档都要 import `alohamini_cartesian`；`measure_latency.py` 只用标准库，所以 §7.1 / §10.5 的那些命令不需要这一截。
+三条真机档命令的 `PYTHONPATH` 比 [§10.5](#exp-e5) 多一截 `:…/src`：本库没装进 vendor 环境（本轮实测 `find_spec('alohamini_cartesian')` 在该环境返回 `None`），而这三档都要 import `alohamini_cartesian`；`measure_latency.py` 只用标准库，所以 [§7.1](#exp-e3) / [§10.5](#exp-e5) 的那些命令不需要这一截。
 
 **①a 只读：真机限位窗口（零发送）**
 
@@ -1034,7 +1359,7 @@ run 10.7-path env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:/Users/pcoffeep/pi
 
 | 情形 | 口径 | 怎么办 |
 | --- | --- | --- |
-| 通过 | 绝对值（实测值 − 指令值）≤ 1 mm，即毫米级以内 | 按 §11 归档：`stdout/10.7-tape-$STAMP.md` 与 `10.7-single-$STAMP.json`、`.cmd` 同批存 |
+| 通过 | 绝对值（实测值 − 指令值）≤ 1 mm，即毫米级以内 | 按 [§11](../reference/artifacts.md#sec-11) 归档：`stdout/10.7-tape-$STAMP.md` 与 `10.7-single-$STAMP.json`、`.cmd` 同批存 |
 | 不通过 | 差值超 1 mm | 记下读数与差值后**停在这一步**，不改容差、不改判据；`docs/ADR.md` D21 的重新评估条件①（卷尺实测偏差超毫米级）就此触发：回头修 `kinematics.urdf` 的杆长参数，再重跑本节 ② 与 ④ |
 | 无效 | 量法不成立（起点未标实物、3 次极差 > 2 mm、未等静止、尺未校竖直） | 记「无效，重做」，**不得**记为通过 |
 
@@ -1047,12 +1372,12 @@ run 10.7-path env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:/Users/pcoffeep/pi
 
 ### 判据表
 
-**(a) 退出码**：`10` 以上本节新增、脚本自定义，与 §10 的 `0`–`9` 不冲突。
+**(a) 退出码**：`10` 以上本节新增、脚本自定义，与 [§10](../reference/gates.md#exit-codes) 的 `0`–`9` 不冲突。
 
 | 码 | 含义 | 对应异常 / 来源 | 是否可能已下发 |
 | --- | --- | --- | --- |
 | `0` | 到位（离线档为判据全过） | — | 离线档为零发送 |
-| `2` | 参数解析失败 | argparse 自身，或本脚本对 `--points` / `--dz` / `--timeout-s` 的入参校验（`_EXIT_USAGE`），同 §10 既有口径 | 否 |
+| `2` | 参数解析失败 | argparse 自身，或本脚本对 `--points` / `--dz` / `--timeout-s` 的入参校验（`_EXIT_USAGE`），同 [§10](../reference/gates.md#exit-codes) 既有口径 | 否 |
 | `10` | 预检 / IK 拒绝 | `OutOfRange`（`src/alohamini_cartesian/control/api.py:199-201`） | 否 |
 | `11` | `move_to` 超时 | `MotionTimeout`（`src/alohamini_cartesian/control/api.py:299-302`） | 可能（视 step gate 是否放行过某些周期） |
 | `12` | 反馈失联 | `FeedbackLost`（`src/alohamini_cartesian/control/api.py:324-327`） | 可能 |
@@ -1095,7 +1420,7 @@ run 10.7-path env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:/Users/pcoffeep/pi
 
 **(d) Gate A–F 在 `move_to` 路径上不生效**
 
-Gate A–F 是 `measure_latency.py` 里的运行时门禁（§7.1 的表），`move_to` 一个都不经过：两者在不同文件、不同入口。`move_to` 路径上的替代物：
+Gate A–F 是 `measure_latency.py` 里的运行时门禁（[§7.1](#exp-e3) 的表），`move_to` 一个都不经过：两者在不同文件、不同入口。`move_to` 路径上的替代物：
 
 | Gate A–F | `move_to` 路径上的对应物 | 依据 |
 | --- | --- | --- |
@@ -1108,9 +1433,9 @@ Gate A–F 是 `measure_latency.py` 里的运行时门禁（§7.1 的表），`m
 
 ### 安全前置（真实运动档）
 
-真跑前逐条勾选，勾不全不开跑。本节只列 `move_to` 额外的几条，其余与 §7.1 的开跑勾选单并行使用：
+真跑前逐条勾选，勾不全不开跑。本节只列 `move_to` 额外的几条，其余与 [§7.1](#exp-e3) 的开跑勾选单并行使用：
 
-- [ ] 现场运动授权到手，写明「哪一侧臂、沿 +Z 9 cm、谁在旁、断电开关在谁手上」，落进 §3.9 的 `scope-*`
+- [ ] 现场运动授权到手，写明「哪一侧臂、沿 +Z 9 cm、谁在旁、断电开关在谁手上」，落进 [§3.9](1-prepare.md#sec-3) 的 `scope-*`
 - [ ] **手臂低位或有承托**：`move_to` 的姿态目标是单位矩阵（不是保持当前姿态），末端姿态会朝 identity 大幅转
 - [ ] 有能按断电开关的人站在机器人旁；远程无人在场时**不跑** ② 与 ③
 - [ ] 空场、无负载、另一臂不参与
@@ -1173,25 +1498,39 @@ Gate A–F 是 `measure_latency.py` 里的运行时门禁（§7.1 的表），`m
 
 **现场最可能的形态（离线可推、未实测）**：identity 形态下第一个点就要把 `wrist_roll` 从 seed 的 `-10°` 跨到 `-163.6°`，跨 `153.6°`；而 step gate 上限是 `2.0°` / 周期（`src/alohamini_cartesian/control/controller.py:133`、`src/alohamini_cartesian/control/controller.py:535-543`）。若真机位姿接近这个假设 seed，②③ 会在第一个周期就被 step gate 拒发、逐周期重复，最后走满 `--timeout-s` 抛 `MotionTimeout`（`src/alohamini_cartesian/control/api.py:300`），JSON 里 `moves` 没有成功行——**这是预期形态，不是故障**。反过来，若真机位姿与假设差很远（例如 `wrist_roll` 本来就在 `-163°` 附近），第一次真跑可能真的动起来。两种结果都要按本节留痕，并按「现场确认项」第 8 条判。
 
-### 现场确认项（§10.7）
+### 现场确认项（[§10.7](#exp-e7)）
 
 | # | 确认项 | 怎么确认 | 确认不了怎么办 |
 | --- | --- | --- | --- |
-| 1 | 真机当前位姿（六关节角与末端 xyz） | ①a 的 metadata 与 ①b 的 seed 对照；或按 §4.4 的只读观测取 | 拿到后替换 `--q-seed-deg`，离线表才算对真机成立 |
+| 1 | 真机当前位姿（六关节角与末端 xyz） | ①a 的 metadata 与 ①b 的 seed 对照；或按 [§4.4](3-health.md#sec-4-4) 的只读观测取 | 拿到后替换 `--q-seed-deg`，离线表才算对真机成立 |
 | 2 | 真机真实关节限位窗口（尤其 `wrist_roll` 是否覆盖 `-163.7°`） | ①a 打印的 `effective_limits_deg` | 不覆盖就停，不跑 ②③；记为「形态不可达」 |
 | 3 | 工作区范围 | 配置里没有（`site.yaml` 七个键，见 `src/alohamini_cartesian/config/overlay.py:40`） | 只能现场目视与询问；离线不给结论 |
 | 4 | `+Z` 向上 9 cm 物理上是否撞物 / 撞桌 | 目视；注意 `placo` 模型已剥掉 collision mesh、无自碰撞与桌面约束 | 有碰撞风险就停，或减小 `--dz` |
 | 5 | 9 cm 在 `2.0°` / 周期 step gate 下要走多少周期、能否在 `10 s` 内到位 | 用 ①b 的最大单关节跨度 ÷ `2.0°` × `1/30 s` 估算（identity 形态的 `wrist_roll` 约 `153.6°` → 约 77 个周期 ≈ `2.6 s`，前提是第一步就能被接受） | 估算不能替实测；现场以 `moves[].elapsed_s` 与是否超时为准 |
-| 6 | `signs` / `zeros` 的产出流程（**流程见 §10.8，预写未执行；未标定前阻塞 ①a / ② / ③**） | 无离线推导法：只能来自真实标定，仓库里没有产出脚本，产出流程是 §10.8 的预写跑法（见本节节首硬前置）；另：右臂复用同一份左臂 URDF 模型（`src/alohamini_cartesian/kinematics/joint_adapter.py:76-82` 的注释写明这是库的假设） | 产出流程现场执行并回写前，这三档记为「暂不可执行」；**不得**手写或猜这两份 JSON，也不得用左臂值顶替右臂；→ 见 §10.8 |
-| 7 | Gate D 的现场触发形态 | 见 §10.6 的「现场确认项」 | 同 §10.6：等不到就记「未触发」 |
+| 6 | `signs` / `zeros` 的产出流程（**流程见 [§10.8](#exp-e8)，预写未执行；未标定前阻塞 ①a / ② / ③**） | 无离线推导法：只能来自真实标定，仓库里没有产出脚本，产出流程是 [§10.8](#exp-e8) 的预写跑法（见本节节首硬前置）；另：右臂复用同一份左臂 URDF 模型（`src/alohamini_cartesian/kinematics/joint_adapter.py:76-82` 的注释写明这是库的假设） | 产出流程现场执行并回写前，这三档记为「暂不可执行」；**不得**手写或猜这两份 JSON，也不得用左臂值顶替右臂；→ 见 [§10.8](#exp-e8) |
+| 7 | Gate D 的现场触发形态 | 见 [§10.6](#exp-e6) 的「现场确认项」 | 同 [§10.6](#exp-e6)：等不到就记「未触发」 |
 | 8 | 7 点路径每周期关节步长是否触发 step gate 拒发 | 看 `moves` 是否出现「超时且无成功行」 | 触发了即预期形态；要真正走完需另议分点策略，不在本节范围内 |
 | 9 | 卷尺在手（钢卷尺或 30 cm 钢直尺，最小刻度 1 mm）+ 美纹纸 + 垂线或角尺 | 开跑前查实物在场：④ 卷尺实测靠这三样，缺一样判据不成立 | 缺就**不记录 ④**，记「未测：量具不在场」，不得用目测或 FK 预测值代替 |
 
-## 10.8 signs / zeros 标定流程（预写，未真机执行）
+<a id="sec-10-8"></a>
+<a id="exp-e8"></a>
+## E8 signs / zeros 标定流程（原 §10.8）
+
+| 字段 | 内容 |
+| --- | --- |
+| 目的 | 把 `signs`（六关节 ±1）与 `zeros`（六关节零点，度）从「摆一个能用人眼判的姿势」产出来 |
+| 前置 | 见本卡「zeros 现场标定」的读数前置与「安全前置」 |
+| 前置卡 | E7 |
+| 后继卡 | 收尾 5-wrapup.md |
+| 命令 | 见本卡「zeros 现场标定」与「sign 判定」两小节 |
+| 判据 | 见本卡「自检（注入后跑 FK）」「sign 判定」「现场确认项」三小节 |
+| 预期剧本 | 本卡未单列 |
+| 失败处置 | [§12](../reference/troubleshooting.md#sec-12) |
+| 产物 | 见本卡「产出物与 JSON 形态」小节 / [§11](../reference/artifacts.md#sec-11) |
 
 本节一次真机都没执行过，所有数值都是离线 URDF 计算或公式推导，判据未经现场校验；执行后按实际回写。
 
-本节只解决一件事：`signs`（六关节 ±1）与 `zeros`（六关节零点，度）这两份映射怎么从「摆一个能用人眼判的姿势」产出来。它对应 §10.7 现场确认项第 6 条所指的产出流程，**不代表这两份文件已经存在**：没有现场记录之前，本节只是跑法预写，§10.7 的 ①a / ② / ③ 仍记「暂不可执行」。
+本节只解决一件事：`signs`（六关节 ±1）与 `zeros`（六关节零点，度）这两份映射怎么从「摆一个能用人眼判的姿势」产出来。它对应 [§10.7](#exp-e7) 现场确认项第 6 条所指的产出流程，**不代表这两份文件已经存在**：没有现场记录之前，本节只是跑法预写，[§10.7](#exp-e7) 的 ①a / ② / ③ 仍记「暂不可执行」。
 
 ### 产出物与 JSON 形态
 
@@ -1239,7 +1578,7 @@ Gate A–F 是 `measure_latency.py` 里的运行时门禁（§7.1 的表），`m
 | `zero` 取值 | 有限数、单位度；在正向式里是**最后一步的加法项**，反向式先减 zero 再乘 sign。非有限在构造时 fail-fast | `src/alohamini_cartesian/kinematics/joint_adapter.py:212` |
 | 组织形态 | `side -> joint -> 值`，两侧各注入一份，构造时传入 | `src/alohamini_cartesian/kinematics/joint_adapter.py:142` |
 | 库内默认值 | **没有**。不注入就构造不出适配器；本库不提供「猜一份」的退路 | `src/alohamini_cartesian/kinematics/joint_adapter.py:147` |
-| 缺文件时现场行为 | §10.7 驱动脚本以 `15` 退出（`_load_side_json` 的前置拒绝，六关节缺一也走这条） | `docs/field-ops/50-experiments.md:739`、`docs/field-ops/50-experiments.md:1061` |
+| 缺文件时现场行为 | [§10.7](#exp-e7) 驱动脚本以 `15` 退出（`_load_side_json` 的前置拒绝，六关节缺一也走这条） | `docs/field-ops/runbook/4-experiments.md:1064`、`docs/field-ops/runbook/4-experiments.md:1386` |
 | 双向消费 | 同一份映射同时用于观测（units→deg）与命令（deg→units），命令区间闸门也用它 | `src/alohamini_cartesian/kinematics/joint_adapter.py:510`、`src/alohamini_cartesian/kinematics/joint_adapter.py:617`、`src/alohamini_cartesian/kinematics/joint_adapter.py:443` |
 | 关节名 | 六关节固定顺序 `shoulder_pan` / `shoulder_lift` / `elbow_flex` / `wrist_flex` / `wrist_yaw` / `wrist_roll` | `src/alohamini_cartesian/kinematics/joint_adapter.py:67` |
 | 右臂关节名 | 电机键是 `arm_right_<joint>.pos`，**URDF 关节名仍是 `left_*`**（右臂复用左臂模型，不是「右臂 = 左臂」的值假设） | `src/alohamini_cartesian/kinematics/joint_adapter.py:76` |
@@ -1262,9 +1601,9 @@ jq -e 'keys | length == 6' "$S4DIR/stdout/10.8-signs-left-$STAMP.json"
 jq -e 'keys | length == 6' "$S4DIR/stdout/10.8-zeros-left-$STAMP.json"
 ```
 
-- 拆分后必须是**扁平**的「关节名 → 数值」；`_load_side_json` 读的就是扁平形态（`docs/field-ops/50-experiments.md:739`），多包一层 `signs` / `zeros` 外层键会被当成「缺关节」并以 `15` 退出。
+- 拆分后必须是**扁平**的「关节名 → 数值」；`_load_side_json` 读的就是扁平形态（[§10.8](#exp-e8) 内嵌那份自检脚本），多包一层 `signs` / `zeros` 外层键会被当成「缺关节」并以 `15` 退出。
 - 现场没有 `jq` 时用别的工具拆也行，判据只有一条：拆出来的文件是扁平六键，值类型是数值。本节只定产物形态，不定工具。
-- §10.7 驱动脚本的 `_build_adapter`（`docs/field-ops/50-experiments.md:750`）把**同一份** `signs` / `zeros` 同时注入 `left` 与 `right` —— 这是脚本的简化。所以**右臂真跑必须传右臂自己的文件**：`--signs-json …/10.8-signs-right-$STAMP.json --zeros-json …/10.8-zeros-right-$STAMP.json`。**不得**把左臂文件传给右臂命令，也不得靠这次简化让右臂「借用」左臂值。
+- [§10.7](#exp-e7) 驱动脚本的 `_build_adapter`（`docs/field-ops/runbook/4-experiments.md:1083`）把**同一份** `signs` / `zeros` 同时注入 `left` 与 `right` —— 这是脚本的简化。所以**右臂真跑必须传右臂自己的文件**：`--signs-json …/10.8-signs-right-$STAMP.json --zeros-json …/10.8-zeros-right-$STAMP.json`。**不得**把左臂文件传给右臂命令，也不得靠这次简化让右臂「借用」左臂值。
 
 ### 参考位形（离线 URDF FK 计算，未经实测）
 
@@ -1322,7 +1661,7 @@ C2b 的离线 FK 结果：末端 `left_Fixed_Jaw` = **(−0.000966, −0.316448,
 两条口径边界，别读过头：
 
 - 这些位置值只说明「同一份 URDF 下自洽」。URDF 杆长**零实测**（`TODO.md` §4 那行），所以它们不是物理精度承诺。
-- `shoulder_lift = −72°` / `elbow_flex = +73°` 是否在真机可达窗口内，离线判不了（URDF 的 ±180° 只是乐观上界），属「现场确认项（§10.8）」第 1 条。
+- `shoulder_lift = −72°` / `elbow_flex = +73°` 是否在真机可达窗口内，离线判不了（URDF 的 ±180° 只是乐观上界），属「现场确认项（[§10.8](#exp-e8)）」第 1 条。
 
 ### zeros 现场标定
 
@@ -1331,12 +1670,12 @@ C2b 的离线 FK 结果：末端 `left_Fixed_Jaw` = **(−0.000966, −0.316448,
 | 步 | 做什么 | 判据 / 依据 |
 | --- | --- | --- |
 | 1 | 摆姿：把六关节摆到 C2b 的形状（大臂竖直向上、小臂水平朝正前方、腕部顺直） | 上节逐关节目视判据；摆完人不要碰 |
-| 2 | 读数：按 §4.1 采一份 `capture` 指纹，`observation_state` 里有每个电机的 `<motor>.pos`（**归一化值**，键形如 `arm_left_shoulder_pan.pos`） | §4.1 的判据（exit 0、`robot_metadata.schema_version == 2`） |
-| 3 | 归一化 → tick：按 §4.1c 的同一条换算 `int(((v + 100) / 200) × (max − min) + min)`，`range_0_100` 用 `int((v / 100) × (max − min) + min)`；`max` / `min` 取该电机 metadata 的 `range_max` / `range_min` | `docs/field-ops/10-health-baseline.md:171`、`docs/field-ops/10-health-baseline.md:265` |
+| 2 | 读数：按 [§4.1](3-health.md#sec-4-1) 采一份 `capture` 指纹，`observation_state` 里有每个电机的 `<motor>.pos`（**归一化值**，键形如 `arm_left_shoulder_pan.pos`） | [§4.1](3-health.md#sec-4-1) 的判据（exit 0、`robot_metadata.schema_version == 2`） |
+| 3 | 归一化 → tick：按 [§4.1c](3-health.md#sec-4-1c) 的同一条换算 `int(((v + 100) / 200) × (max − min) + min)`，`range_0_100` 用 `int((v / 100) × (max − min) + min)`；`max` / `min` 取该电机 metadata 的 `range_max` / `range_min` | `docs/field-ops/runbook/3-health.md:179`、`docs/field-ops/runbook/3-health.md:273` |
 | 4 | tick → 度：`motor_deg = (tick − mid) × 360 / (resolution − 1)`，`mid = (range_min + range_max) / 2` | 这是库观测侧的原式（`src/alohamini_cartesian/kinematics/joint_adapter.py:530`）。口算口径 **1 tick ≈ 0.0879° = 360/4096**（用 `resolution − 1 = 4095` 时 360/4095 = 0.08792°，差 0.02%，判读时忽略） |
 | 5 | 算 zero：`zero = q_target − sign × motor_deg_read`，每关节一次 | 适配器正向式的移项（`src/alohamini_cartesian/kinematics/joint_adapter.py:26`） |
 
-读数链一句话版：**归一化值 → tick（§4.1c 同式）→ 度（1 tick ≈ 0.0879° = 360/4096）→ 代入 `zero = q_target − sign × motor_deg_read`**。
+读数链一句话版：**归一化值 → tick（[§4.1c](3-health.md#sec-4-1c) 同式）→ 度（1 tick ≈ 0.0879° = 360/4096）→ 代入 `zero = q_target − sign × motor_deg_read`**。
 
 填表（本次为空白模板，不是实测值；按 `AGENTS.md` §3 缺失口径留空，**不得**填 0）：
 
@@ -1360,7 +1699,7 @@ C2b 的离线 FK 结果：末端 `left_Fixed_Jaw` = **(−0.000966, −0.316448,
 
 做法：在参考位形（或任何安全位形）上，单轴发 **+1°** 小步，看**该轴自身的实测角**是增还是减——增则 `sign = +1`，减则 `sign = −1`（符号相对 URDF 正方向）。
 
-命令形态沿用 §7.1 / §10.5 已验证过的 `measure_latency.py --mode tracking`（`--joint <电机键> --delta-deg 1.0 --steps 1`，其余参数与 §7.1 那张参数表一致；不要照 §10.5 的 M1/M2 那样跑 10 步，本步只要一个方向信号）。看的是 tracking CSV 里该轴 `measured_deg` 相对基线是增还是减（§11 的 tracking CSV 列口径），不是肉眼看位移。
+命令形态沿用 [§7.1](#exp-e3) / [§10.5](#exp-e5) 已验证过的 `measure_latency.py --mode tracking`（`--joint <电机键> --delta-deg 1.0 --steps 1`，其余参数与 [§7.1](#exp-e3) 那张参数表一致；不要照 [§10.5](#exp-e5) 的 M1/M2 那样跑 10 步，本步只要一个方向信号）。看的是 tracking CSV 里该轴 `measured_deg` 相对基线是增还是减（[§11](../reference/artifacts.md#sec-11) 的 tracking CSV 列口径），不是肉眼看位移。
 
 单轴 +1° 的末端位移（离线 FK，C2b 位形）——决定「为什么不能靠肉眼判方向」：
 
@@ -1399,7 +1738,7 @@ C2b 的离线 FK 结果：末端 `left_Fixed_Jaw` = **(−0.000966, −0.316448,
 
 | 闸 | 做什么 | 判据 |
 | --- | --- | --- |
-| (a) 构造闸 | 用拆好的四份文件喂 §10.7 的 ①a（`--limits-only`，只读、零发送） | 退出码 `0`，两侧六个关节都有窗口。sign 非 ±1、六关节缺一、文件没拆分，都在这一步暴露（`15` 或缺窗口） |
+| (a) 构造闸 | 用拆好的四份文件喂 [§10.7](#exp-e7) 的 ①a（`--limits-only`，只读、零发送） | 退出码 `0`，两侧六个关节都有窗口。sign 非 ±1、六关节缺一、文件没拆分，都在这一步暴露（`15` 或缺窗口） |
 | (b) 数值闸 | 同一姿势的读数 + 标定文件 → 按适配器观测侧公式算 `q_kinematic_deg`（`src/alohamini_cartesian/kinematics/joint_adapter.py:534`）→ 与 C2b 的 `q_target` 比 → 再用 URDF 的 FK 算末端位置 | `q_kinematic_deg` 与 `q_target` 之差 ≤ 3°（目视量级）；末端位置落进下表口径 |
 
 末端量级核对表（期望值 = C2b 的离线 FK；量具是卷尺 / 角尺 / 目视，**不是毫米级判据**）：
@@ -1411,7 +1750,7 @@ C2b 的离线 FK 结果：末端 `left_Fixed_Jaw` = **(−0.000966, −0.316448,
 | 末端侧向偏移（左右） | 0.001 m（≈ 0） | ≤ 0.03 m | 基本只由 `shoulder_pan` 的 zero 决定：pan 零位偏了，整条臂绕竖轴转，侧向最先偏离 |
 | 末端距基座原点 | 0.394 m | ±0.05 m 量级 | 上面三项都对但这一项不对，说明量点不是 `left_Fixed_Jaw`（末端连杆原点），先统一量点 |
 
-±0.05 m 这个口径的来由：离线算「六关节同时偏 +3°」→ 末端位移 32.78 mm、「同时偏 −3°」→ 32.70 mm。目视判姿到位的精度就是几度量级，所以核对口径只能是分米里的半格，**不是毫米级**。毫米级判据是 §10.7 的 ④ 卷尺实测项，本表替代不了它。
+±0.05 m 这个口径的来由：离线算「六关节同时偏 +3°」→ 末端位移 32.78 mm、「同时偏 −3°」→ 32.70 mm。目视判姿到位的精度就是几度量级，所以核对口径只能是分米里的半格，**不是毫米级**。毫米级判据是 [§10.7](#exp-e7) 的 ④ 卷尺实测项，本表替代不了它。
 
 本项通过只说明「sign / zero 与参考位形自洽、量级对得上」，不构成 FK 绝对精度证据：几何仍锚在零实测的 URDF 上。
 
@@ -1433,30 +1772,29 @@ C2b 的离线 FK 结果：末端 `left_Fixed_Jaw` = **(−0.000966, −0.316448,
 | --- | --- |
 | 标定文件 `side` 字段 | `"right"` |
 | 拆分文件名 | `10.8-signs-right-$STAMP.json` / `10.8-zeros-right-$STAMP.json` |
-| §10.7 命令参数 | `--signs-json` / `--zeros-json` 指向上面那两份，必要时再显式给 `--side right` |
+| [§10.7](#exp-e7) 命令参数 | `--signs-json` / `--zeros-json` 指向上面那两份，必要时再显式给 `--side right` |
 
 ### 安全前置
 
 | 项 | 要求 | 出处 |
 | --- | --- | --- |
-| Host 启停 | 按 §6.1 的三步法启、按 §8.1 停；**停 Host 不等于失力**，摆姿前先确认扭矩状态 | §6.1、§8.1 |
+| Host 启停 | 按 [§6.1](2-host.md#host-start) 的三步法启、按 [§8.1](2-host.md#sec-8-1) 停；**停 Host 不等于失力**，摆姿前先确认扭矩状态 | [§6.1](2-host.md#host-start)、[§8.1](2-host.md#sec-8-1) |
 | 单轴单次 ≤ 2° | sign 判定用 **1°** 小步（`--delta-deg 1.0 --steps 1`），且全程不超过 step gate 的 `max_joint_step_deg = 2.0` | `src/alohamini_cartesian/control/controller.py:133` |
-| 手臂低位或有承托 | C2b 把大臂抬到竖直向上，摆姿与保持期间**必须有承托或人手不离开**；判为不安全时改用 C2（小臂朝另一侧）或改在低位判 sign，参考位形的目视判据随之重算 | §7.1 开跑勾选单 |
-| 断电开关在人手上 | sign 判定会真实下发命令，属运动档；远程无人在场**不跑**「sign 判定」那一节 | §7.1 开跑勾选单 |
-| 授权范围 | 摆姿 + 读数属只读观测档（§4.1 的 `capture`）；sign 判定属运动档，需现场运动授权 | 第 0 节的授权表 |
+| 手臂低位或有承托 | C2b 把大臂抬到竖直向上，摆姿与保持期间**必须有承托或人手不离开**；判为不安全时改用 C2（小臂朝另一侧）或改在低位判 sign，参考位形的目视判据随之重算 | [§7.1](#exp-e3) 开跑勾选单 |
+| 断电开关在人手上 | sign 判定会真实下发命令，属运动档；远程无人在场**不跑**「sign 判定」那一节 | [§7.1](#exp-e3) 开跑勾选单 |
+| 授权范围 | 摆姿 + 读数属只读观测档（[§4.1](3-health.md#sec-4-1) 的 `capture`）；sign 判定属运动档，需现场运动授权 | [§0](1-prepare.md#sec-0) 的授权表 |
 | 摆姿本身 | 摆姿要动关节（释放扭矩后手摆，或人手扶着摆），使能瞬间按当前位置闭环，可能跳一下；`Torque_Enable=1` 的写入者至今未定位，所以摆姿期间人手不离开、末端不放重物 | `TODO.md` §3.1「识别 `Torque_Enable=1` 的写入者」那行 |
 
-### 现场确认项（§10.8）
+### 现场确认项（[§10.8](#exp-e8)）
 
 | # | 确认项 | 怎么确认 | 确认不了怎么办 |
 | --- | --- | --- | --- |
 | 1 | 参考位形 C2b 在该侧真能摆到位（`shoulder_lift = −72°` / `elbow_flex = +73°` 是否在可达窗口内） | 摆姿时目视逐条对「参考位形」那一节的判据；摆不动或顶住就是不可达 | 改 C2（小臂朝 `+Y`）或整体降级为「低位 L 形」并重算该位形的 FK 与表格；不可达那一侧记「位形不可达」，不得硬掰 |
 | 2 | 摆好的姿势有没有碰撞 / 缆线绷紧 | 目视 + 手摸线束；末端与机身、桌面、升降柱留出可见间隙 | 有碰撞风险就换位形或换侧，不记录本次标定 |
-| 3 | 读数命令可用性（§4.1 的 `capture` 在本次环境能跑通） | `capture` exit 0、`robot_metadata.schema_version == 2`、`observation_state` 里六关节键齐全 | 跑不通就记「本次无读数」，**不得**用上一次姿势的旧读数顶替（姿势已变，读数作废） |
+| 3 | 读数命令可用性（[§4.1](3-health.md#sec-4-1) 的 `capture` 在本次环境能跑通） | `capture` exit 0、`robot_metadata.schema_version == 2`、`observation_state` 里六关节键齐全 | 跑不通就记「本次无读数」，**不得**用上一次姿势的旧读数顶替（姿势已变，读数作废） |
 | 4 | 左臂 sign 起始值无记录，必须用单步法 | 证据目录 `s4-20261106` / `s4-20261107` / `s4-20261108` 三份 `configs` 全空，全目录按 `sign` / `zero` 两个词 grep 无命中（本节已查） | 没有起始值这件事本身不是阻塞：按「sign 判定」那一节六轴各做一次单步法即可；**不得**先填一个「看起来合理」的 sign |
 | 5 | sign 与 zero 是否互相自洽 | 同一姿势下按两种候选 sign 各算一次 zero，差值应恰好 `2 × motor_deg_read`（「sign 判定」那一节的交叉校验） | 不吻合就重采这一轴的读数，不要改 sign 去迁就 |
-| 6 | 标定文件的拆分与侧别对不对 | 拆出的两份是扁平六键（用 `jq` 求键数为 6）；`side` 字段与文件名、`--signs-json` / `--zeros-json` 的指向三者一致 | 任一处不一致就重拆，不带着这个疑点往下跑 §10.7 的 ①a |
-| 7 | 与 firmware `homing_offset` / `drive_mode` 不得混用 | 本节文件里的 `zero` 是**度**、`sign` 是 ±1；不写、不读 `homing_offset` / `drive_mode`，也不拿它们当对照值 | 若现场发现某轴 `drive_mode` 不是 0，先停：那会改变归一化读数的符号（§4.1c 已写明），读数链要重新界定才能用 |
+| 6 | 标定文件的拆分与侧别对不对 | 拆出的两份是扁平六键（用 `jq` 求键数为 6）；`side` 字段与文件名、`--signs-json` / `--zeros-json` 的指向三者一致 | 任一处不一致就重拆，不带着这个疑点往下跑 [§10.7](#exp-e7) 的 ①a |
+| 7 | 与 firmware `homing_offset` / `drive_mode` 不得混用 | 本节文件里的 `zero` 是**度**、`sign` 是 ±1；不写、不读 `homing_offset` / `drive_mode`，也不拿它们当对照值 | 若现场发现某轴 `drive_mode` 不是 0，先停：那会改变归一化读数的符号（[§4.1c](3-health.md#sec-4-1c) 已写明），读数链要重新界定才能用 |
 | 8 | 右臂不得复制左臂值 | 右臂文件从右臂自己的读数与单步法来；例外条款要求「实测一致」+ 两次独立读数 | 拿不出两次独立读数就重做右臂的 sign 判定，不得沿用 |
-| 9 | 本节不产出任何 V 编号的实机证据 | 本节产出的是两份标定文件 + 自检记录；V01 的 `move_to` 实机证据仍要按 §10.7 跑 | 记「标定已有、`move_to` 未跑」，别把标定记录当 `move_to` 证据 |
-
+| 9 | 本节不产出任何 V 编号的实机证据 | 本节产出的是两份标定文件 + 自检记录；V01 的 `move_to` 实机证据仍要按 [§10.7](#exp-e7) 跑 | 记「标定已有、`move_to` 未跑」，别把标定记录当 `move_to` 证据 |
