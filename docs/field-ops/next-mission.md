@@ -48,7 +48,7 @@
 | --- | --- | --- | --- |
 | 链路层（PC→Host 值传递） | 链路清白：sidecar（与主 CSV 同一窗口写出的 safety 快照）的运动帧里 `requested_target == accepted_target` 全 100% | — | `completed-work.md` §1 第 1 条 |
 | 关节层 | 肩部全案按分级口径关闭：目标已被 Host 采纳，残余落在 Host 下游伺服／机械静摩擦；门槛肩类 `≤2°`、其余 `≤2 tick`（电机位置读数的最小刻度，`1 tick = 0.087890625°`） | — | `completed-work.md` §1 第 2 条；`docs/ADR.md` D20 |
-| 标定字段 | 跨断电、跨场次 `CALIB_FIELD_DIFFS: 0`（标定字段差异的条数为 0） | — | `completed-work.md` §1 第 4 条 |
+| 标定字段 | 跨断电、跨场次 `CALIB_FIELD_DIFFS: 0`（标定字段差异的条数为 0）（该结论仅限于 2026-10-16–2026-10-22 两份同代际快照之间；2026-11-10 重标定后基线变更，不跨代际成立——见 [§0](#mission-sec-0)） | — | `completed-work.md` §1 第 4 条 |
 | 笛卡尔层 | 只有离线用例 | **唯一空白**：无 `signs`/`zeros` 现场产出、无 Gate D 现场形态、无 `move_to` 真机记录、无杆长实测 | `docs/ADR.md` D21；`TODO.md` §4「IK → `ArmHandle.move_to` 的实机验证」「URDF 杆长零实测」两行；`completed-work.md` §1 第 5、6 条 |
 
 最后一行展开成三件事，正好对应本文的 T1–T3。三项同属「无现场记录」这一类空白，是并列关系，不是一条依赖链：T2 与 T3 之间**没有依赖**——Gate A–F 在 `move_to` 路径上不生效（[§10.7](runbook/4-experiments.md#exp-e7) 的 (d) 表；`TODO.md` §4「Gate D 的现场形态」行明写「不阻塞 `move_to` 实机验证」），两者只是共用同一次起 Host 的窗口。需要先说清的三条：
@@ -215,7 +215,7 @@
 | 上电 | 手臂带电才有力矩与位置读数 | 不上电就一步都不跑 |
 | 手臂低位或有承托 | T3 的姿态目标是 identity，末端会朝 identity 大幅转；T1 的 C2b 要把大臂抬到竖直向上 | 摆不到安全姿态就换参考位形（§10.8 的 C2）或换侧；两侧都做不到就当天不做 T1 |
 | 网络（`PI_HOST` 现场填） | SSH 与 Host 端口都靠它 | 连不上按 [§2](runbook/1-prepare.md#sec-2) 的四步处置走（上次可用的地址是 `10.34.170.98`，2026-11-10 复测免密可通） |
-| 开机后先确认两个 udev 别名 | 2026-11-10 的只读侦察只看到 `ttyACM0` / `ttyACM1` 与 `/dev/serial/by-id/` 下的 `usb-1a86_…` 名，**`/dev/am_arm_follower_left` / `_right` 当前是否存在本次未查**；两套名字不能互相代替，别名缺失会让指向别名的脚本读不到口 | 按 [§3.7](runbook/1-prepare.md#sec-3) 的 `3.7b2-serial-links` 核；别名不在就改用 `ttyACM0` / `ttyACM1`，并在 scope 里写明换了路径 |
+| 开机后先确认两个 udev 别名 | 2026-11-10 的只读侦察只看到 `ttyACM0` / `ttyACM1` 与 `/dev/serial/by-id/` 下的 `usb-1a86_…` 名，**`/dev/am_arm_follower_left` / `_right` 当前是否存在本次未查**；两套名字不能互相代替，别名缺失会让指向别名的脚本读不到口 | 按 [§3.7](runbook/1-prepare.md#sec-3) 的只读口径核：手册 §3.7 正文只有 `3.7` / `3.7b` / `3.7c` / `3.7d` / `3.7e` 五条 `run` 命令（`ttyACM*` 与 `by-id` 的核对在 `3.7b`），**别名一项此前没有命令块**，本条是本轮新点的第一项核对，用这一条只读命令：`ssh "$PI" 'ls -l /dev/am_arm_follower_* /dev/ttyACM*'`，产物存 `$S4DIR/stdout/`；判据看 `.log`（`ls` 无匹配时 exit 2，不看 `.exit`）。别名不在就改用 `ttyACM0` / `ttyACM1`，并在 scope 里写明换了路径 |
 | pi 根分区的写入位置 | 2026-11-10 实测根分区 `/dev/mmcblk0p2` 29 G 已用 23 G、**剩 4.8 G（83%）**；证据与产物都落这台机器 | 产证据前先 `df -h ~` 确认余量，落盘位置写进 scope；余量不够先腾位置（清旧证据需授权） |
 | 卷尺（钢卷尺或 30 cm 钢直尺，1 mm 刻度）＋ 美纹纸 ＋ 垂线或角尺 | T3 的 ④ 是几何验收唯一一条判据；这三样缺一样，该判据不成立 | 记「未测：量具不在场」，④ 不得用目测或 FK 预测值代替 |
 | 断电开关旁有人 | `sign` 判定与 T3 都会真下发命令 | 远程无人在场就不跑运动档，只跑只读与离线档 |
