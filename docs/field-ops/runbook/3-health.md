@@ -273,6 +273,14 @@ run 4.1c-postpower-diff uv run --no-sync python "$S4DIR/stdout/4.1c-postpower-di
 | B 位置 | 14 个 `arm_*_<joint>.pos` 的 tick 值（用厂商 `_unnormalize` 的同一条公式换算：`range_m100_100` 用 `int(((v+100)/200)*(max-min)+min)`，`range_0_100` 用 `int((v/100)*(max-min)+min)`，`motors_bus.py:892-902`） | `observation_state` | 每电机 \|Δtick\| ≤ **3** → 记「断电无滑移」；> 3 → 把电机名、基准 tick、本次 tick、差值写进台账。3 tick 是本项目自定的「非滑移」上界，不是厂商值：两侧各自 `int()` 截断各带 ≤1 tick 误差，余 1 tick 作为机械回差余量 | 只列超出 3 tick 的电机 |
 | C 其它 | `lift_axis.height_mm`（mm，不折 tick）、底盘三轴 `x.vel` / `y.vel` / `theta.vel`（原样比） | `observation_state` | 原样记录；本轮不设阈值 | 记两侧原值 |
 
+> **⚠️ 2026-11-10 之后的现场：本节 A 组会必然报差异，那是预期，不是事故。** 2026-11-10 11:58:15 +0000 现役标定被完整重写（见 [§0](../next-mission.md#mission-sec-0)）：18 个电机里 14 个的 `range_min` / `range_max` / `homing_offset` 变了，三个轮子与 `lift_axis` 未动，全 18 项的 `id` / `drive_mode` 未变。所以拿旧代际的基线指纹跑本节第二步，**必然**报出这 14 个电机的 A 组差异——这是标定代际切换，**不得按 A1 行的「任一不等 → 停」处置**，也不得改标定文件去「对齐」（该处置仍适用于同一代际内的意外变更）。
+>
+> 处置见 [T0](../next-mission.md#mission-t0)：先登记新代际（calib sha256、18 个电机的 8 个字段、登记时间、登记人），再按 T0 写明的口径重取 V12 指纹、改写 `CALIB_FIELD_DIFFS` 结论、换比对基准。
+>
+> **本节的判据本身未作修改**（A1 / A2 / B / C 四行与下面三条口径要点逐字未改）；在 T0 的新基线登记完成之前，本节的比对结论**不具判事故效力**，只能记成「待 T0 登记后再判」。
+>
+> 另：下面「左夹爪的 tick 分辨率极粗」一条取自旧代际（`2021..2072`，51 tick）；新代际是 `2018..3483`（1465 tick），该条结论在新代际不成立（读数不再被吞），原句保留不改。
+
 三条口径要点，写记录时必须带上：
 
 - **Punch 不在指纹里**。Feetech 的 Punch（起步力，寄存器名 `Minimum_Startup_Force`）只由 [§4.2](#sec-4-2) 的 `EXTRA_REGS` 读到，`robot_metadata.motors` 没有这个字段。要比 Punch，先跑 [§4.2](#sec-4-2) 并把两轮读数并列，不能拿指纹冒充。

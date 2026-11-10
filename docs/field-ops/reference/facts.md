@@ -1,6 +1,6 @@
 # 已确证事实与术语速查（原 README §3.A 与术语表）
 
-本文件管什么：两件事——第一次读手册先认的七个术语，以及「这件事上次已经查清了吗」的 24 条已确证事实（一条事实一句人话一个出处）。事实的出处列都指向现行文件里的锚点，点开即到。
+本文件管什么：两件事——第一次读手册先认的七个术语，以及「这件事上次已经查清了吗」的 28 条已确证事实（一条事实一句人话一个出处）。事实的出处列都指向现行文件里的锚点，点开即到。
 
 缩写与人话对照，第一次读先看这张表；其余术语在用到的小节里给一句解释。
 
@@ -19,11 +19,13 @@
 | 事实 | 一句话 | 出处 |
 | --- | --- | --- |
 | 网络与 IP | `PI_HOST` 是唯一需现场填的值，上次记录 `10.34.170.98`；连不上按四步处置：`ping` → mDNS `pi5.local` → 问现场要 IPv4 → 路由器 DHCP 列表找 `pi5` | [§2](../runbook/1-prepare.md#sec-2)「变量块」与「SSH 连接检查与连不上时的处置」、[§3.1](../runbook/1-prepare.md#sec-3) |
+| `PI_HOST` 复测（2026-11-10） | `10.34.170.98` 免密可连通；`pi5.local` 解析失败；`10.34.159.106` 与 `10.168.1.100` 不可达 | 2026-11-10 只读侦察；[§2](../runbook/1-prepare.md#sec-2)「SSH 连接检查与连不上时的处置」 |
 | Host 启动三步法 | ① 本地后台跑 ssh（远端 `setsid nohup … &`）→ ② 轮询 5556 端口最多 90 s → ③ 端口起来后杀本地 ssh | [§6.1](../runbook/2-host.md#host-start) |
 | 停 Host 用的 PID | 取 `6.1a-host-pid` 里 `ps` 打出的那个，**不要**用 `echo pid=$!`（`setsid` 自己占掉一个 PID；2026-11-06 实测 `2516` vs `2517`） | [§6.1](../runbook/2-host.md#host-start) |
 | Host 启动命令带 `python -u` | 无缓冲，日志实时落 `/tmp/site-host-$STAMP.log` | [§6.1](../runbook/2-host.md#host-start) |
 | 串口别名 | `/dev/am_arm_follower_left` → `ttyACM0`、`/dev/am_arm_follower_right` → `ttyACM1`；`/dev/serial/by-id/` 的 `usb-1a86_…` 名字**不能**代替这两个别名 | [§4.2](../runbook/3-health.md#sec-4-2)、[§3.7](../runbook/1-prepare.md#sec-3) |
 | 当前基线指纹 | `capture/fingerprint-20261108T141936Z.json`（`captured_utc=2026-11-08T14:20:21+00:00`）、`capture/fingerprint-postpower-20261108T141936Z.4.1c-preserved.json`（`…T14:20:35+00:00`）、收尾 `capture/fingerprint-postpower-20261108T141936Z.json`（`…T14:28:12+00:00`，与前者同名冲突的那份） | `docs/field-results.md` 2026-11-08 节「指纹三份」；原件 `~/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261108/capture/fingerprint-*.json` |
+| 标定基线已变更（2026-11-10） | 现役 `~/.cache/huggingface/lerobot/calibration/robots/alohamini/AlohaMiniRobot.json` 是 2882 字节、sha256 `d6594b999eb8533932adf20b6b5be413768c521f9f082109454cd323e183dfcf`；旧基线 2880 字节、sha256 `6d089d3879b538a806dd5008dba66cde1bdb5a819aa7c4987becd0bf6b6e4c56`。18 个电机里 14 个手臂电机字段变动，三个轮子与 `lift_axis` 未动，`id` / `drive_mode` 全 18 项未变。旧基线比出来的 `CALIB_FIELD_DIFFS: 0` 只成立于旧代际 | [next-mission.md §0](../next-mission.md#mission-sec-0)；仓库外 `Cartesianlib-workbench/notes/2026-11-10-recalibration.md`（**尚未落 `docs/`**） |
 | 断电无滑移首判 | 第一份不受「期间有运动」污染的 B1 判据：14 只位置电机 `delta` 全 `+0`，唯 `arm_left_shoulder_pan` 为 `-1` tick；`CALIB_FIELD_DIFFS: 0`、`POSITION_MOTORS_OVER_3_TICK: 0` | `docs/field-results.md` 2026-11-08 节表 1 |
 | 肩部全案结论 | `--anchor command` 5 步 × 1° 达成率左 `77.3626%`、路 A 重跑左 `79.1209%` / 右 `82.6374%`；步末残余 `0.87–1.04°`（`9.88–11.88` tick）两侧同量级 → 目标已被 Host 采纳，残余在 Host 下游伺服／机械静摩擦；处置按分级口径（肩类 `≤2°`、其余 `≤2 tick`） | `docs/field-results.md` 2026-11-06 与 2026-11-08 节；`docs/ADR.md` D20 |
 | 臂总线电流不能判负载 | 2026-11-05 那轮静止基线与运动窗口读数全部低于 `20 mA` 门槛（`≥20 mA` 样本 0 个）；**2026-11-08 sidecar 已采到非零电流**（左 max `104.0 mA`、`≥20 mA` 样本 `700`；右 `71.5 mA` / `153` 样本）——「电流不可判负载」结论仅限 11-05 口径，**待按 sidecar 数据重裁** | [§6.2](../runbook/4-experiments.md#exp-e2)；`docs/field-results.md` 2026-11-05 节与 2026-11-08 节 |
@@ -38,7 +40,9 @@
 | `signs` / `zeros` 契约 | 正向 `q_kinematic_deg = sign × motor_deg + zero`；反向 `motor_deg = (q − zero) / sign`；`sign` 只许 `±1`，库内无默认值，不注入就构造不出适配器 | [§10.8](../runbook/4-experiments.md#exp-e8) |
 | §4.1c 两组判据 | A 组（标定字段）任一不等 = 事故，停；B 组位置阈值 `3 tick`（本项目自定上界，非厂商值） | [§4.1c](../runbook/3-health.md#sec-4-1c) |
 | 换算常数 | `1 tick = 360/4096° = 0.087890625°` | [§4.1c](../runbook/3-health.md#sec-4-1c)；`docs/field-results.md` 2026-11-08 节 |
-| 左夹爪只有 51 tick | `2021..2072`，`range_0_100` 下 `4.48°`；D14 已定本轮不重标定，只读确认 | [§4.2](../runbook/3-health.md#sec-4-2)；`docs/ADR.md` D14 |
+| 左夹爪只有 51 tick（**已失效**，2026-11-10 重标定） | `2021..2072`，`range_0_100` 下 `4.48°`；D14 已定本轮不重标定，只读确认。标注：该条只属 2026-11-10 之前的代际，重标定后已不成立，见下一行 | [§4.2](../runbook/3-health.md#sec-4-2)；`docs/ADR.md` D14 |
+| 左夹爪 51 tick 异常已消失（2026-11-10） | 重标定后 `range_min..range_max` 是 `2018..3483`（1465 tick / 128.8°），与右侧 1479 tick 基本一致；「51 tick」只属旧代际，`docs/investigations/gripper-range-51-tick.md` 的前提据此失效 | [next-mission.md §0](../next-mission.md#mission-sec-0)；仓库外 `Cartesianlib-workbench/notes/2026-11-10-recalibration.md` |
 | 未标定前的可执行性 | §10.7 的 ①a / ② / ③ 缺 `signs` / `zeros` 直接按 `15` 退出，**不得**手写或猜 | [§10.7](../runbook/4-experiments.md#exp-e7)、[§10.8](../runbook/4-experiments.md#exp-e8) |
 | 时间基准 | Pi 时区 `Europe/London`，日志时间等于 UTC，本地是 UTC+8；`$S4DIR` / `$STAMP` 按 `date -u` 生成 | [§2](../runbook/1-prepare.md#sec-2) |
+| pi 启动时刻与 `journalctl` 伪迹 | 2026-11-10 那台 pi 的真实启动时刻是 `11:30:02 GMT`（用 `/proc/uptime` 反算）；`journalctl -b --list-boots` 只有 1 个 boot，其首行时间戳是 NTP 校时前的旧时钟，不能当启动时刻 | 2026-11-10 只读侦察；仓库外 `Cartesianlib-workbench/notes/2026-11-10-recalibration.md`「同日其他事实」 |
 | 产物路径纪律 | 一律显式传 `--out` / `--csv`：默认文件名时间戳只到秒，同一秒内跑两次会静默覆盖 | [§3.8](../runbook/1-prepare.md#sec-3) |
