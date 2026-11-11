@@ -15,7 +15,7 @@
 
 **性质标注：本节非现场日——未起 Host、无任何运动、无新增测量。** 全部内容为只读侦察的读数、两份标定原件的逐字段复算，以及用户告知的物理事实（标「用户告知」）；没有下发过任何命令。
 
-条件：同日 pi 侧只读侦察（2026-11-10，未动机器人）；现役标定文件 `~/.cache/huggingface/lerobot/calibration/robots/alohamini/AlohaMiniRobot.json` 已在 `2026-11-10 11:58:15 +0000` 被原地覆写（mtime 与 ctime 同值、同 inode，pi 上无备份），逐字段复算用的是 Mac 上的副本 `/Users/pcoffeep/pi-workspace/Cartesianlib-workbench/calibration/AlohaMiniRobot.json`（2882 字节）与旧代际归档 `6d089d38…`（2880 字节）。下表「证据文件」列若无前缀，指 `/Users/pcoffeep/pi-workspace/Cartesianlib-workbench/` 下的相对路径。
+条件：同日 pi 侧只读侦察（2026-11-10，未动机器人）；现役标定文件 `~/.cache/huggingface/lerobot/calibration/robots/alohamini/AlohaMiniRobot.json` 已在 `2026-11-10 11:58:15 +0000` 被原地覆写（mtime 与 ctime 同值、同 inode，pi 上无备份），逐字段复算用的是 Mac 上的副本 `/Users/pcoffeep/pi-workspace/Cartesianlib-workbench/calibration/AlohaMiniRobot.json`（2882 字节）与旧代际归档 `calibration/archive/AlohaMiniRobot.20261022.mac-snapshot.json`（2880 字节、`file_sha256` `6d089d38…`）。下表「证据文件」列若无前缀，指 `/Users/pcoffeep/pi-workspace/Cartesianlib-workbench/` 下的相对路径。
 
 | 结论 | 关键数字 | 条件 | 证据文件 |
 | --- | --- | --- | --- |
