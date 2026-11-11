@@ -57,7 +57,7 @@
 
 | 文件 | 管什么 |
 | --- | --- |
-| `docs/ADR.md` | 决策记录 D1–D21：设计取舍与已定口径（如 D14 左夹爪本轮不重标定、D18 sidecar 单独成表、D20 残余支分级、D21 URDF 零实测） |
+| `docs/ADR.md` | 决策记录 D1–D23：设计取舍与已定口径（如 D14 左夹爪本轮不重标定、D18 sidecar 单独成表、D20 残余支分级、D21 URDF 零实测） |
 | `docs/acceptance-baseline.md` | 验收基线 V01–V13：一条判据一行，含实机证据列 |
 | `docs/library-guide.md` | 接口细节：配置覆盖、能力探测与单位换算、控制层、公开 API、约束与机器守卫 |
 | `docs/background.md` | 目标、已实现能力与实机现状 |
