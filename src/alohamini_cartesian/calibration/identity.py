@@ -15,7 +15,7 @@
   ``range_min < range_max``、``drive_mode ∈ {0, 1}``。返回问题清单（空清单 = 通过），
   **不抛异常**。真损坏（缺字段、``None``、区间反向）由调用方决定是否算阻断。
 * :func:`validate_plausibility` 判「这份标定像不像真的」——按经验区间给告警，
-  永远不阻断。阈值是经验值、非厂商规定，见模块下方常量旁的注释。
+  永远不阻断。阈值是经验值、非厂商规定，唯一来源是 ``calibration/envelope.py``。
 
 单位口径：``range_min`` / ``range_max`` / ``homing_offset`` 都是与标定文件同一刻度系的
 tick（每圈 :data:`TICK_RESOLUTION` 个刻度），换算见 :data:`DEG_PER_TICK`。
@@ -50,30 +50,30 @@ CALIB_ID_LENGTH = 12
 # drive_mode 的合法取值：0 与 1 对应两种方向约定。
 ALLOWED_DRIVE_MODES = (0, 1)
 
-# ---- 以下判定阈值全部是**经验值、非厂商规定**，来自本项目已看过的那几代真实标定 ----
-# 换机型或换批次后要重新核对，别当规格用。
-# 夹爪行程宽度：约 120–135 度（旧代际左夹爪只有 51 tick ≈ 4.5 度，属已知异常）。
-GRIPPER_WIDTH_DEG_RANGE = (120.0, 135.0)
-# 肩（shoulder_pan / shoulder_lift）行程宽度：约 190–240 度。
-SHOULDER_WIDTH_DEG_RANGE = (190.0, 240.0)
-# 腕（wrist_flex / wrist_yaw / wrist_roll）行程宽度：约 160–190 度。
-WRIST_WIDTH_DEG_RANGE = (160.0, 190.0)
-# (0, 4095) 满圈是厂商标定的占位值，不是量出来的行程：放行，且不做宽度判定。
-PLACEHOLDER_FULL_RANGE = (0, 4095)
-# 归零位：标定的 half-turn 归零把 ``Present_Position`` 定在 2047 附近。
-ZERO_POSITION_TICK = 2047
-# range 中心离归零位超过这个角度就告警（数量级核对，约半圈的半数）。
-ZERO_POINT_OFFSET_WARN_DEG = 90.0
+# ---- 判定阈值已移出本模块：唯一来源是 :mod:`calibration/envelope.py` ----
+# 夹爪／肩／腕的经验宽度区间、`(0, 4095)` 满圈占位、归零位 2047、中心偏离 90° 上限，
+# 这六个数现在只在 ``calibration/envelope.py`` 里作为可执行常量存在（沿用原常量名）。
+# 此处刻意不保留第二套判定阈值：两份常量迟早会漂，漂了以后「谁说了算」就没有答案。
+#
+# 本模块剩下的两件合理性活都是薄封装，函数体只做转发（延迟 import，见各函数注释）：
+#
+# * :func:`describe_plausibility` → ``envelope.describe_thresholds()``：把阈值渲染成
+#   可打印的行；
+# * :func:`validate_plausibility` → ``envelope.plausibility_warnings()``：返回告警清单。
+#
+# 依赖方向是 ``identity ← envelope``：``envelope`` 用本模块的刻度换算（``DEG_PER_TICK``）
+# 与身份（``calib_id``），本模块不在模块级 import ``envelope``——那样会成环。
+# 想加新的判定（例如给 ``*_elbow_flex`` 也设宽度包络）时改 ``envelope`` 并在那里补测试；
+# 不要在本模块加常量再让 ``envelope`` 反过来读——那会把依赖方向倒过来、又变成两处阈值。
+#
+# 阈值是什么、为什么是经验值、怎么判，全部读 ``calibration/envelope.py`` 的模块 docstring。
+# 本模块只回答「这份标定的身份是什么、结构有没有硬伤、两代之间差在哪」。
+# 相应地，本模块也不转发 ``envelope`` 的类型（``AcceptedListError`` / ``EnvelopeVerdict``
+# 等）：它们不是本模块的概念，别在这里开第二道门，调用方直接从 ``envelope`` 拿。
+# 判定流程与四态口径同样只在 ``envelope`` 里写一遍，本模块不复述。
+# 保留这一整段注释（而不是一删了之）是为了伸手就能找到新位置：搜索 ``GRIPPER_WIDTH``
+# 之类旧常量名时，先落到这里再跳到 ``envelope``，不会以为阈值被删掉了。
 
-# 电机名后缀 → 该族的经验宽度区间；不在表里的电机（底盘轮子、升降轴）不判宽度。
-_WIDTH_RANGE_BY_SUFFIX: tuple[tuple[str, tuple[float, float]], ...] = (
-    ("_gripper", GRIPPER_WIDTH_DEG_RANGE),
-    ("_shoulder_pan", SHOULDER_WIDTH_DEG_RANGE),
-    ("_shoulder_lift", SHOULDER_WIDTH_DEG_RANGE),
-    ("_wrist_flex", WRIST_WIDTH_DEG_RANGE),
-    ("_wrist_yaw", WRIST_WIDTH_DEG_RANGE),
-    ("_wrist_roll", WRIST_WIDTH_DEG_RANGE),
-)
 # 文档级键名：出现在顶层就说明这份 JSON 不是「顶层即电机映射」的标定文件。
 _DOCUMENT_KEYS = frozenset(
     {
@@ -282,71 +282,30 @@ def validate_structure(motors: Mapping[str, Any]) -> list[str]:
     return problems
 
 
-def _width_range_for(name: str) -> tuple[float, float] | None:
-    """按电机名后缀取该族的经验宽度区间；不认识的电机返回 ``None``。"""
-    for suffix, width_range in _WIDTH_RANGE_BY_SUFFIX:
-        if name.endswith(suffix):
-            return width_range
-    return None
-
-
 def describe_plausibility() -> tuple[str, ...]:
     """把合理性判定用的经验阈值渲染成可打印的行（供 ``tools/calib_register.py`` 展示）。
 
-    这些数字是**经验值、非厂商规定**，只在看过的几代真实标定上核对过。
+    薄封装：数字全部来自 :mod:`~alohamini_cartesian.calibration.envelope`，
+    本模块不再自带阈值。
     """
-    return (
-        "经验区间（经验值、非厂商规定，换机型或换批次要重新核对）："
-        f"夹爪 {GRIPPER_WIDTH_DEG_RANGE[0]:.0f}–{GRIPPER_WIDTH_DEG_RANGE[1]:.0f}°、"
-        f"肩 {SHOULDER_WIDTH_DEG_RANGE[0]:.0f}–{SHOULDER_WIDTH_DEG_RANGE[1]:.0f}°、"
-        f"腕 {WRIST_WIDTH_DEG_RANGE[0]:.0f}–{WRIST_WIDTH_DEG_RANGE[1]:.0f}°",
-        f"{PLACEHOLDER_FULL_RANGE} 满圈视为占位行程，放行且不做宽度判定；"
-        f"range 中心偏离归零位 {ZERO_POSITION_TICK} 超过 "
-        f"{ZERO_POINT_OFFSET_WARN_DEG:.0f}° 即告警",
-    )
+    # 延迟 import：依赖方向是 identity ← envelope（envelope 用本模块的 ``DEG_PER_TICK``
+    # 与 ``calib_id``），在模块级 import envelope 会成环。
+    from .envelope import describe_thresholds
+
+    return describe_thresholds()
 
 
 def validate_plausibility(motors: Mapping[str, Any]) -> list[str]:
     """合理性校验：返回告警清单，**永不阻断**。
 
-    两类判定，阈值都是经验值、非厂商规定（见模块常量）：
-
-    1. 行程宽度落在该族经验区间之外（按电机名后缀分族：夹爪 / 肩 / 腕）；
-       ``(0, 4095)`` 满圈占位值放行，不做宽度判定。
-    2. ``range_min`` / ``range_max`` 的中点离归零位 :data:`ZERO_POSITION_TICK` 超过
-       :data:`ZERO_POINT_OFFSET_WARN_DEG`——即 ``homing_offset`` 把整个行程推得离归零位
-       太远，数量级不对。
-
-    字段缺失或不是整数时直接跳过：那是 :func:`validate_structure` 的活。
+    薄封装：判定（三族的经验宽度区间、``(0, 4095)`` 满圈占位放行、中心偏离归零位）全部
+    委托 :func:`~alohamini_cartesian.calibration.envelope.plausibility_warnings`，
+    本模块不持有第二套阈值。永不抛异常：遥操臂那种残缺表也只报告、不阻断。
     """
-    warnings: list[str] = []
-    if not isinstance(motors, Mapping):
-        return warnings
-    for name in sorted(motors):
-        entry = motors[name]
-        if not isinstance(entry, Mapping):
-            continue
-        low, high = entry.get("range_min"), entry.get("range_max")
-        if not (is_tick_value(low) and is_tick_value(high)):
-            continue
-        if (low, high) == PLACEHOLDER_FULL_RANGE:
-            continue
-        width_ticks = high - low
-        width_deg = width_ticks * DEG_PER_TICK
-        expected = _width_range_for(name)
-        if expected is not None and not (expected[0] <= width_deg <= expected[1]):
-            warnings.append(
-                f"电机 {name} 的 range 宽度 {width_ticks} tick ≈ {width_deg:.1f}°，"
-                f"不在经验区间 {expected[0]:.0f}–{expected[1]:.0f}° 内（经验值、非厂商规定）"
-            )
-        center_deg = ((low + high) / 2 - ZERO_POSITION_TICK) * DEG_PER_TICK
-        if abs(center_deg) > ZERO_POINT_OFFSET_WARN_DEG:
-            warnings.append(
-                f"电机 {name} 的 range 中心偏离归零位 {ZERO_POSITION_TICK} 约 "
-                f"{center_deg:+.1f}°，超出 {ZERO_POINT_OFFSET_WARN_DEG:.0f}° 的数量级上限"
-                "（经验值、非厂商规定）"
-            )
-    return warnings
+    # 延迟 import 的原因同 describe_plausibility：避免模块级双向 import。
+    from .envelope import plausibility_warnings
+
+    return plausibility_warnings(motors)
 
 
 def _field_diff(

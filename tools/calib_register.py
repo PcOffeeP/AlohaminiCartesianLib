@@ -227,7 +227,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         note=f"由 tools/calib_register.py 以 {mode} 自动登记；登记人与首次实测时刻待人工补",
         acknowledged_by=None,
     )
-    if not registry.register(record):
+    if not registry.append_if_absent(record):
         print("REGISTRY: 该代际已登记（写入前复查发现），不追加")
         return EXIT_OK
     try:

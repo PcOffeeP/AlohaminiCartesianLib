@@ -4,11 +4,12 @@
 用法::
 
     calib_health.py [--calib-file PATH | --fingerprint PATH] [--registry PATH]
+                    [--session-anchor CALIB_ID] [--accepted PATH]
 
 ``--registry`` 默认仓库内的 ``configs/calib-registry.yaml``（路径由本文件位置推出，
-不依赖 cwd）。stdout 必含一行严格格式 ``CALIB_STATE: <四态之一>``，便于脚本 grep。
+不依赖 cwd）。stdout 必含一行严格格式 ``CALIB_STATE: <状态之一>``，便于脚本 grep。
 
-四态与退出码：
+状态与退出码：
 
 =======================  ====  ==================================================
 状态                     码    含义与后续动作
@@ -20,7 +21,24 @@
                               代际比是 ``BROAD`` / ``REGION_INCONSISTENT``。需人核对
 ``CALIB_CORRUPT``        4    文件损坏：文件不存在、JSON 不可解析、顶层形状认不出、缺字段、
                               值为 ``null``、``range_min >= range_max``
+``CALIB_SESSION_DRIFT``  4    第五态，只在传 ``--session-anchor`` 时可能命中：锚点与文件
+                              里的 ``CALIB_ID`` 不同（本次会话认的不是文件这一代）。
+                              不可继续
 =======================  ====  ==================================================
+
+``--session-anchor <calib_id>``（可选）守的是「跑着跑着标定被换了」：本次会话锚定的是某一
+代 ``calib_id``，文件却已经是另一代。不符时打 ``SESSION_ANCHOR: MISMATCH …`` +
+``CALIB_STATE: CALIB_SESSION_DRIFT``、退出 ``4``；相符时不打任何额外行，结论与退出码
+与不传该参数**逐字相同**。
+
+``--accepted <path>``（默认仓库内的 ``configs/calib-envelope-accepted.yaml``）**只追加**
+包络判定行（``CALIB_MOTOR:`` / ``CALIB_ENVELOPE:`` /
+``CALIB_ENVELOPE_IMPLAUSIBLE:`` / ``CALIB_DATASET:``），**默认就跑**包络判定、不改
+``CALIB_STATE``、不改退出码：
+它回答「这份标定像不像一台整机的真标定」，与``CALIB_STATE`` 回答的「这个 ``calib_id``
+以前见过吗」是两件事。包络判定与阈值见
+``src/alohamini_cartesian/calibration/envelope.py``；名单坏（``AcceptedListError``）只把原因
+打到 stderr 并跳过包络行，四态与退出码不受影响。
 
 注：退出码同号不同义。本文件的 ``1`` = 新代际未登记（非阻断）、``3`` = 可疑；
 而 ``tools/calib_register.py`` 的 ``1`` = 结构校验不合格（阻断）、``3`` = 输入不可解析。
@@ -66,6 +84,11 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from alohamini_cartesian.calibration.envelope import (
+    AcceptedListError,
+    classify_motors,
+    load_accepted,
+)
 from alohamini_cartesian.calibration.identity import (
     CANONICAL_FIELDS,
     EXPECTED_MOTOR_COUNT,
@@ -84,15 +107,22 @@ EXIT_CALIB_NEW_UNREGISTERED = 1
 EXIT_USAGE = 2
 EXIT_CALIB_SUSPECT = 3
 EXIT_CALIB_CORRUPT = 4
+# ``CALIB_SESSION_DRIFT`` 与 ``CALIB_CORRUPT`` 同码不同义（都是「不可继续」，原因不同）。
+EXIT_CALIB_SESSION_DRIFT = 4
 
 STATUS_KNOWN = "CALIB_KNOWN"
 STATUS_NEW_UNREGISTERED = "CALIB_NEW_UNREGISTERED"
 STATUS_SUSPECT = "CALIB_SUSPECT"
 STATUS_CORRUPT = "CALIB_CORRUPT"
+STATUS_SESSION_DRIFT = "CALIB_SESSION_DRIFT"
 
 # 仓库根：本脚本在 <repo>/tools/ 下，取父目录的父目录，不依赖 cwd。
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REGISTRY = REPO_ROOT / "configs" / "calib-registry.yaml"
+# 包络接受名单的默认值：默认就跑包络判定（只追加 stdout 行，不改四态与退出码）。
+# 交付的那份是空模板（``accepted: []``），零条目时判定一律按经验区间来；填了条目才放行
+# 对应电机，而且要 ``motor`` + 实测 range + ``calib_id`` 三者全对上才算命中。
+DEFAULT_ACCEPTED = REPO_ROOT / "configs" / "calib-envelope-accepted.yaml"
 
 # 与已登记最新代际比时，这两种变化形态算「超出预期面」，要人核对。
 SUSPECT_PATTERNS = (ChangePattern.BROAD, ChangePattern.REGION_INCONSISTENT)
@@ -110,6 +140,21 @@ def _build_parser() -> argparse.ArgumentParser:
         "--registry",
         metavar="PATH",
         help=f"登记表路径（默认 {DEFAULT_REGISTRY.relative_to(REPO_ROOT)}）",
+    )
+    parser.add_argument(
+        "--session-anchor",
+        metavar="CALIB_ID",
+        help="本次会话锚定的标定代际；与文件里的 CALIB_ID 不符时打 CALIB_SESSION_DRIFT 并退出 4",
+    )
+    parser.add_argument(
+        "--accepted",
+        metavar="PATH",
+        default=str(DEFAULT_ACCEPTED),
+        help=(
+            "包络接受名单（默认仓库内 configs/calib-envelope-accepted.yaml）；"
+            "默认就跑包络判定、只追加 CALIB_MOTOR / CALIB_ENVELOPE 行，"
+            "不改 CALIB_STATE 与退出码"
+        ),
     )
     return parser
 
@@ -227,6 +272,32 @@ def _judge_against_registry(
     )
 
 
+def _session_anchor_note(anchor: str, identity: str | None) -> str | None:
+    """锚点与文件 identity 相符时返回 ``None``，否则返回「哪一代 vs 哪一代」的说明。"""
+    if identity is not None and anchor == identity:
+        return None
+    if identity is None:
+        return f"本次锚点 {anchor} 无法核对：文件里的 CALIB_ID 不可算（电机台数不是 18 台）"
+    return f"本次锚点 {anchor} ≠ 文件里的 CALIB_ID {identity}"
+
+
+def _print_envelope(motors: Mapping[str, Any], accepted_path: Path) -> None:
+    """追加包络判定行；名单坏时只报到 stderr 并跳过，不碰 ``CALIB_STATE`` 与退出码。"""
+    try:
+        accepted = load_accepted(accepted_path)
+    except AcceptedListError as exc:
+        print(f"接受名单不可读：{accepted_path}（{exc}）", file=sys.stderr)
+        print("包络判定跳过；CALIB_STATE 与退出码不受影响。", file=sys.stderr)
+        return
+    report = classify_motors(motors, accepted=accepted)
+    for item in report.motors:
+        print(f"CALIB_MOTOR: {item.motor} {item.verdict.value} {item.detail}".rstrip())
+    print(f"CALIB_ENVELOPE: {report.verdict.value}")
+    print(f"CALIB_ENVELOPE_IMPLAUSIBLE: {len(report.implausible)}")
+    if report.dataset_note is not None:
+        print(f"CALIB_DATASET: {report.dataset_note}")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI 入口：读输入、分级判定、打印 ``CALIB_STATE`` 行并返回退出码。"""
     args = _build_parser().parse_args(argv)
@@ -277,6 +348,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             identity = None
             print(f"CALIB_ID: 不可算（{exc}）")
 
+    if args.session_anchor is not None:
+        note = _session_anchor_note(args.session_anchor, identity)
+        if note is not None:
+            print(f"SESSION_ANCHOR: MISMATCH {note}")
+            return _emit(
+                STATUS_SESSION_DRIFT,
+                EXIT_CALIB_SESSION_DRIFT,
+                "本次会话锚定的代际与 --calib-file 指向的标定不同：续跑等于拿没核对过的"
+                "标定下发命令。先停手，确认该用哪一代，再重新起会话。",
+            )
+
     problems = validate_structure(motors)
     if problems:
         return _emit(
@@ -294,7 +376,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return EXIT_USAGE
     if identity is None:  # 结构通过时 identity 必然可算，这里只作防御
         return _emit(STATUS_SUSPECT, EXIT_CALIB_SUSPECT, "无法算出 calib_id，需人核对")
-    return _judge_against_registry(registry, identity, motors, source_path, registration_flag)
+    code = _judge_against_registry(registry, identity, motors, source_path, registration_flag)
+    _print_envelope(motors, Path(args.accepted))
+    return code
 
 
 if __name__ == "__main__":

@@ -1,0 +1,31 @@
+# 标定包络接受名单（envelope accepted list）——**空模板，现场确认后才填**。
+#
+# 用途：登记「某台电机的实测行程落在经验区间之外，但已由人现场确认为真实机械限位」的条目，
+# 让 tools/calib_fetch.py 与 tools/calib_health.py 的包络判定不再对这台电机报警。
+#
+# 命中规则（三者必须**同时**对上，实现见 src/alohamini_cartesian/calibration/envelope.py）：
+#   - motor：电机名，与标定文件里的键名一字不差（例如 arm_left_gripper）；
+#   - observed_range_min / observed_range_max：现场确认的那一代标定的实测 tick 区间；
+#   - calib_id：确认时那份 18 台标定的身份（tools/calib_health.py 会打印 CALIB_ID 行）。
+# 任一项与本次实测不符即视为**名单过期**：照旧按经验区间报警，不会静默放行。
+#
+# 九个字段全必填（缺一个就抛 AcceptedListError）：motor / observed_range_min /
+# observed_range_max / measured_on_tick / method / confirmed_by / confirmed_at_utc /
+# calib_id / reason。后五个是留痕，用来回答「谁在什么时候、用什么方法确认的」。
+#
+# 为什么不预填：经验区间是**经验值、非厂商规定**，某个行程是否真实必须现场量；
+# 拿测试或推测值预填等于把「没核对」伪装成「已核对」。填写示例见下面的注释块
+# （注释形式，不生效；要用时去掉每行行首的 `#` 并补真实数字）。
+#
+# 示例（**不是**已确认的数据，仅示字段写法）：
+#   - motor: arm_left_gripper
+#     observed_range_min: <实测下限 tick>
+#     observed_range_max: <实测上限 tick>
+#     calib_id: <该代标定的 12 位十六进制 calib_id>
+#     measured_on_tick: "<测量日期，例 2026-10-22>"
+#     method: <确认方法，例 manual-teach-pendant>
+#     confirmed_by: <确认人>
+#     confirmed_at_utc: "<确认时刻，例 2026-11-11T00:00:00Z>"
+#     reason: <为什么这个行程是真的>
+schema_version: 1
+accepted: []
