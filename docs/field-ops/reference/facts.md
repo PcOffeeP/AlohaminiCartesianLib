@@ -1,6 +1,6 @@
 # 已确证事实与术语速查（原 README §3.A 与术语表）
 
-本文件管什么：两件事——第一次读手册先认的七个术语，以及「这件事上次已经查清了吗」的 28 条已确证事实（一条事实一句人话一个出处）。事实的出处列都指向现行文件里的锚点，点开即到。
+本文件管什么：两件事——第一次读手册先认的七个术语，以及「这件事上次已经查清了吗」的 30 条已确证事实（一条事实一句人话一个出处）。事实的出处列都指向现行文件里的锚点，点开即到。
 
 缩写与人话对照，第一次读先看这张表；其余术语在用到的小节里给一句解释。
 
@@ -38,7 +38,7 @@
 | scope 模板五项 | 时间 UTC / 授权人 / 授权范围 / 允许的动作 / 不允许的动作，落 `stdout/scope-$STAMP.md`；不过 `run`（heredoc 正文不进 `.cmd`） | [§3.9](../runbook/1-prepare.md#sec-3) |
 | URDF 来源与零实测 | 派生自厂商上游 `am-arm200pro.urdf`（commit `5b03af1ef6c80595bd988e0137cf8e7c35811eb6`，sha256 `c38669d46d2bf804c112a6d8ce926074c8ff65ba70917503e09b77c75e285030`），`sources.json` 自报 `hardware_verified: false`，本库无杆长实测 | `docs/library-guide.md` §3.1；`docs/ADR.md` D21 |
 | `signs` / `zeros` 契约 | 正向 `q_kinematic_deg = sign × motor_deg + zero`；反向 `motor_deg = (q − zero) / sign`；`sign` 只许 `±1`，库内无默认值，不注入就构造不出适配器 | [§10.8](../runbook/4-experiments.md#exp-e8) |
-| §4.1c 两组判据 | A 组（标定字段）**同代际内**比相等，不等 = 事故、停；**跨代际**（两份指纹的 `calib_id` 不等）先跑 `tools/calib_health.py` 判态，`CALIB_NEW_UNREGISTERED` 走 `tools/calib_register.py --write` 登记、**不断言事故**，只有 `CALIB_SUSPECT` / `CALIB_CORRUPT` 才阻断。B 组位置阈值 `3 tick`（本项目自定上界，非厂商值）。口径见 `docs/ADR.md` D22 与 `tools/calib_health.py` | [§4.1c](../runbook/3-health.md#sec-4-1c) |
+| §4.1c 两组判据 | A 组（标定字段）判据是「**会话内不可变、跨会话验包络**」：同一会话内标定 `calib_id` 一变就是事故、停（`tools/calib_health.py --session-anchor` 执法）；跨会话不比标定字段零差异，改跑 `tools/calib_fetch.py` 验包络（`WRONG_DATASET` 不可继续、`IMPLAUSIBLE` 提醒要留痕）。`CALIB_FIELD_DIFFS: 0` 这条基线结论已退休（只对同一代际内两份快照成立）。代际登记仍由 `tools/calib_health.py` 四态判：`CALIB_NEW_UNREGISTERED` 走登记、**不断言事故**，只有 `CALIB_SUSPECT` / `CALIB_CORRUPT` 才阻断。B 组位置阈值 `3 tick`（本项目自定上界，非厂商值）。口径见 `docs/ADR.md` D22 / D23 | [§4.1c](../runbook/3-health.md#sec-4-1c) |
 | 换算常数 | `1 tick = 360/4096° = 0.087890625°` | [§4.1c](../runbook/3-health.md#sec-4-1c)；`docs/field-results.md` 2026-11-08 节 |
 | 左夹爪只有 51 tick（**已失效**，2026-11-10 重标定） | `2021..2072`，`range_0_100` 下 `4.48°`；D14 已定本轮不重标定，只读确认。标注：该条只属 2026-11-10 之前的代际，重标定后已不成立，见下一行 | [§4.2](../runbook/3-health.md#sec-4-2)；`docs/ADR.md` D14 |
 | 左夹爪 51 tick 异常已消失（2026-11-10） | 重标定后 `range_min..range_max` 是 `2018..3483`（1465 tick / 128.8°），与右侧 1479 tick 基本一致；「51 tick」只属旧代际，`docs/investigations/gripper-range-51-tick.md` 的前提据此失效 | [next-mission.md §0](../next-mission.md#mission-sec-0)；仓库外 `Cartesianlib-workbench/notes/2026-11-10-recalibration.md` |
@@ -46,3 +46,5 @@
 | 时间基准 | Pi 时区 `Europe/London`，日志时间等于 UTC，本地是 UTC+8；`$S4DIR` / `$STAMP` 按 `date -u` 生成 | [§2](../runbook/1-prepare.md#sec-2) |
 | pi 启动时刻与 `journalctl` 伪迹 | 2026-11-10 那台 pi 的真实启动时刻是 `11:30:02 GMT`（用 `/proc/uptime` 反算）；`journalctl -b --list-boots` 只有 1 个 boot，其首行时间戳是 NTP 校时前的旧时钟，不能当启动时刻 | 2026-11-10 只读侦察；仓库外 `Cartesianlib-workbench/notes/2026-11-10-recalibration.md`「同日其他事实」 |
 | 产物路径纪律 | 一律显式传 `--out` / `--csv`：默认文件名时间戳只到秒，同一秒内跑两次会静默覆盖 | [§3.8](../runbook/1-prepare.md#sec-3) |
+| 两个数据集要分开（2026-11-11） | 机器人（follower）标定在 `~/.cache/huggingface/lerobot/calibration/robots/alohamini/AlohaMiniRobot.json`，遥操（leader）侧是**另一份**；只有臂关节、没有 `base_*` 也没有 `lift_axis` 的电机表就是遥操臂数据，`tools/calib_fetch.py` 判 `WRONG_DATASET` 并退出 `4`。`--kind robot`（默认）期望 18 台整机标定；`--kind teleop` 只能显式声明「这次取的是遥操侧」，同样退出 `4` | [T0](../next-mission.md#mission-t0)；`docs/ADR.md` D23 |
+| 会话锚定（2026-11-11） | 同一现场会话内标定 `calib_id` 不可变；用 `tools/calib_health.py --session-anchor <开场时的 calib_id>` 执法，不符打 `SESSION_ANCHOR: MISMATCH <anchor> -> <current>` + `CALIB_STATE: CALIB_SESSION_DRIFT` 并退出 `4`（第五态，只在传了该参数时出现）。跨会话不比标定字段零差异，改验包络 | [§4.1c](../runbook/3-health.md#sec-4-1c)；`docs/ADR.md` D23 |

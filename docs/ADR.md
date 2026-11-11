@@ -1,6 +1,6 @@
 # 架构决策记录（ADR）
 
-本文记录 `alohamini-cartesian` 自 v0.1.0 起沿用的设计取舍与流程红线，编号 D1–D22。本文件收设计取舍；纯流程条目仅收 D19 一类发版纪律，不再追加。每条按背景、决定、后果三段记录，后果同时写正面收益与已知代价。状态写作「已接受（自 vX.Y.Z 起）」；已落地但尚未发版的条目写作「已接受（未发版：…）」并写明当前 `pyproject.toml` 版本与 `docs/changelog.md` 缺行，不记具体日期。新的重大取舍按顺序追加编号，已接受的条目不回改。
+本文记录 `alohamini-cartesian` 自 v0.1.0 起沿用的设计取舍与流程红线，编号 D1–D23。本文件收设计取舍；纯流程条目仅收 D19 一类发版纪律，不再追加。每条按背景、决定、后果三段记录，后果同时写正面收益与已知代价。状态写作「已接受（自 vX.Y.Z 起）」；已落地但尚未发版的条目写作「已接受（未发版：…）」并写明当前 `pyproject.toml` 版本与 `docs/changelog.md` 缺行，不记具体日期。新的重大取舍按顺序追加编号，已接受的条目不回改。
 
 ## 索引
 
@@ -28,6 +28,7 @@
 | D20 | V01 残余支分级口径与达成率分母统一 | 已接受（自 v0.7.0 起） |
 | D21 | URDF 采用厂商上游参数、零实测，验收由 §10.7 卷尺实测收口 | 已接受（未发版） |
 | D22 | 标定代际化：把标定从常量改为带代际的输入 | 已接受（未发版：`pyproject.toml` 为 0.7.0，`docs/changelog.md` 无 D22 条目） |
+| D23 | 标定包络检查与标定抓取：阈值单一来源、不合格不硬阻断、会话内不可变 | 已接受（未发版：`pyproject.toml` 为 0.7.0，`docs/changelog.md` 无 D23 条目） |
 
 ## D1 依赖形态：独立包，lerobot 作为可选 extra
 
@@ -200,7 +201,7 @@ S3 要把旧仓库的 `control/` 与运动学搬进本库。旧代码在 `contro
 
 `docs/archive/migration-backlog.md` 原定把 `benchmarks/alohamini_io` 两个脚本推到 S4 现场，理由是「本机没有 Host，迁入后也只是一份跑不起来的代码」。v0.4.0 重新核查，这条依据对脚本成立，对配套测试不成立。
 
-两个脚本对 `lerobot` 的 import 全部在 `default_client_factory()` 函数体内（`capture_robot_fingerprint.py:140-141`、`measure_latency.py:1314-1315`），模块顶层只有标准库与 numpy。两个配套测试只用标准库与 pytest，用依赖注入的 fake client（假的客户端对象顶上真连接）与 fake clock，不碰 `lerobot`、`zmq`、`socket`、线程。
+两个脚本对 `lerobot` 的 import 全部在 `default_client_factory()` 函数体内（`capture_robot_fingerprint.py:160-161`、`measure_latency.py:1314-1315`），模块顶层只有标准库与 numpy。两个配套测试只用标准库与 pytest，用依赖注入的 fake client（假的客户端对象顶上真连接）与 fake clock，不碰 `lerobot`、`zmq`、`socket`、线程。
 
 它们在旧仓库原位跑不起来的唯一原因，是旧仓库根 `tests/conftest.py` 顶层 import `lerobot`；pytest 收集测试时必然加载这个文件。迁入本库后不再加载那个 conftest。
 
@@ -267,7 +268,7 @@ S3 要把旧仓库的 `control/` 与运动学搬进本库。旧代码在 `contro
 
 已知代价之一：这是对外行为变更——同样的错误输入，以前炸 `RuntimeError`（或根本不炸），现在炸 `ValueError`，按异常类型分流的调用方需要调整捕获类型。实测既有用例零改动即全绿（`tests/test_arm_ik.py` 115 条 = 89 条既有 + 26 条新增 T-IK-18，无一条依赖旧行为、无需逐条豁免；全库 `1025 passed, 2 skipped`）。
 
-本库内部**有**承载旧行为的调用路径，不是「只在入口加校验、内部调用不受影响」：`kinematics/joint_adapter.py` 的 `JointKinematicAdapter(urdf_limits=None)`（默认不注入 URDF 限位，`joint_adapter.py:144`、`joint_adapter.py:152`）配合六关节 `normalization == "degrees"` 时，`_effective_q_range` 返回 `(-inf, inf)`（`joint_adapter.py:431`），`effective_limits_deg()`（`joint_adapter.py:443`）在这组配置下返回六个 `(-inf, inf)`（实测：`JointKinematicAdapter(signs=…, zeros=…)` + 六关节 `"degrees"` metadata → 六个 `(-inf, inf)`）。这组限位在 v0.4.0 下让 `solve()` 返回 `ok=True`（实测），现在会在入口抛 `ValueError: joint_limits_deg['left_shoulder_pan'] must be finite, got lo=-inf, hi=inf`（实测，抛出位置 `arm_ik.py:395`）。两个内部调用点会把这个值交给 `solve()`：`control/controller.py:472` 取限位、`controller.py:482` 调 `solve()`，外层的 `except Exception` 把它转成 `ControlError.IK_FAILED`（`controller.py:492`，`sent=False`，不发送动作）；`control/api.py:184` 的路径预检取限位后直接调 `solve()`，这个 `ValueError` 穿出 `_precheck_straight_path`（`api.py:158`，调用点在 `api.py:332`，该处无 `try/except`），到达 `ArmHandle.move_to` 的调用方。
+本库内部**有**承载旧行为的调用路径，不是「只在入口加校验、内部调用不受影响」：`kinematics/joint_adapter.py` 的 `JointKinematicAdapter(urdf_limits=None)`（默认不注入 URDF 限位，`joint_adapter.py:144`、`joint_adapter.py:152`）配合六关节 `normalization == "degrees"` 时，`_effective_q_range` 返回 `(-inf, inf)`（`joint_adapter.py:431`），`effective_limits_deg()`（`joint_adapter.py:443`）在这组配置下返回六个 `(-inf, inf)`（实测：`JointKinematicAdapter(signs=…, zeros=…)` + 六关节 `"degrees"` metadata → 六个 `(-inf, inf)`）。这组限位在 v0.4.0 下让 `solve()` 返回 `ok=True`（实测），现在会在入口抛 `ValueError: joint_limits_deg['left_shoulder_pan'] must be finite, got lo=-inf, hi=inf`（实测，抛出位置 `arm_ik.py:395`）。两个内部调用点会把这个值交给 `solve()`：`control/controller.py:484` 取限位、`controller.py:494` 调 `solve()`，外层的 `except Exception` 把它转成 `ControlError.IK_FAILED`（`controller.py:500-504`，`sent=False`，不发送动作）；`control/api.py:184` 的路径预检取限位后直接调 `solve()`，这个 `ValueError` 穿出 `_precheck_straight_path`（`api.py:158`，调用点在 `api.py:364`，该处无 `try/except`），到达 `ArmHandle.move_to` 的调用方。
 
 取向：**限位必须有限是本决策的前提**，不因这条路径放宽。`effective_limits_deg()` 给出 `(-inf, inf)` 属于「未注入 URDF 限位」的配置缺口，应由调用方构造 `JointKinematicAdapter` 时注入有限限位解决；不改 adapter 现有行为，不在本决策范围内。
 
@@ -287,7 +288,7 @@ S3 要把旧仓库的 `control/` 与运动学搬进本库。旧代码在 `contro
 
 `ArmIK.solve()` 结尾把「没到位」一律报 `reason="JOINT_LIMIT"`，已经算好的 `within_limits` 判定被丢弃。问题报告记录了一次现场观测：六个关节的值全部落在注入区间内、位置误差 `0.074 m`（本仓库 `evidence/` 目录无该次运行的书面记录，未复核，只作为现象描述），报告仍写 `JOINT_LIMIT`。
 
-为什么这会误导处置：`JOINT_LIMIT` 读起来是「机器人关节到极限了，得改限位或换姿态」，`RESIDUAL` 读起来是「目标够不到，得改目标」——两者对应的处置方向相反。`src/alohamini_cartesian/control/controller.py` 约 `:497` 用 `getattr(ControlError, result.reason, ControlError.IK_FAILED)` 把 `reason` 翻成对外错误码，因此误标会一路传到调用方的分流逻辑上。
+为什么这会误导处置：`JOINT_LIMIT` 读起来是「机器人关节到极限了，得改限位或换姿态」，`RESIDUAL` 读起来是「目标够不到，得改目标」——两者对应的处置方向相反。`src/alohamini_cartesian/control/controller.py` 约 `:509` 用 `getattr(ControlError, result.reason, ControlError.IK_FAILED)` 把 `reason` 翻成对外错误码，因此误标会一路传到调用方的分流逻辑上。
 
 ### 决定
 
@@ -762,3 +763,56 @@ V01 是本阶段唯一挡住「能不能说不接 leader 就算通」的条目�
 触发重新评估的条件（达成任一条即重新评估）：① 层 2 有了现场实测数据，可评估把 `limits` 接入控制路径；② 出现跨代际必须比较绝对角度才能判的场景（例如追溯某次事故的物理位置）；③ 登记表出现第二条以上「未登记就上线」的实际案例。
 
 相关提交：代码与测试 `edc0356`；判据与文档 `ce40db5`；台账收口 `88888ea`；补充归档文件名 `f67e14d`。
+
+## D23 标定包络检查与标定抓取：阈值单一来源、不合格不硬阻断、会话内不可变
+
+状态：已接受（未发版：`pyproject.toml` 为 0.7.0，`docs/changelog.md` 无 D23 条目）
+
+### 背景
+
+标定数值直接决定下发刻度：`range_min` / `range_max` 定行程，`homing_offset` 定零点，换一批数值，同一条命令的物理含义就变。现场出现过「行程宽度明显异常却照旧往下跑」的情形——旧代际（`calib_id 2905048c28a2`）的左夹爪 `range` 只有 `2021..2072`（51 tick ≈ 4.5°），被当正常值用了很久（D14 那条只读确认就是这么来的），直到 2026-11-10 重标定才变成 `2018..3483`（1465 tick ≈ 128.8°）。当时的判据里没有「这个行程宽度像不像真标定」这一层，异常只能靠人偶然发现。
+
+同时，旧的合理性检查把阈值写在 `src/alohamini_cartesian/calibration/identity.py` 里。任何人另写一处判据，就无从判断谁是标准。上一轮任务书把「代际 A / 代际 B 判 OK」与包络数值并列写，本身自相矛盾。本轮裁决为**保留阈值、改验收口径**：不放宽阈值去让已知异常的两代都过，而把「异常可见」与「能不能继续」拆成两件事。
+
+### 决定
+
+1. **阈值的唯一来源是 `src/alohamini_cartesian/calibration/envelope.py`。** 六个常量（全部是**经验值、非厂商规定**）：夹爪宽度 `GRIPPER_WIDTH_DEG_RANGE = (120.0, 135.0)`；肩（`shoulder_pan` / `shoulder_lift`）`SHOULDER_WIDTH_DEG_RANGE = (190.0, 240.0)`；腕（`wrist_flex` / `wrist_yaw` / `wrist_roll`）`WRIST_WIDTH_DEG_RANGE = (160.0, 190.0)`；满圈占位 `PLACEHOLDER_FULL_RANGE = (0, 4095)`；归零位 `ZERO_POSITION_TICK = 2047`；中心偏离上限 `ZERO_POINT_OFFSET_WARN_DEG = 90.0`。改阈值只改这一处，别处不再写第二套数字。
+2. **四态**：`OK` 可继续；`IMPLAUSIBLE` 提醒、可继续（要留痕）；`WRONG_DATASET` 不可继续；`unmeasured_range` 是 `(0, 4095)` 满圈占位，放行、不计入不合格。汇总优先级 `WRONG_DATASET` > `IMPLAUSIBLE` > `OK` > `unmeasured_range`，因此「6 台占位 + 12 台合格」的汇总是 `OK`。
+3. **哪些字段不判**：`homing_offset` 不设包络（它是标定时算出来的偏移量，没有先验宽度）；`id` / `drive_mode` 不参与判定，只记录（接线与驱动方向的错由 D22 的跨代际比对拦）；`*_elbow_flex` / `base_*` / `lift_axis` 无宽度判定，只参与中心偏离判定。
+4. **数据集形状粗筛**：既没有任何 `base_*`、也没有 `lift_axis` 的电机表判 `WRONG_DATASET`——那是遥操臂（leader）那一侧的数据，不能用于下发。这条只拦这一种形状（反向的「有 `lift_axis` 但没轮子」不拦），最终靠 18 台数与结构自洽校验兜底。
+5. **结构自洽复用 `identity.validate_structure`**，不为包络另写一套台数 / 缺字段 / 取值检查，避免两套标准各说各话。
+6. **`identity.validate_plausibility` / `describe_plausibility` 降为薄封装**：函数体内延迟 import `envelope`（依赖方向是 `identity ← envelope`，模块级互相 import 会成环），语义仍是「只报告、不阻断」。旧的三组阈值常量与其判据已从 `identity.py` 删除，不再并存第二套标准。
+7. **接受名单机制**：`configs/calib-envelope-accepted.yaml` 登记「实测行程落在经验区间之外、但已由人现场确认为真实机械限位」的条目。经验值有误判的可能，堵死一切不合经验区间的行程会让「真机就是这样」也无路可走；名单把例外变成一条带问责链的记录，而不是把阈值往下调。
+8. **名单条目九字段、命中三要素**：条目九个字段全必填——`motor` / `observed_range_min` / `observed_range_max` / `measured_on_tick` / `method` / `confirmed_by` / `confirmed_at_utc` / `calib_id` / `reason`。命中须三者同时对上：`motor` 相同、`observed_range_min` / `observed_range_max` 与本次实测 `range_min` / `range_max` 精确相等、`calib_id` 与本次一致。命中后该电机不再报 `IMPLAUSIBLE`，但保留一行「已接受」信息（含 method / confirmed_by / confirmed_at_utc）；任一不符即「名单过期」，照旧报 `IMPLAUSIBLE`，`detail` 里写明名单过期。
+9. **交付的是空模板**（`schema_version: 1` + `accepted: []`），未预填任何电机。理由只有一条：经验值需现场实测才能证伪，预填等于替现场写答案。最直白的例子是右肩 `arm_right_shoulder_lift` 的 `905..2048`（1143 tick ≈ 100.5°）：它落在肩经验区间 `190–240°` 之外，判 `IMPLAUSIBLE`，但现场 S1 还没推过这条臂，不知道 100.5° 是机械极限还是标定没扫满，所以既不放开也不预填。
+10. **`tools/calib_fetch.py` 是每轮开工的第一步**：取一份标定（`--host` 走 ssh，或 `--from-file` 读本地）、跑包络、可选登记。开关为 `--from-file` / `--host` / `--kind {robot,teleop}`（默认 `robot`）/ `--remote-path` / `--user`（默认 `pi5`）/ `--ssh-binary` / `--accepted` / `--registry` / `--out` / `--record` / `--allow-implausible` / `--dry-run`。
+11. **退出码 0 / 1 / 2 / 4**：`0` 通过（含 `--dry-run`、含用 `--allow-implausible` 留痕后的通过）；`1` 有 `IMPLAUSIBLE` 且未声明理由（提醒、不阻断）；`2` 用法错误；`4` 不可继续（`WRONG_DATASET` / `--kind teleop` / 结构自洽失败 / 接受名单坏 / 远端读不到 / ssh 超时）。
+12. **远端读不到不回落任何本地缓存。** 非零退出、起不了 ssh、stdout 为空、超时，一律退出 `4`。拿缓存冒充「刚抓的标定」比抓不到更危险。ssh 调用带 `-o BatchMode=yes -o ConnectTimeout=20` 与 20 秒 `subprocess.run(timeout=)`，都取模块常量 `SSH_TIMEOUT_S`（现场网络慢可调这一处），超时落 `4`。
+13. **退出 `4` 的任何路径都不留标定落盘文件。** 门禁顺序是「`--kind teleop` → 结构自洽 → 数据集形状」，写盘顺序是「留痕 → 登记 → 快照」，快照是最后一个写盘动作；`--allow-implausible`（退出 `0`）与未声明 `IMPLAUSIBLE`（退出 `1`）都过了门禁才落盘。
+14. **会话锚定与第五态。** `tools/calib_health.py --session-anchor <calib_id>` 执法「会话内不可变」：锚点与文件 `calib_id` 不符时 stdout 打 `SESSION_ANCHOR: MISMATCH <anchor> -> <current>` 与 `CALIB_STATE: CALIB_SESSION_DRIFT`，退出码 `4`。这是第五个状态，**只在传了 `--session-anchor` 时才可能出现**；不传时行为与之前逐字一致，既有四态与退出码在其他所有路径上不变。
+15. **`--accepted` 默认就跑包络判定**（默认取仓库内那份名单），只在 stdout 追加 `CALIB_MOTOR:` / `CALIB_ENVELOPE:` / `CALIB_ENVELOPE_IMPLAUSIBLE:` 行，不改状态与退出码。
+16. **登记幂等**：`CalibrationRegistry.append_if_absent` 按 `calib_id` 幂等追加（已存在返回 `False`、不覆盖首条），`tools/calib_register.py` 与 `tools/calib_fetch.py --record` 都走它。
+
+### 后果
+
+正面：判据只剩一份，「标定像不像真标定」有唯一入口；不合格不再硬阻断（`IMPLAUSIBLE` 是提醒 + 留痕，`unmeasured_range` 直接放行），既不会把「真机就是这样」的行程钉死，也不会让异常静默通过；同一会话内的标定漂移被会话锚点拦在续跑之前（不必靠人回忆开场时用的是哪一代）；阈值只有一个文件，改阈值不会漏改第二处。
+
+本轮两代真机的实测判定（离线，`--from-file` 读盘上的标定文件）：
+
+| 代际 | `calib_id` | 判 `IMPLAUSIBLE` 的电机 | 行程 | 其余 17 台 | 汇总 / 退出码 |
+| --- | --- | --- | --- | --- | --- |
+| A（旧，`archive-20261022`） | `2905048c28a2` | `arm_left_gripper` | `2021..2072`（51 tick ≈ 4.5°） | 合格，其中 6 台满圈占位 | `IMPLAUSIBLE` / `1` |
+| B（现役，`pi-live-20261110`） | `4a80c0fd4421` | `arm_right_shoulder_lift` | `905..2048`（1143 tick ≈ 100.5°） | 合格，其中 6 台满圈占位 | `IMPLAUSIBLE` / `1` |
+
+**已知代价**
+
+1. **三个区间是经验值**：只在本项目看过的两代真机上核对过（旧代际左夹爪 51 tick、现役右肩 lift 1143 tick 都是区间外样本），换机型或换批次要重新核；把它们当规格用会误判。
+2. **接受名单目前是空的**：`arm_right_shoulder_lift` 的 100.5° 仍需现场 S1 推臂实测后才能登记（确认真实机械限位）或修标定（确认是标定没扫满）。在此之前它每次都报 `IMPLAUSIBLE`，每次都要人判断。
+3. **真实 ssh 路径与 Pi 侧默认路径未经真机验证**：本轮 Pi 关机，只用假程序与 `--from-file` 验证过；`--host` 走真 ssh 取标定这条路一次也没跑过。
+4. **`--kind teleop` 的默认远端路径是推定值**：按 lerobot 的 `calibration/teleoperators/<类型>/<id>.json` 目录约定推出，Pi 侧未 `ls` 核对，对不上要用 `--remote-path` 显式给。
+5. **`tools/calib_health.py` 现在默认就跑包络判定**：stdout 比以前多出 `CALIB_MOTOR:` / `CALIB_ENVELOPE:` / `CALIB_ENVELOPE_IMPLAUSIBLE:` 行（状态与退出码不变），既有按行解析 stdout 的用法要跟着容忍多出来的行；`tools/calib_register.py` 对只有臂的输入也会多打一行数据集形状说明。
+6. **`--record` 与 `--out` 同给时 stdout 行序为「登记 → 快照」**：这个顺序没有用例锁定，改动落盘顺序时不会有测试报错。
+
+触发重新评估的条件（达成任一条即重新评估）：① 现场 S1 拿到 `arm_right_shoulder_lift` 与 `arm_left_shoulder_pan` 的实测行程，接受名单需按实测重核（可能登记、可能修标定、也可能反过来收紧区间）；② 出现第三个代际且宽度分布明显与本项目看过的两代不同，三个经验区间要重新核定；③ 出现需要硬阻断（而非提醒）的实际事故，`IMPLAUSIBLE` 的「可继续」口径要重新论证。
+
+相关提交：代码与测试 `d92885a`。

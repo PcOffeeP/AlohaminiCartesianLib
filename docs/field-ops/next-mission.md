@@ -11,7 +11,7 @@
 <a id="mission-sec-0"></a>
 ## 0 本版修订的由来（2026-11-10 改版）
 
-2026-11-10 发生了三件影响本轮的事。前两件只核实到「文件已重写」「用户告知」这一级，第三件是用户本人的操作。本版把它们写进任务书，并据此加了两件事：离线可做的 T0（标定基线处置）与现场先做的 S1（行程复核）。
+2026-11-10 发生了三件影响本轮的事。前两件只核实到「文件已重写」「用户告知」这一级，第三件是用户本人的操作。本版把它们写进任务书，并据此加了两件事：离线可做的 T0（标定采集与包络检查）与现场先做的 S1（行程复核）。
 
 | # | 变化 | 核实到哪一级 | 证据 / 指针 |
 | --- | --- | --- | --- |
@@ -48,13 +48,13 @@
 | --- | --- | --- | --- |
 | 链路层（PC→Host 值传递） | 链路清白：sidecar（与主 CSV 同一窗口写出的 safety 快照）的运动帧里 `requested_target == accepted_target` 全 100% | — | `completed-work.md` §1 第 1 条 |
 | 关节层 | 肩部全案按分级口径关闭：目标已被 Host 采纳，残余落在 Host 下游伺服／机械静摩擦；门槛肩类 `≤2°`、其余 `≤2 tick`（电机位置读数的最小刻度，`1 tick = 0.087890625°`） | — | `completed-work.md` §1 第 2 条；`docs/ADR.md` D20 |
-| 标定字段 | 跨断电、跨场次 `CALIB_FIELD_DIFFS: 0`（标定字段差异的条数为 0）（该结论仅限于 2026-10-16–2026-10-22 两份同代际快照之间；2026-11-10 重标定后基线变更，不跨代际成立——见 [§0](#mission-sec-0)） | — | `completed-work.md` §1 第 4 条 |
+| 标定字段 | 包络检查已跑（离线，`tools/calib_fetch.py --from-file`，现役代际 `4a80c0fd4421`）：1 台判 `IMPLAUSIBLE`（`arm_right_shoulder_lift`，1143 tick ≈ 100.5°）、其余 17 台合格（其中 6 台满圈占位），退出码 `1`。旧结论 `CALIB_FIELD_DIFFS: 0` 已退休（只对同一代际内两份快照成立），见 [§0](#mission-sec-0) | 右肩 lift 与左肩 pan 的**实测行程**（S1 推臂）——包络值是我方经验值、非厂商规定，只能靠实测确认或推翻 | `docs/ADR.md` D23；[§4.1c](runbook/3-health.md#sec-4-1c)；`completed-work.md` §1 第 4 条 |
 | 笛卡尔层 | 只有离线用例 | **唯一空白**：无 `signs`/`zeros` 现场产出、无 Gate D 现场形态、无 `move_to` 真机记录、无杆长实测 | `docs/ADR.md` D21；`TODO.md` §4「IK → `ArmHandle.move_to` 的实机验证」「URDF 杆长零实测」两行；`completed-work.md` §1 第 5、6 条 |
 
 最后一行展开成三件事，正好对应本文的 T1–T3。三项同属「无现场记录」这一类空白，是并列关系，不是一条依赖链：T2 与 T3 之间**没有依赖**——Gate A–F 在 `move_to` 路径上不生效（[§10.7](runbook/4-experiments.md#exp-e7) 的 (d) 表；`TODO.md` §4「Gate D 的现场形态」行明写「不阻塞 `move_to` 实机验证」），两者只是共用同一次起 Host 的窗口。需要先说清的三条：
 
 - 缺 T1 则 T3 不可执行：`move_to` 的 ①a / ② / ③ 强制 `--signs-json` / `--zeros-json`，缺文件即按 `15` 退出，不得手写或猜。
-- 缺 T0 则 T3 同样不可执行：新标定代际没登记，T3 的 ④ 与「限位交集」类结论就没有可比基线（见 [§3.2](#mission-t0)）。
+- 缺 T0 则 T3 同样不可执行：新标定代际没登记、或者标定抓取这一步没跑（`tools/calib_fetch.py` 退出码 `4`），T3 的 ④ 与「限位交集」类结论就没有可比基线（见 [§3.2](#mission-t0)）。
 - 缺 T3 的 ④（卷尺）则几何验收没有数字：URDF 杆长取自厂商上游、零实测，几何验收的收口方式就是 ④ 的 `+Z` 9 cm 指令对卷尺读数（`docs/ADR.md` D21）。
 
 判据口径提醒：`docs/ADR.md` D21 决定 2 写的是「实测 vs **FK 预测**之差毫米级以内」，而 [§10.7](runbook/4-experiments.md#exp-e7) ④ 现场判的是「实测 vs **指令 `90 mm`** ≤ 1 mm」。**本轮按 §10.7 判**；D21 那句只作为「几何验收的收口方式与重新评估条件」的出处。
@@ -65,26 +65,28 @@
 
 | 编号 | 任务 | 一句话目的 | 指针 | 依赖 | 预计耗时 |
 | --- | --- | --- | --- | --- | --- |
-| T0 | 标定基线处置（**本地执行，不需现场、不需开机**） | 把新标定代际登记进记录，并写明三处受影响基线怎么处置 | [§3.2](#mission-t0) | 无（只要归档副本在本地） | 本文未设预算（离线） |
+| T0 | 标定采集与包络检查（**本地执行，不需现场、不需开机**） | 用 `tools/calib_fetch.py` 取一份标定、跑包络检查、必要时登记，并写明三处受影响基线怎么处置 | [§3.2](#mission-t0) | 无（只要归档副本在本地；抓标定走 `--from-file` 或 `--host`） | 本文未设预算（离线） |
 | S1 | 行程复核（现场步骤，不是 T 编号任务） | 核对被压窄的两个关节实际能推到哪 | [§3.3](#mission-s1) | torque 释放态；人守断电开关；推臂授权 | 本文未设预算 |
 | T1 | `signs` / `zeros` 标定（解锁项，最先做） | 产出 T3 硬前置的四份拆分文件 | [§10.8](runbook/4-experiments.md#exp-e8) | 开场 §2 / §3 先做完 | 估算 2–3 h（手册无此数字） |
 | T2 | Gate D 捕获 | 拿到或记下这道门禁的现场形态 | [§10.6](runbook/4-experiments.md#exp-e6) | Host 在跑 | 估算 10 分钟（手册无此数字） |
-| T3 | `move_to` + 卷尺 | 笛卡尔入口的第一条真机记录，并量出 9 cm 到底几毫米 | [§10.7](runbook/4-experiments.md#exp-e7) | T1 的两份拆分文件（第一道）；T0 的新代际登记（第二道）；①a 只读窗口 | 估算 1 h（手册无此数字） |
+| T3 | `move_to` + 卷尺 | 笛卡尔入口的第一条真机记录，并量出 9 cm 到底几毫米 | [§10.7](runbook/4-experiments.md#exp-e7) | T1 的两份拆分文件（第一道）；T0 的标定抓取与包络检查＋新代际登记（第二道）；①a 只读窗口 | 估算 1 h（手册无此数字） |
 
 耗时一列全是**估算**或未设预算，手册不给数字；按实际记录回填。依赖一列只记硬前置：**T1 与 T0 都是 T3 的硬前置**——T1 缺 `signs` / `zeros` 则 ①a / ② / ③ 按 `15` 退出，T0 不过则 T3 降级为「不可执行」（[§6](#mission-order)）；T2 与 T3 之间没有依赖，只是共用同一次起 Host 的窗口。S1 不是硬前置，但它的结论会改变 T3 的选点（见 S1 的「不过怎么办」）。
 
 <a id="mission-t0"></a>
-### 3.2 T0 标定基线处置（本地执行，不需现场、不需开机）
+### 3.2 T0 标定采集与包络检查（本地执行，不需现场、不需开机）
 
 | 项 | 内容 |
 | --- | --- |
-| 目的 | 把 2026-11-10 的新标定定成「已登记的一代」，并写明三处被旧基线顶着的产物各自怎么处置——不登记，本轮所有「限位交集 / 单位口径 / 标定没被改过」类结论都没有可比基线 |
-| 现状 | 新标定 sha256 与旧基线不同（`d6594b99…` 对 `6d089d38…`，2882 对 2880 字节，14 个手臂电机字段变动）。三处会因这次**预期变更**而报不一致：① `docs/acceptance-baseline.md` V12 的实机证据（`tools/verify_unit_consistency.py` 比对 18/18、差异 0 个，而其中的指纹是 2026-10-25 的）；② `completed-work.md` §1 第 4 条的 `CALIB_FIELD_DIFFS: 0`；③ [§4.1c](runbook/3-health.md#sec-4-1c) 的 A 组判据（已按代际断开：同代际内标定字段任一不等即判事故，跨代际先判态）——拿旧代际基线跑本节第二步会量出这 14 个电机的差异，但**不再断言事故**：先跑 `tools/calib_health.py` 判态，现役代际已登记、正常应输出 `CALIB_STATE: CALIB_KNOWN`；若输出 `CALIB_NEW_UNREGISTERED`（非阻断）则按下面「不过怎么办」的登记流程收尾，不记为事故 |
+| 目的 | 用 `tools/calib_fetch.py` 取一份标定、跑包络检查（判「这份标定像不像一台整机的真标定」）、必要时登记，再写明三处被旧基线顶着的产物各自怎么处置。不跑包络、不登记，本轮所有「限位交集 / 单位口径 / 标定没被改过」类结论都没有可比基线 |
+| 现状 | 新标定 sha256 与旧基线不同（`d6594b99…` 对 `6d089d38…`，2882 对 2880 字节，14 个手臂电机字段变动）。三处会因这次**预期变更**而报不一致：① `docs/acceptance-baseline.md` V12 的实机证据（`tools/verify_unit_consistency.py` 比对 18/18、差异 0 个，而其中的指纹是 2026-10-25 的）；② `completed-work.md` §1 第 4 条的 `CALIB_FIELD_DIFFS: 0`；③ [§4.1c](runbook/3-health.md#sec-4-1c) 的 A1 判据（已改为「会话内不可变、跨会话验包络」，见 `docs/ADR.md` D23）——拿旧代际基线跑本节第二步会量出这 14 个电机的差异，但**不再断言事故**：先跑 `tools/calib_health.py` 判态，现役代际已登记、正常应输出 `CALIB_STATE: CALIB_KNOWN`；若输出 `CALIB_NEW_UNREGISTERED`（非阻断）则按下面「不过怎么办」的登记流程收尾，不记为事故 |
 | 要交付的东西 | 一份「新代际已登记」的记录，四项不可缺：① 登记键 `calib_id`（代际身份，只由 `id` / `drive_mode` / `homing_offset` / `range_min` / `range_max` 五个字段决定，现役为 `4a80c0fd4421`），随附 `file_sha256` 与 `byte_size` 作**溯源辅助**（`d6594b999eb8533932adf20b6b5be413768c521f9f082109454cd323e183dfcf` / 2882 字节）——**身份判定用 `calib_id`，不用文件哈希**，同一个标定值换个字节格式就是另一个文件哈希；② 18 个电机 × 5 个字段逐项值（`id` / `drive_mode` / `homing_offset` / `range_min` / `range_max`，即 `calib_id` 的输入，与 `calibration/identity.py` 的 `CANONICAL_FIELDS` 同口径）；③ 登记时间（UTC）；④ 登记人。数据源是归档副本 `Cartesianlib-workbench/calibration/AlohaMiniRobot.json` 与现役文件 `pi-live-20261110`，两者都已登记在 `configs/calib-registry.yaml`；**不需要连 pi** |
-| 三处受影响基线怎么处置 | ① **V12**：`docs/acceptance-baseline.md` 的 V12 行已按代际分写、旧代际证据标注「新代际下失效」，处置是用新指纹重跑 `tools/verify_unit_consistency.py` 并把结果记进产物；再改该文件判据语义**需另一次任务授权**。② **`CALIB_FIELD_DIFFS: 0`**：结论改写为按代际分段（本文档已在 `completed-work.md` §1 第 4 条追加「不跨代际成立」的限定，只加限定、未改原句；分段改写同样需授权）。③ **§4.1c A 组**：判据已按代际断开（比「同一代际内」而不是「跨代际恒等」，见 `docs/ADR.md` D22）；在新代际登记完成前，跨代际的比对结论不具判事故效力；登记后的比对基准是「新代际第一份指纹」 |
-| 产物 | `$S4DIR/stdout/calib-gen2-registry-$STAMP.md`。T0 可离线做，产物仍与现场证据同根，便于与 §4.1c 的比对产物并列。内容 = 引用登记表里的那一条（`calib_id` / `source` / `first_seen` / `file_sha256` / `byte_size` / `acknowledged_by`）＋ `tools/calib_health.py` 的健康检查结论原文（`CALIB_STATE` 行与退出码） |
-| 不过怎么办 | 可执行判据（不再靠目测）：① 跑 `uv run --no-sync python tools/calib_health.py --calib-file <标定文件>`（`--registry` 省略时默认就是仓库内 `configs/calib-registry.yaml`），现役标定必须输出 `CALIB_STATE: CALIB_KNOWN` 且退出码 `0`；② 输出 `CALIB_NEW_UNREGISTERED`（退出码 `1`）**不算过**——那是「新代际还没登记」的非阻断警告，须先跑 `uv run --no-sync python tools/calib_register.py --from-file <标定文件> --write` 登记（再跑 ① 应变 `CALIB_KNOWN`）；③ `CALIB_SUSPECT`（退出码 `3`）/ `CALIB_CORRUPT`（退出码 `4`）一律不过，按事故处置，**不得改标定文件去「对齐」**。四项缺一、或三处处置没写 → T0 不过，**T3 降级为「不可执行，记录原因」**（依赖见 [§6](#mission-order)）。不得只记一个 `file_sha256` 就算登记，也不得把「已看到新标定」当成「已登记」 |
-| 已落地的做法（ADR D22） | 原「彻底做法」那一行已落地，见 `docs/ADR.md` D22。`src/alohamini_cartesian/calibration/` 子包（`identity` / `registry` / `limits`）已实现，`configs/calib-registry.yaml` 已登记两条真实代际（`2905048c28a2`、`4a80c0fd4421`），`tools/calib_health.py` 给四态健康检查（`CALIB_KNOWN` / `CALIB_NEW_UNREGISTERED` / `CALIB_SUSPECT` / `CALIB_CORRUPT`），`tools/calib_register.py` 负责登记。三层限位模块**已实现但未接入控制路径**（D22 决定 7：前置是现场实测层，`configs/limits-observed.yaml` 仍是空模板）。本卡现在只剩「补登记人」（`acknowledged_by` 仍是 `null`）＋ 上面那行「三处受影响基线怎么处置」 |
+| 三处受影响基线怎么处置 | ① **V12**：`docs/acceptance-baseline.md` 的 V12 行已按代际分写、旧代际证据标注「新代际下失效」，处置是用新指纹重跑 `tools/verify_unit_consistency.py` 并把结果记进产物；再改该文件判据语义**需另一次任务授权**。② **`CALIB_FIELD_DIFFS: 0`**：该基线结论已按 `docs/ADR.md` D23 **退休**——它只对同一代际内的两份快照成立，换代际后不具判据意义；`completed-work.md` §1 第 4 条已补上「不跨代际成立」与「已退休」的限定，脚本里的计数仍作位置／字段的取证工具。③ **§4.1c A1**：判据已改为「会话内不可变、跨会话验包络」（见 `docs/ADR.md` D23）：同一会话内标定 `calib_id` 不得变（`tools/calib_health.py --session-anchor` 执法），跨会话不再要求标定字段零差异，改用包络检查判断「像不像真标定」 |
+| 抓取与包络（每轮开工第一步） | 命令形状：`uv run --no-sync python tools/calib_fetch.py --host <PI_HOST> --out $S4DIR/capture/calib-$STAMP.json`（Pi 连不上时用 `--from-file <本地标定文件>` 走同一套判定）。判据：退出码 `0` = 通过（含 `--dry-run`、含用 `--allow-implausible` 留痕后的通过）；`1` = 有 `IMPLAUSIBLE` 且未声明理由，需现场核对后决定是否 `--allow-implausible "理由"`（留痕必须同时给 `--out`）；`4` = 不可继续（遥操数据集 / 结构自洽失败 / 名单坏 / 远端读不到 / ssh 超时），**一律不过**。产物：`$S4DIR/capture/calib-$STAMP.json`（标定快照，只在门禁之后才写盘）、stdout 里的 `CALIB_MOTOR:` 逐台结论与 `CALIB_ENVELOPE:` 汇总、`--allow-implausible` 时的 `overrides-<out 的 stem>.json`。**口径**：包络阈值是我方**经验值、非厂商规定**，只在本项目看过的两代真机上核对过；不过不代表标定一定是错的，代表需要人核 |
+| ssh 与超时 | `tools/calib_fetch.py` 的 ssh 带 `-o BatchMode=yes -o ConnectTimeout=20` 与 20 秒 `subprocess.run(timeout=)`（常量 `SSH_TIMEOUT_S`）；`BatchMode` 让需要口令或 host key 确认时直接失败、不挂住等输入。**远端读不到不回落任何本地缓存**，一律退出 `4` 且不留标定落盘文件 |
+| 产物 | `$S4DIR/stdout/calib-gen2-registry-$STAMP.md`。T0 可离线做，产物仍与现场证据同根，便于与 §4.1c 的比对产物并列。内容 = 引用登记表里的那一条（`calib_id` / `source` / `first_seen` / `file_sha256` / `byte_size` / `acknowledged_by`）＋ `tools/calib_health.py` 的健康检查结论原文（`CALIB_STATE` 行与退出码）＋（本轮新增）`tools/calib_fetch.py` 的 `CALIB_MOTOR:` 逐台结论与 `CALIB_ENVELOPE:` / `CALIB_ENVELOPE_IMPLAUSIBLE:` 两行、退出码原文 |
+| 不过怎么办 | 可执行判据（不再靠目测）：包络这一层先按上面「抓取与包络」的退出码判——`4` 直接不过，`1` 只有现场核对并写明理由后才允许 `--allow-implausible` 继续。登记这一层：① 跑 `uv run --no-sync python tools/calib_health.py --calib-file <标定文件>`（`--registry` 省略时默认就是仓库内 `configs/calib-registry.yaml`），现役标定必须输出 `CALIB_STATE: CALIB_KNOWN` 且退出码 `0`；② 输出 `CALIB_NEW_UNREGISTERED`（退出码 `1`）**不算过**——那是「新代际还没登记」的非阻断警告，须先跑 `uv run --no-sync python tools/calib_register.py --from-file <标定文件> --write` 登记（再跑 ① 应变 `CALIB_KNOWN`）；③ `CALIB_SUSPECT`（退出码 `3`）/ `CALIB_CORRUPT`（退出码 `4`）一律不过，按事故处置，**不得改标定文件去「对齐」**。四项缺一、或三处处置没写 → T0 不过，**T3 降级为「不可执行，记录原因」**（依赖见 [§6](#mission-order)）。不得只记一个 `file_sha256` 就算登记，也不得把「已看到新标定」当成「已登记」 |
+| 已落地的做法（ADR D22） | 原「彻底做法」那一行已落地，见 `docs/ADR.md` D22。`src/alohamini_cartesian/calibration/` 子包（`identity` / `registry` / `limits`）已实现，`configs/calib-registry.yaml` 已登记两条真实代际（`2905048c28a2`、`4a80c0fd4421`），`tools/calib_health.py` 给四态健康检查（`CALIB_KNOWN` / `CALIB_NEW_UNREGISTERED` / `CALIB_SUSPECT` / `CALIB_CORRUPT`），`tools/calib_register.py` 负责登记。D23 又补三件：包络判定与阈值单一来源 `src/alohamini_cartesian/calibration/envelope.py`、抓取入口 `tools/calib_fetch.py`、会话锚定 `--session-anchor`（第五态 `CALIB_SESSION_DRIFT`，退出 `4`）。三层限位模块**已实现但未接入控制路径**（D22 决定 7：前置是现场实测层，`configs/limits-observed.yaml` 仍是空模板）。本卡现在只剩「补登记人」（`acknowledged_by` 仍是 `null`）＋ 上面那行「三处受影响基线怎么处置」 |
 
 <a id="mission-s1"></a>
 ### 3.3 S1 行程复核（现场步骤，排在开场落 scope 之后、T1 之前）
@@ -162,6 +164,7 @@
 - **风险在被压窄的两只**：`arm_right_shoulder_lift` 的上界从 3258 掉到 2048（少 1210 tick ≈ 106.4°），`arm_left_shoulder_pan` 的上界从 3327 掉到 2956（少 371 tick ≈ 32.6°）。凡 T3 的目标点落在这些被切掉的方向上，会在 ①a 只读窗口或 IK 的限位检查里被拒。**T3 的目标点一律先过 ①a 的 `effective_limits_deg` 再谈真跑，不按旧 range 挑点。**
 - **放宽的那只不改 T3 选点**：`arm_left_gripper` 51 → 1465 tick 是异常消失（现与右侧 1479 tick 基本一致）；夹爪有自己的入口（`GripperHandle`），`ArmHandle.move_to` 只收 `x` / `y` / `z` 三个量，所以它不进六轴限位。它改的是 V12 单位口径核对的输入（18 个电机全比），处置见 T0。
 - **不猜方向**：「上界被切掉」对应哪个物理方向，本轮没有现场实测，不写方向假说；以 S1 的实测极限为准。
+- **右肩 lift 的 100.5° 待 S1 推臂实测确认**：`arm_right_shoulder_lift` 的 `905..2048`（1143 tick ≈ 100.5°）落在肩经验区间 `190–240°` 之外，`tools/calib_fetch.py` 判它 `IMPLAUSIBLE`（退出码 `1`）。确认前**不放行也不预填接受名单**——`configs/calib-envelope-accepted.yaml` 保持空模板（`accepted: []`），等 S1 拿到实测行程再决定是登记（真实机械限位）还是修标定（标定没扫满）。理由：包络值是**我方经验值、非厂商规定**，没有实测就不能替现场写答案。
 
 <a id="mission-power"></a>
 ## 5 供电变更与度量口径
@@ -195,7 +198,7 @@
 
 | 序 | 步骤 | 指针 |
 | --- | --- | --- |
-| 0 | T0 标定基线处置：**本地、离线，不需现场、不需开机**，行前做完（四项登记 ＋ 三处处置口径） | [§3.2](#mission-t0) |
+| 0 | T0 标定采集与包络检查：**本地、离线，不需现场、不需开机**，行前做完（`tools/calib_fetch.py` 取标定＋包络退出码判读＋四项登记＋三处处置口径） | [§3.2](#mission-t0) |
 | 1 | 开场 §2 / §3：变量块（`$S4DIR` / `$STAMP`）、到场核对、scope（授权记录，五项落 `stdout/scope-$STAMP.md`）落盘、两条安全前置当面口述并写进 scope | [§2](runbook/1-prepare.md#sec-2)、§3（§3.9） |
 | 2 | S1 行程复核：torque 释放态下推两个被压窄的关节到两端，读 `Present_Position` 与两个限位寄存器；**同一释放态接着做序 3**，不重复起停 Host | [§3.3](#mission-s1)；[§4.2](runbook/3-health.md#sec-4-2)；[§8.1](runbook/2-host.md#sec-8-1) |
 | 3 | T1 摆姿与读数：**摆姿在 torque 释放态 → 起 Host 读数**（分段做，不是整段做完才起 Host；自检的 ①a 要连 Host，这里不停 Host） | [§10.8](runbook/4-experiments.md#exp-e8)；[§6.1](runbook/2-host.md#host-start) |
@@ -206,7 +209,7 @@
 | 8 | T3 `move_to`：①a → ①b → ② → ③ → ④ 卷尺 | [§10.7](runbook/4-experiments.md#exp-e7) |
 | 9 | 收尾 §8.1（先把手臂放到低位，再断电） | [§8.1](runbook/2-host.md#sec-8-1) |
 
-依赖一句：**T1 不过（缺 `signs` / `zeros`，或缺其中一关节）则 T3 降级为「不可执行，记录原因」**——`§10.7` 的硬前置就是这两份文件，缺时脚本按 `15` 退出，**不得手写或猜**。**T0 也不过同样阻断 T3**：登记记录四项缺一、或三处处置没写，T3 一样降级为「不可执行，记录原因」，因为 T3 的 ④ 与「限位交集」类结论都要挂在已登记的标定代际上；T0 可离线完成，所以不占现场窗口。序 7 与序 8 之间**没有依赖**：Gate A–F 在 `move_to` 路径上不生效（[§10.7](runbook/4-experiments.md#exp-e7) 的 (d) 表），T2 与 T3 只是共用同一次起 Host 的窗口。S1 不是 T3 的第三道硬前置，但它判到「标定未扫满」时按 [§3.3](#mission-s1) 的处置走，处置未完成期间 T3 不跑。
+依赖一句：**T1 不过（缺 `signs` / `zeros`，或缺其中一关节）则 T3 降级为「不可执行，记录原因」**——`§10.7` 的硬前置就是这两份文件，缺时脚本按 `15` 退出，**不得手写或猜**。**T0 也不过同样阻断 T3**：标定抓取退出码 `4`、或包络退出码 `1` 却没现场核对留痕、或登记记录四项缺一、或三处处置没写，T3 一样降级为「不可执行，记录原因」，因为 T3 的 ④ 与「限位交集」类结论都要挂在已登记、已验包络的标定代际上；T0 可离线完成，所以不占现场窗口。序 7 与序 8 之间**没有依赖**：Gate A–F 在 `move_to` 路径上不生效（[§10.7](runbook/4-experiments.md#exp-e7) 的 (d) 表），T2 与 T3 只是共用同一次起 Host 的窗口。S1 不是 T3 的第三道硬前置，但它判到「标定未扫满」时按 [§3.3](#mission-s1) 的处置走，处置未完成期间 T3 不跑。
 
 ## 7 用户侧前置清单
 

@@ -58,6 +58,8 @@
 | `benchmarks/alohamini_ik/benchmark_arm_ik.py` | 离线 FK/IK 基准：p50/p95/p99 求解耗时与整步耗时、位置残差、相邻步关节变化；判据 solve p99 ≤ 7.0 ms、整步 p99 ≤ 15.0 ms |
 | `benchmarks/alohamini_io/capture_robot_fingerprint.py` | 只读采集对端 metadata 指纹，零 `send_action`；`schema_version` 不是 2 时 exit 6 且不写盘 |
 | `benchmarks/alohamini_io/measure_latency.py` | 两个模式：`rtt`（不动）与 `tracking`（Mode B，会真动机器人）；退出码 0/1/3/5/6/7/8/9，无 `latest_request_timing` 时 exit 9 |
+| `calibration/envelope.py` | 包络判定（`OK` / `IMPLAUSIBLE` / `WRONG_DATASET` / `unmeasured_range`）与六个经验阈值的**唯一来源**；接受名单 `configs/calib-envelope-accepted.yaml` 的读写（九字段、命中三要素，过期条目照旧报警并在文案写明） |
+| `tools/calib_fetch.py` | 标定抓取与门禁：`--host` 走 ssh（`BatchMode` + 20 s 超时）或 `--from-file` 读本地，跑包络、可选 `--record` 登记；退出码 `0` / `1` / `2` / `4`，远端读不到不回落本地缓存，退出 `4` 不留快照 |
 
 ### 4.3 设计条目 → 实现位置 / 状态
 
