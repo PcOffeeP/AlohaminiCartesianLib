@@ -6,11 +6,13 @@
 <a id="exit-codes"></a>
 ## 10 退出码对照表（原 §10）
 
-**一码两义**：`6` 在 `capture` 里表示宿主 metadata 不可用、主动不写盘；在 `measure` 里表示运动门禁拒绝、零命令。现场拿到 6，先看是哪个脚本。
+**一码多义**：同一个码在不同脚本里含义不同，读码先看是哪个脚本。已知三例：`6` 在 `capture` 里表示宿主 metadata 不可用、主动不写盘，在 `measure` 里表示运动门禁拒绝、零命令；`1` 在 `calib_health` 里是 `CALIB_NEW_UNREGISTERED`（**非阻断**，新代际未登记），在 `calib_register` 里是结构校验不合格（阻断，不写盘）；`3` 在 `calib_health` 里是 `CALIB_SUSPECT`（可疑，需人核对），在 `calib_register` 里是输入文件不可解析。
+
+下表里 `calib_health` = `tools/calib_health.py`，`calib_register` = `tools/calib_register.py`。两个新工具的四态与四类错误的完整口径分别写在各自脚本的模块 docstring 里。
 
 | 脚本 | 码 | 含义 |
 | --- | --- | --- |
-| 两者 | 2 | 参数解析失败，一律 `2`，不经过任何 `EXIT_*` 常量；触发点全部列在表下「退出码 2 的全部触发点」小节 |
+| capture / measure | 2 | 参数解析失败，一律 `2`，不经过任何 `EXIT_*` 常量；触发点全部列在表下「退出码 2 的全部触发点」小节 |
 | capture | 0 | payload 已写盘 |
 | capture | 3 | 建客户端、`connect()` 或观测传输失败 |
 | capture | 4 | `--timeout-s` 到期仍不够 `--samples` |
@@ -24,13 +26,23 @@
 | measure | 7 | rtt 模式样本不足 |
 | measure | 8 | 收尾 hold 被拒，停命令没到 |
 | measure | 9 | 客户端不发布 rtt 模式所测量的能力（`latest_request_timing`），或发布了但内容填不满。三种形态都返回 `9`、都不写 CSV，形态与触发点见下表 |
+| calib_health | 0 | `CALIB_KNOWN`：这个 `calib_id` 已登记，照常用 |
+| calib_health | 1 | `CALIB_NEW_UNREGISTERED`：结构通过但未登记，**非阻断**，按提示跑 `calib_register.py` 登记 |
+| calib_health | 2 | 参数错误（既没给 `--calib-file` 也没给 `--fingerprint`），或 `--registry` 指向的登记表不可读（四态之一都给不出来） |
+| calib_health | 3 | `CALIB_SUSPECT`：能解析但不像正常标定（结构校验不过；或与已登记最新代际比是 `BROAD` / `REGION_INCONSISTENT`，**或 `id` / `drive_mode` 跨代际变动**），需人核对 |
+| calib_health | 4 | `CALIB_CORRUPT`：文件不存在、JSON 不可解析、顶层形状认不出、缺字段、值为 `null`、`range_min >= range_max` |
+| calib_register | 0 | 成功（含默认 dry-run，含「该代际已登记，未改动」） |
+| calib_register | 1 | 结构校验不合格（电机数、缺字段、取值非法），不写盘 |
+| calib_register | 2 | 参数错误（既没给 `--from-file` 也没给 `--from-fingerprint`） |
+| calib_register | 3 | 输入文件不可解析（读不了、JSON 坏、认不出的顶层形状） |
+| calib_register | 4 | 登记表不可读或不可写 |
 
 `capture_robot_fingerprint.py` 不产生 `9`：缺 `latest_request_timing` 时它继续采集并把计时字段记 `null`。
 
 <a id="exit-code-2"></a>
 ### 退出码 2 的全部触发点
 
-参数解析失败，一律 `2`，不经过任何 `EXIT_*` 常量；所有判定都在打开任何 socket 与调用 `client_factory(...)` 之前完成。`measure`（rtt 与 tracking 共用同一个 `parse_args`，rtt 也查这些旋钮）：argparse 自身产生的用法错误 —— 未知选项、缺少 `--host`、`--mode` 不在 `rtt`/`tracking`、`--anchor` 不在 `{present,command}`（stderr 原文 `measure_latency.py: error: argument --anchor: invalid choice: 'bogus' (choose from present, command)`，`--mode rtt` 接受该参数并忽略）、任一 `type=` 转换失败（`--port` / `--samples` / `--request-window` / `--steps` 非整数，或任一 `type=float` 选项不是可解析的数值文本；`--csv` 的 `type=Path` 对命令行字符串不会抛，不在此列）；整数下界 3 项 —— `--samples < 1`、`--request-window < 1`、`--steps <= 0`；「有限且带符号」同查 7 项 —— `--rate-hz`（有限且 `> 0`）、`--control-hz`（有限且 `>= 1`）、`--host-loop-hz`（有限且 `> 0`）、`--timeout-s`（有限且 `> 0`）、`--settle-timeout-s`（有限且 `> 0`）、`--settle-tolerance-deg`（有限且 `>= 0`，`0` 合法即最严格设置）、`--delta-deg`（有限且**非零**，`0` 与 `-0.0` 都落 `2`，负值合法；判据 `measure_latency.py:1798`），非有限值（`nan` / `inf`，含 `float()` 后变成 `inf` 的 `1e400`）与不满足符号条件的值都落 `2`；交叉校验 1 项 —— `--settle-tolerance-deg >= abs(resolve_delta_deg(args))`（与钳到 1.0° 幅度上限之后的**有效 delta 的绝对值**比较，`measure_latency.py:1812-1817`；实测 stderr 原文 `must be below the effective --delta-deg magnitude`）。`capture` 的数值校验只有 2 项 —— `--samples < 1`、`--timeout-s` 有限且 `> 0`（不查 `--rate-hz` / `--control-hz` 之类），另加同一形状的 argparse 用法错误（未知选项、缺少 `--host`、`--port` 非整数）。以上为 `2` 的全部触发点。幅度钳位本身不产生 `2`：超过 `1.0°` 的 `--delta-deg` 由 `resolve_delta_deg` 静默钳（`measure_latency.py:1784-1793` 的注释写明这是有意的），只有 `0` 才拒。合法预算在运行中到期不走 `2`：`capture` 落 `4`，`measure` 的 rtt 落 `7`、tracking 落 `1`
+参数解析失败，一律 `2`，不经过任何 `EXIT_*` 常量；所有判定都在打开任何 socket 与调用 `client_factory(...)` 之前完成。`measure`（rtt 与 tracking 共用同一个 `parse_args`，rtt 也查这些旋钮）：argparse 自身产生的用法错误 —— 未知选项、缺少 `--host`、`--mode` 不在 `rtt`/`tracking`、`--anchor` 不在 `{present,command}`（stderr 原文 `measure_latency.py: error: argument --anchor: invalid choice: 'bogus' (choose from present, command)`，`--mode rtt` 接受该参数并忽略）、任一 `type=` 转换失败（`--port` / `--samples` / `--request-window` / `--steps` 非整数，或任一 `type=float` 选项不是可解析的数值文本；`--csv` 的 `type=Path` 对命令行字符串不会抛，不在此列）；整数下界 3 项 —— `--samples < 1`、`--request-window < 1`、`--steps <= 0`；「有限且带符号」同查 7 项 —— `--rate-hz`（有限且 `> 0`）、`--control-hz`（有限且 `>= 1`）、`--host-loop-hz`（有限且 `> 0`）、`--timeout-s`（有限且 `> 0`）、`--settle-timeout-s`（有限且 `> 0`）、`--settle-tolerance-deg`（有限且 `>= 0`，`0` 合法即最严格设置）、`--delta-deg`（有限且**非零**，`0` 与 `-0.0` 都落 `2`，负值合法；判据 `measure_latency.py:1798`），非有限值（`nan` / `inf`，含 `float()` 后变成 `inf` 的 `1e400`）与不满足符号条件的值都落 `2`；交叉校验 1 项 —— `--settle-tolerance-deg >= abs(resolve_delta_deg(args))`（与钳到 1.0° 幅度上限之后的**有效 delta 的绝对值**比较，`measure_latency.py:1812-1817`；实测 stderr 原文 `must be below the effective --delta-deg magnitude`）。`capture` 的数值校验只有 2 项 —— `--samples < 1`、`--timeout-s` 有限且 `> 0`（不查 `--rate-hz` / `--control-hz` 之类），另加同一形状的 argparse 用法错误（未知选项、缺少 `--host`、`--port` 非整数）。以上为 `capture` / `measure` 的 `2` 的全部触发点。`tools/calib_health.py` / `tools/calib_register.py` 也会返回 `2`，但只有两类：① **参数 / 用法错误**——两个输入参数**都没给**（「必须给 `--calib-file` 或 `--fingerprint` 之一」/「必须给 `--from-file` 或 `--from-fingerprint` 之一」）、两个输入参数**同时给**（argparse 互斥组报 `not allowed with argument`）、以及 argparse 自身的用法错误（未知选项、缺参数值等，两个脚本同形）；② **登记表不可读或不可写**（`calib_health` 把不可读的 `--registry` 也算在这里）。这两类不经过上面这些旋钮校验，逐条口径见两个脚本的模块 docstring 与 §10 表。幅度钳位本身不产生 `2`：超过 `1.0°` 的 `--delta-deg` 由 `resolve_delta_deg` 静默钳（`measure_latency.py:1784-1793` 的注释写明这是有意的），只有 `0` 才拒。合法预算在运行中到期不走 `2`：`capture` 落 `4`，`measure` 的 rtt 落 `7`、tracking 落 `1`
 
 <a id="exit-code-9"></a>
 ### 退出码 `9` 的三种形态

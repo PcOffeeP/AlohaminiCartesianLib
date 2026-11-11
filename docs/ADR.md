@@ -1,6 +1,6 @@
 # 架构决策记录（ADR）
 
-本文记录 `alohamini-cartesian` 自 v0.1.0 起沿用的设计取舍与流程红线，编号 D1–D21。本文件收设计取舍；纯流程条目仅收 D19 一类发版纪律，不再追加。每条按背景、决定、后果三段记录，后果同时写正面收益与已知代价。状态写作「已接受（自 vX.Y.Z 起）」；已落地但尚未发版的条目写作「已接受（未发版：…）」并写明当前 `pyproject.toml` 版本与 `docs/changelog.md` 缺行，不记具体日期。新的重大取舍按顺序追加编号，已接受的条目不回改。
+本文记录 `alohamini-cartesian` 自 v0.1.0 起沿用的设计取舍与流程红线，编号 D1–D22。本文件收设计取舍；纯流程条目仅收 D19 一类发版纪律，不再追加。每条按背景、决定、后果三段记录，后果同时写正面收益与已知代价。状态写作「已接受（自 vX.Y.Z 起）」；已落地但尚未发版的条目写作「已接受（未发版：…）」并写明当前 `pyproject.toml` 版本与 `docs/changelog.md` 缺行，不记具体日期。新的重大取舍按顺序追加编号，已接受的条目不回改。
 
 ## 索引
 
@@ -27,6 +27,7 @@
 | D19 | 证据红线：V01 不收口不发 minor 版，每个发版留一格实机证据 | 已接受（自 v0.7.0 起） |
 | D20 | V01 残余支分级口径与达成率分母统一 | 已接受（自 v0.7.0 起） |
 | D21 | URDF 采用厂商上游参数、零实测，验收由 §10.7 卷尺实测收口 | 已接受（未发版） |
+| D22 | 标定代际化：把标定从常量改为带代际的输入 | 已接受（未发版：`pyproject.toml` 为 0.7.0，`docs/changelog.md` 无 D22 条目） |
 
 ## D1 依赖形态：独立包，lerobot 作为可选 extra
 
@@ -722,3 +723,42 @@ V01 是本阶段唯一挡住「能不能说不接 leader 就算通」的条目�
 触发重新评估的条件（达成任一条即重新评估）：① §10.7 卷尺实测偏差超毫米级；② 出现按毫米级精度使用的场景，例如插装、抓取定位；③ 拿到厂商修正后的 URDF 或实测杆长。
 
 相关提交：本轮为文档提交（无代码提交）。
+
+## D22 标定代际化：把标定从常量改为带代际的输入
+
+状态：已接受（未发版：`pyproject.toml` 为 0.7.0，`docs/changelog.md` 无 D22 条目）
+
+### 背景
+
+2026-11-10 11:58:15Z，现役标定（Pi 上的 `AlohaMiniRobot.json`）被完整重写：14 台手臂电机的 `homing_offset` 变了，其中 12 台的 `range_min` / `range_max` 也变，两台 `wrist_roll` 只动 `homing_offset`（range 两侧都是 `0..4095`），三个轮子与 `lift_axis` 未动，全 18 项的 `id` / `drive_mode` 未变。旧代际的身份是 `calib_id 2905048c28a2`（`source: archive-20261022`），新代际是 `calib_id 4a80c0fd4421`（`source: pi-live-20261110`）。
+
+这一改曝出三处脆断，全部是「把标定数值当成了不随代际变的东西」：
+
+1. `docs/field-ops/runbook/3-health.md` §4.1c 的 A1 判据当时写「任一标定字段不等 → 停，标定变动属事故」。一次合法的现场重标定会被它判成事故——判据把「标定变了」与「标定变了却没人知道」混成一件。
+2. `CALIB_FIELD_DIFFS: 0` 这条基线结论被当成跨代际不变量。它只是「某两份同代际快照之间」的计数；基线换代际后，旧的计数对新代际没有任何意义。
+3. 由标定数值派生的结论被当成永久事实——例如「左夹爪只有 51 tick、读数会被吞」（旧代际 `2021..2072`）在新代际（`2018..3483`，1465 tick / 128.8°）不成立。同类的还有 `docs/acceptance-baseline.md` V12 的单位一致性实机证据：它核对的是旧代际标定与 2026-10-25 指纹一致，换代际后就失效。
+
+### 决定
+
+1. **标定身份用 `calib_id`，不用文件哈希。** `calib_id` = 把 18 台电机的 `id` / `drive_mode` / `homing_offset` / `range_min` / `range_max` 按电机名排序、只留这五个字段、压成紧凑 JSON 后取 sha256 的前 12 位十六进制（`src/alohamini_cartesian/calibration/identity.py:228-231`）。`file_sha256` 只作溯源辅助：同一批标定值换个字节格式（缩进、键顺序）就是另一个文件哈希，它不用于身份判定。
+2. **代际登记在 `configs/calib-registry.yaml`**，一条代际一条记录（`calib_id` / `first_seen` / `source` / `file_sha256` / `byte_size` / 18×5 `motors` / `note` / `acknowledged_by`）。登记按 `calib_id` 幂等：同一 id 再登记返回未追加，不覆盖首条。
+3. **健康检查四态**（`tools/calib_health.py`）：`CALIB_KNOWN` / `CALIB_NEW_UNREGISTERED` / `CALIB_SUSPECT` / `CALIB_CORRUPT`，stdout 给机器可读行 `CALIB_STATE: <四态之一>`。其中 `CALIB_NEW_UNREGISTERED` **非阻断**，走登记流程；只有 `CALIB_SUSPECT` / `CALIB_CORRUPT` 才阻断。一句话口径：**「标定变了并已登记」放行；「标定变了却没人登记」是警告（`CALIB_NEW_UNREGISTERED`，非阻断，需人收尾登记）；例外：`id` / `drive_mode` 变动、以及底盘三轴与 `lift_axis` 的变动会判 `CALIB_SUSPECT` 直接阻断——正常重标定只会动手臂的 `homing_offset` / `range_min` / `range_max`**。两个例外的根据：本次重标定 18 项 `id` / `drive_mode` 全未变（换线、翻驱动方向不可能是重标定的产物），而只动一个 `base_left_wheel.homing_offset` 也会因「含底盘变动」判 `BROAD` → `CALIB_SUSPECT`。另：只有未登记的代际才与 `latest()` 比 `id` / `drive_mode`——已登记代际工具直接返回 `CALIB_KNOWN`，不再比。
+4. **跨代际只比增量与比值，不比绝对角度。** `deg_per_unit`、`homing_offset` 一类绝对量随代际变；跨代际比较用变化分类的逐字段 Δ tick / Δ 度（`classify_change`），不拿两代的绝对角度直接相减。真实旧→新的变化形态是 `ARM_ONLY`（14 台手臂电机动、三轮与 `lift_axis` 未动）。
+5. **三层限位**（`src/alohamini_cartesian/calibration/limits.py`）：层 1 URDF 结构限位 / 层 2 现场实测极限（`configs/limits-observed.yaml`，缺文件或该关节无记录即缺席，**不得用标定值顶替**）/ 层 3 标定 range。硬限 = URDF ∩ 实测；目标在硬限内、出标定 range 时的拒绝必须写明「这是标定区间限制、不是结构限制」，并给出两条出路（跑实测建立层 2 / 显式覆盖）。
+6. **`signs` / `zeros` 绑代际。** 它们由标定与机械零位决定，换代际必须重标；库内不存默认值，不注入就构造不出适配器。
+7. **`limits` 模块本轮不接入控制路径。** `control/controller.py` 与 `control/api.py` 仍只走 `JointKinematicAdapter.effective_limits_deg`。理由：接入的前提是层 2 有一批可用实测数据，本轮没有（`configs/limits-observed.yaml` 是空模板）；数据缺席时先接分支，等于凭空改变拒绝与放行的边界，而没有任何一条真机证据支持新边界。
+
+### 后果
+
+正面：身份、登记、判态各有唯一入口，「标定变了」不再被误判为事故，也不再需要人靠比对两份快照猜；由标定数值派生的结论有了代际限定，换代际时会被显式复查而不是默默沿用。
+
+**已知代价**
+
+1. **重标之后必须有人跑一次登记**：`uv run --no-sync python tools/calib_register.py --from-file <标定文件> --write`。不登记则 `tools/calib_health.py` 会一直停在 `CALIB_NEW_UNREGISTERED`（警告态、非阻断）——这是设计意图（「没人知道」要被看见），但需要有人收尾。
+2. **登记表里 `acknowledged_by` 目前是 `null`**：新代际的变动还没人签收，「登记人待现场填写」。健康检查把 `acknowledged_by=None` 原样打出来，不代填。
+3. **`configs/calib-registry.yaml` 由 `save()` 写盘会丢掉文件头注释**（`yaml.safe_dump` 无法写注释）。文件头已声明这一点：记录内容不动，注释要改就手工补回。
+4. **`limits` 未接入意味着三层判定现在只是可测的纯函数**，控制回路上的限位仍是层 1 ∩ 层 3 的旧口径。接入动作单独排期，前置是层 2 实测数据到位。
+
+触发重新评估的条件（达成任一条即重新评估）：① 层 2 有了现场实测数据，可评估把 `limits` 接入控制路径；② 出现跨代际必须比较绝对角度才能判的场景（例如追溯某次事故的物理位置）；③ 登记表出现第二条以上「未登记就上线」的实际案例。
+
+相关提交：无（对应代码改动尚未提交）。

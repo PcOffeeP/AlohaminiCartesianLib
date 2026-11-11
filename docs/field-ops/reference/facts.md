@@ -38,7 +38,7 @@
 | scope 模板五项 | 时间 UTC / 授权人 / 授权范围 / 允许的动作 / 不允许的动作，落 `stdout/scope-$STAMP.md`；不过 `run`（heredoc 正文不进 `.cmd`） | [§3.9](../runbook/1-prepare.md#sec-3) |
 | URDF 来源与零实测 | 派生自厂商上游 `am-arm200pro.urdf`（commit `5b03af1ef6c80595bd988e0137cf8e7c35811eb6`，sha256 `c38669d46d2bf804c112a6d8ce926074c8ff65ba70917503e09b77c75e285030`），`sources.json` 自报 `hardware_verified: false`，本库无杆长实测 | `docs/library-guide.md` §3.1；`docs/ADR.md` D21 |
 | `signs` / `zeros` 契约 | 正向 `q_kinematic_deg = sign × motor_deg + zero`；反向 `motor_deg = (q − zero) / sign`；`sign` 只许 `±1`，库内无默认值，不注入就构造不出适配器 | [§10.8](../runbook/4-experiments.md#exp-e8) |
-| §4.1c 两组判据 | A 组（标定字段）任一不等 = 事故，停；B 组位置阈值 `3 tick`（本项目自定上界，非厂商值） | [§4.1c](../runbook/3-health.md#sec-4-1c) |
+| §4.1c 两组判据 | A 组（标定字段）**同代际内**比相等，不等 = 事故、停；**跨代际**（两份指纹的 `calib_id` 不等）先跑 `tools/calib_health.py` 判态，`CALIB_NEW_UNREGISTERED` 走 `tools/calib_register.py --write` 登记、**不断言事故**，只有 `CALIB_SUSPECT` / `CALIB_CORRUPT` 才阻断。B 组位置阈值 `3 tick`（本项目自定上界，非厂商值）。口径见 `docs/ADR.md` D22 与 `tools/calib_health.py` | [§4.1c](../runbook/3-health.md#sec-4-1c) |
 | 换算常数 | `1 tick = 360/4096° = 0.087890625°` | [§4.1c](../runbook/3-health.md#sec-4-1c)；`docs/field-results.md` 2026-11-08 节 |
 | 左夹爪只有 51 tick（**已失效**，2026-11-10 重标定） | `2021..2072`，`range_0_100` 下 `4.48°`；D14 已定本轮不重标定，只读确认。标注：该条只属 2026-11-10 之前的代际，重标定后已不成立，见下一行 | [§4.2](../runbook/3-health.md#sec-4-2)；`docs/ADR.md` D14 |
 | 左夹爪 51 tick 异常已消失（2026-11-10） | 重标定后 `range_min..range_max` 是 `2018..3483`（1465 tick / 128.8°），与右侧 1479 tick 基本一致；「51 tick」只属旧代际，`docs/investigations/gripper-range-51-tick.md` 的前提据此失效 | [next-mission.md §0](../next-mission.md#mission-sec-0)；仓库外 `Cartesianlib-workbench/notes/2026-11-10-recalibration.md` |

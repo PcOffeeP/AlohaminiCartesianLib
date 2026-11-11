@@ -88,27 +88,27 @@ EXTERNAL_FILENAMES = frozenset(
 )
 
 # 抽取规则退化（例如正则写错、只匹配到极少条目）时本用例会先红。
-# 实测口径（``docs/field-ops/`` 重组成 15 份手册之后的一轮）：十八个文档合计抽取 290 条
-# 引用 = 178 条由机器逐条判行号 + 112 条落在 10 个仓库外文件名上被跳过。
+# 实测口径（标定代际化那一轮的文档改动之后）：十八个文档合计抽取 292 条引用
+# = 180 条由机器逐条判行号 + 112 条落在 10 个仓库外文件名上被跳过。
 # 按文件分布（抽取 / 判行号）：TODO.md 42/23、acceptance-baseline 3/3、field-ops README 0/0、
-# next-mission 0/0、completed-work 0/0、runbook/1-prepare 9/4、runbook/2-host 5/0、
-# runbook/3-health 16/10、runbook/4-experiments 146/122、runbook/5-wrapup 0/0、
+# next-mission 1/1、completed-work 0/0、runbook/1-prepare 9/4、runbook/2-host 5/0、
+# runbook/3-health 17/11、runbook/4-experiments 146/122、runbook/5-wrapup 0/0、
 # reference/facts 0/0、reference/gates 5/5、reference/params 4/4、reference/artifacts 8/2、
 # reference/troubleshooting 0/0、reference/env-rebuild 4/0、reference/mapping 0/0、
 # field-results 48/5。
 # 外置跳过的 112 条分布：TODO 19 / 1-prepare 5 / 2-host 5 / 3-health 6 / 4-experiments 24 /
 # artifacts 6 / env-rebuild 4 / field-results 43。
-# 七份文档各 0 条（field-ops 的 ``README.md``、``next-mission.md``、``completed-work.md``、
+# 六份文档各 0 条（field-ops 的 ``README.md``、``completed-work.md``、
 # ``runbook/5-wrapup.md``、``reference/facts.md``、``reference/troubleshooting.md``、
 # ``reference/mapping.md``）。它们留在 ``DOCUMENTS`` 里不是为凑数：本守卫对每份文档都判
 # 「越界 / 空行 / 区间倒挂 / 裸续引」，0 条的文档是在守「以后写进去的引用也必须过判」，
 # 且它们一旦出现仓库外引用会立刻反映到 ``EXTERNAL_FILENAMES`` 集合相等那条判据上。
 # ``reference/mapping.md`` 是过渡期对照表（一轮现场后删），它本身 0 条引用，故删它不会
 # 触及条数下限，删它的信号来自 ``DOCUMENTS`` 被改这件事本身。
-# 下限取 169：实测 178，余量 9 条（约 5%）；这样静默从 ``DOCUMENTS`` 删掉一份中型文档
-# 也会红——删 runbook/3-health（10 条）→ 168、删 runbook/4-experiments（122 条）→ 56，
-# 两者都低于 169；文档正常删掉几条引用（远少于 9 条）不会红。
-MIN_REFERENCES = 169
+# 下限取 171：实测 180，余量 9 条（约 5%）；这样静默从 ``DOCUMENTS`` 删掉一份中型文档
+# 也会红——删 runbook/3-health（11 条）→ 169、删 runbook/4-experiments（122 条）→ 58，
+# 两者都低于 171；文档正常删掉几条引用（远少于 9 条）不会红。
+MIN_REFERENCES = 171
 
 _EXTENSION = r"(?:py|md|toml|yaml|yml|json|csv)"
 _NAME = rf"[A-Za-z0-9_][A-Za-z0-9_./-]*\.{_EXTENSION}"

@@ -268,24 +268,32 @@ run 4.1c-postpower-diff uv run --no-sync python "$S4DIR/stdout/4.1c-postpower-di
 
 | 组 | 比对什么 | 来源字段 | 判据 | 落空时怎么记 |
 | --- | --- | --- | --- | --- |
-| A1 标定 | `range_min`、`range_max`、`homing_offset`、`drive_mode`（= 寄存器 `Min_Position_Limit` / `Max_Position_Limit` / `Homing_Offset` / `Drive_Mode`） | `robot_metadata.motors.<motor>.*` | **任一不等 → 停**，标定变动属事故，禁止继续试动、禁止改标定文件去「对齐」 | 记录电机名与字段、两侧原值 |
-| A2 拓扑 | `id`、`model`、`normalization`、`resolution` | `robot_metadata.motors.<motor>.*` | 任一不等 → 记录并核对 vendor 升级记录（换型号 / 换分辨率是升级的正常结果，但必须能解释） | 记录电机名与字段、两侧原值，并附 vendor 升级记录原文 |
+| A1 标定 | `range_min`、`range_max`、`homing_offset`、`drive_mode`（= 寄存器 `Min_Position_Limit` / `Max_Position_Limit` / `Homing_Offset` / `Drive_Mode`） | `robot_metadata.motors.<motor>.*` | **同代际内**（本次指纹的 `calib_id` 与基线指纹的 `calib_id` 相等）任一标定字段不等 → **停**，按事故处置，禁止继续试动、禁止改标定文件去「对齐」；**跨代际**（两份 `calib_id` 不等）→ **不得直接按事故处置**，先跑 `tools/calib_health.py` 判态：`CALIB_KNOWN`（已登记的代际）只作事实记录、不作事故；`CALIB_NEW_UNREGISTERED` 走登记流程（`tools/calib_register.py --from-file … --write`），**不是事故**；`CALIB_SUSPECT` / `CALIB_CORRUPT` → 阻断，按事故处置 | 记录电机名与字段、两侧原值 |
+| A2 拓扑 | `id`、`model`、`normalization`、`resolution` | `robot_metadata.motors.<motor>.*` | 任一不等 → 记录并核对 vendor 升级记录（换型号 / 换分辨率是升级的正常结果，但必须能解释）；**其中 `id` 或 `drive_mode`（后者属 A1 行的比对字段）任一不等，即使跨代际也按事故处置（阻断）**——换线、翻驱动方向不可能是正常重标定的结果；未登记时 `tools/calib_health.py` 会把这类差异判 `CALIB_SUSPECT`（exit 3），**但已登记代际工具不报差异**（在册即视为已人确认，直接返回 `CALIB_KNOWN`），所以 A2 这条**必须自己逐字段比**，不能拿工具绿当接线没问题的证据 | 记录电机名与字段、两侧原值，并附 vendor 升级记录原文 |
 | B 位置 | 14 个 `arm_*_<joint>.pos` 的 tick 值（用厂商 `_unnormalize` 的同一条公式换算：`range_m100_100` 用 `int(((v+100)/200)*(max-min)+min)`，`range_0_100` 用 `int((v/100)*(max-min)+min)`，`motors_bus.py:892-902`） | `observation_state` | 每电机 \|Δtick\| ≤ **3** → 记「断电无滑移」；> 3 → 把电机名、基准 tick、本次 tick、差值写进台账。3 tick 是本项目自定的「非滑移」上界，不是厂商值：两侧各自 `int()` 截断各带 ≤1 tick 误差，余 1 tick 作为机械回差余量 | 只列超出 3 tick 的电机 |
 | C 其它 | `lift_axis.height_mm`（mm，不折 tick）、底盘三轴 `x.vel` / `y.vel` / `theta.vel`（原样比） | `observation_state` | 原样记录；本轮不设阈值 | 记两侧原值 |
 
-> **⚠️ 2026-11-10 之后的现场：本节 A 组会必然报差异，那是预期，不是事故。** 2026-11-10 11:58:15 +0000 现役标定被完整重写（见 [§0](../next-mission.md#mission-sec-0)）：18 个电机里 14 个的 `range_min` / `range_max` / `homing_offset` 变了，三个轮子与 `lift_axis` 未动，全 18 项的 `id` / `drive_mode` 未变。所以拿旧代际的基线指纹跑本节第二步，**必然**报出这 14 个电机的 A 组差异——这是标定代际切换，**不得按 A1 行的「任一不等 → 停」处置**，也不得改标定文件去「对齐」（该处置仍适用于同一代际内的意外变更）。
+A1 行改成按代际断开，三件事要分清：
+
+- **`calib_id` 是什么**：把 18 台电机的 `id` / `drive_mode` / `homing_offset` / `range_min` / `range_max` 按电机名排序、只留这五个字段、压成紧凑 JSON，取 sha256 的前 12 位十六进制（`src/alohamini_cartesian/calibration/identity.py:228-231`）。同一份标定不管以指纹还是标定文件形状输入都算出同一个 id；`file_sha256` 只作溯源辅助，换个字节格式就变，不用于身份判定。
+- **怎么把两份指纹的 `calib_id` 比出来**：分别跑 `uv run --no-sync python tools/calib_health.py --fingerprint <那份指纹>`，读 stdout 的 `CALIB_ID:` 行（身份）与 `CALIB_STATE: <四态之一>` 行（判态）；四态与退出码表见 `docs/field-ops/reference/gates.md#sec-10`。登记表是 `configs/calib-registry.yaml`。
+- **「标定变了」与「标定变了却没人知道」是两件事**：前者是合法的现场重标定，只记事实；后者才是事故——判定权在代际登记表，不在本节两份快照的差值。本节只负责把差值量出来并归组。
+
+> **⚠️ 2026-11-10 之后的现场：A1 判据按代际断开，A 组差异不再一律算事故。** 2026-11-10 11:58:15 +0000 现役标定被完整重写（见 [§0](../next-mission.md#mission-sec-0)）：14 台手臂电机的 `homing_offset` 变了，其中 12 台的 `range_min` / `range_max` 也变，两台 `wrist_roll` 只动 `homing_offset`（range 两侧都是 `0..4095`），三个轮子与 `lift_axis` 未动，全 18 项的 `id` / `drive_mode` 未变。所以拿旧代际的基线指纹跑本节第二步，**必然**报出这 14 个电机的 A 组差异。
+>
+> 处置顺序：**先 `tools/calib_health.py` 判态 → 再看 A 组差异怎么记 → `CALIB_NEW_UNREGISTERED` 走 `tools/calib_register.py --from-file … --write` 登记**。`CALIB_KNOWN` 的代际差异只作事实记录；`CALIB_SUSPECT` / `CALIB_CORRUPT` 阻断并按事故处置。**任何情况下都不得改标定文件去「对齐」**——重标定只能来自现场实测。
 >
 > 处置见 [T0](../next-mission.md#mission-t0)：先登记新代际（calib sha256、18 个电机的 8 个字段、登记时间、登记人），再按 T0 写明的口径重取 V12 指纹、改写 `CALIB_FIELD_DIFFS` 结论、换比对基准。
 >
-> **本节的判据本身未作修改**（A1 / A2 / B / C 四行与下面三条口径要点逐字未改）；在 T0 的新基线登记完成之前，本节的比对结论**不具判事故效力**，只能记成「待 T0 登记后再判」。
+> 本节本轮改了四处：**A1 行判据**按代际改写、**A2 行判据**补上「`id` / `drive_mode` 跨代际也不放过」、**表后新增三条要点**（`calib_id` 怎么算 / 怎么比 / 「变了」与「变了却没人知道」的区别）、**2026-11-10 警告块**改写为指向新工具；B / C 两行与前两条口径要点未改，第三条口径要点已按代际拆开。在 T0 的新基线登记完成之前，跨代际的比对结论**不具判事故效力**，只能记成「待 T0 登记后再判」。
 >
-> 另：下面「左夹爪的 tick 分辨率极粗」一条取自旧代际（`2021..2072`，51 tick）；新代际是 `2018..3483`（1465 tick），该条结论在新代际不成立（读数不再被吞），原句保留不改。
+> 另：「左夹爪的 tick 分辨率按代际不同」这条已按代际拆开写在下面第三条口径要点里——旧代际（`calib_id 2905048c28a2`）才吞读数，新代际（`calib_id 4a80c0fd4421`）不吞，本节不再重复该数字。
 
 三条口径要点，写记录时必须带上：
 
 - **Punch 不在指纹里**。Feetech 的 Punch（起步力，寄存器名 `Minimum_Startup_Force`）只由 [§4.2](#sec-4-2) 的 `EXTRA_REGS` 读到，`robot_metadata.motors` 没有这个字段。要比 Punch，先跑 [§4.2](#sec-4-2) 并把两轮读数并列，不能拿指纹冒充。
 - **B 组只覆盖 14 个臂电机**。指纹 `observation_state` 的观测键里 `lift_axis` 是 `lift_axis.height_mm`（进 C 组），底盘三轴只有速度键、没有位置键（本机指纹里 `base_left_wheel` / `base_back_wheel` / `base_right_wheel` 在 `observation_state` 里没有键）。所以「18 电机位置比对」这个说法要写清是「14 个臂电机按 tick 比 + 升降轴按 mm 比 + 底盘三轴只有速度」。
-- **左夹爪的 tick 分辨率极粗**：`range_0_100` 下 `range_min..range_max` 是 `2021..2072`（51 tick），归一化值每变 1 单位约 0.51 tick，小位移会在 tick 上被吞掉。夹爪读数只能当「有没有大位移」看，不能当精细滑移证据。
+- **左夹爪的 tick 分辨率按代际不同**。旧代际（`calib_id 2905048c28a2`，2026-11-10 之前）：`range_0_100` 下 `range_min..range_max` 是 `2021..2072`（51 tick），归一化值每变 1 单位约 0.51 tick，小位移会在 tick 上被吞掉——该结论**只属旧代际**，旧代际的夹爪读数只能当「有没有大位移」看，不能当精细滑移证据。新代际（`calib_id 4a80c0fd4421`）：`2018..3483`（1465 tick / 128.8°），每单位约 14.65 tick，**「读数被吞」这个结论在新代际不成立**，夹爪读数可按 tick 看。
 
 产物：`capture/fingerprint-postpower-$STAMP.json`、`stdout/4.1c-postpower-diff.py`、`stdout/4.1c-selfcheck-$STAMP.txt`、`stdout/4.1c-postpower-diff-$STAMP.txt`，以及每步的 `.cmd` / `.log` / `.exit` 三件套。
 
