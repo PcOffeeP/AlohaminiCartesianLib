@@ -164,7 +164,7 @@
 - **风险在被压窄的两只**：`arm_right_shoulder_lift` 的上界从 3258 掉到 2048（少 1210 tick ≈ 106.4°），`arm_left_shoulder_pan` 的上界从 3327 掉到 2956（少 371 tick ≈ 32.6°）。凡 T3 的目标点落在这些被切掉的方向上，会在 ①a 只读窗口或 IK 的限位检查里被拒。**T3 的目标点一律先过 ①a 的 `effective_limits_deg` 再谈真跑，不按旧 range 挑点。**
 - **放宽的那只不改 T3 选点**：`arm_left_gripper` 51 → 1465 tick 是异常消失（现与右侧 1479 tick 基本一致）；夹爪有自己的入口（`GripperHandle`），`ArmHandle.move_to` 只收 `x` / `y` / `z` 三个量，所以它不进六轴限位。它改的是 V12 单位口径核对的输入（18 个电机全比），处置见 T0。
 - **不猜方向**：「上界被切掉」对应哪个物理方向，本轮没有现场实测，不写方向假说；以 S1 的实测极限为准。
-- **右肩 lift 的 100.5° 待 S1 推臂实测确认**：`arm_right_shoulder_lift` 的 `905..2048`（1143 tick ≈ 100.5°）落在肩经验区间 `190–240°` 之外，`tools/calib_fetch.py` 判它 `IMPLAUSIBLE`（退出码 `1`）。确认前**不放行也不预填接受名单**——`configs/calib-envelope-accepted.yaml` 保持空模板（`accepted: []`），等 S1 拿到实测行程再决定是登记（真实机械限位）还是修标定（标定没扫满）。理由：包络值是**我方经验值、非厂商规定**，没有实测就不能替现场写答案。
+- **右肩 lift 的 100.5° 待 S1 推臂实测确认**：`arm_right_shoulder_lift` 的 `905..2048`（1143 tick ≈ 100.5°）落在肩经验区间 `180–260°` 之外，`tools/calib_fetch.py` 判它 `IMPLAUSIBLE`（退出码 `1`）。确认前**不放行也不预填接受名单**——`configs/calib-envelope-accepted.yaml` 保持空模板（`accepted: []`），等 S1 拿到实测行程再决定是登记（真实机械限位）还是修标定（标定没扫满）。理由：包络值是**我方经验值、非厂商规定**，没有实测就不能替现场写答案。
 
 <a id="mission-power"></a>
 ## 5 供电变更与度量口径

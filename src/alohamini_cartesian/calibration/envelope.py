@@ -2,7 +2,7 @@
 
 「包络」= 一台电机的实测行程该落在什么范围里，人话：这份标定像不像一台整机的真标定。
 
-**阈值只有一处**，就是本模块的六个常量。改阈值只改这里；
+**阈值只有一处**，就是本模块的四个常量。改阈值只改这里；
 :func:`alohamini_cartesian.calibration.identity.describe_plausibility` /
 :func:`alohamini_cartesian.calibration.identity.validate_plausibility` 是本模块的薄封装，
 不再自带任何数字。依赖方向是 ``identity ← envelope``：本模块用 ``identity`` 的刻度换算与
@@ -13,7 +13,7 @@
 ===========================  ==========================================================
 ``OK``                       行程宽度落在经验区间内（或该电机不属任何宽度族），可继续
 ``UNMEASURED_RANGE``         ``(0, 4095)`` 满圈占位：放行、不计不合格、不做宽度判定
-``IMPLAUSIBLE``              宽度或中心偏离超出经验上限：提醒、可继续（要留痕）
+``IMPLAUSIBLE``              行程宽度超出经验区间：提醒、可继续（要留痕）
 ``WRONG_DATASET``            只有手臂、没有底盘与升降轴：遥操臂标定，不可继续
 ===========================  ==========================================================
 
@@ -28,8 +28,6 @@
    - ``(0, 4095)`` 满圈占位 → ``UNMEASURED_RANGE``，放行；
    - 行程宽度按电机名族判（夹爪 / 肩 / 腕三族，见 :func:`_width_family`）：
      不在经验区间 → ``IMPLAUSIBLE``；
-   - ``range`` 中心离归零位 :data:`ZERO_POSITION_TICK` 超过
-     :data:`ZERO_POINT_OFFSET_WARN_DEG` → ``IMPLAUSIBLE``（**即使宽度合格**）；
    - 命中接受名单（``motor`` + 实测 range + ``calib_id`` 三者全对上）→ ``OK`` 并带
      「已接受」信息行；只 ``motor`` 对上而 range / ``calib_id`` 对不上 → 名单过期，
      照旧按经验区间判并在文案里写明「名单过期」。
@@ -67,18 +65,31 @@ except ImportError:  # pragma: no cover
 
 # ---- 以下判定阈值全部是**经验值、非厂商规定**，来自本项目已看过的那几代真实标定 ----
 # 换机型或换批次后要重新核对，别当规格用。改阈值只改本模块，别在别处再写一套。
-# 夹爪行程宽度：约 120–135 度（经验值、非厂商规定；旧代际左夹爪只有 51 tick ≈ 4.5 度，属已知异常）。
-GRIPPER_WIDTH_DEG_RANGE = (120.0, 135.0)
-# 肩（shoulder_pan / shoulder_lift）行程宽度：约 190–240 度（经验值、非厂商规定）。
-SHOULDER_WIDTH_DEG_RANGE = (190.0, 240.0)
-# 腕（wrist_flex / wrist_yaw / wrist_roll）行程宽度：约 160–190 度（经验值、非厂商规定）。
-WRIST_WIDTH_DEG_RANGE = (160.0, 190.0)
+# 夹爪行程宽度（经验值、非厂商规定）：两代真标定里三台有效夹爪实测 128.8–130.0°，彼此同量级
+# （代际 B 左夹爪 `2018..3483` = 1465 tick ≈ 128.8°、代际 A 右夹爪 1469 tick ≈ 129.1°、
+# 代际 B 右夹爪 1479 tick ≈ 130.0°）；区间放宽到 60–160° 以容纳重标定波动，两侧留 ≥30° 余量
+# （下界 128.8−60 = 68.8°、上界 160−130.0 = 30.0°）。旧代际左夹爪 51 tick ≈ 4.5° 仍落在区间外，
+# 能被抓到。
+GRIPPER_WIDTH_DEG_RANGE = (60.0, 160.0)
+# 肩（shoulder_pan / shoulder_lift）行程宽度（经验值、非厂商规定）：两代八台肩里七台有效（排除
+# 代际 B 的 `arm_right_shoulder_lift` `905..2048` = 1143 tick ≈ 100.5°，本轮仍判不合格）实测
+# 193.0–237.3°（最窄代际 B 左肩 lift `1005..3201` = 2196 tick ≈ 193.0°、最宽代际 A 左肩 pan
+# `627..3327` = 2700 tick ≈ 237.3°），区间 180–260° 两侧留 ≥13° 余量（下界 193.0−180 = 13.0°、
+# 上界 260−237.3 = 22.7°）。代际 B 右肩 pan `1231..3462` = 2231 tick ≈ 196.1° 距新下界 16.1°
+# （旧区间 190–240° 时只剩 6.1°，贴边，是本次放宽的来源）。
+SHOULDER_WIDTH_DEG_RANGE = (180.0, 260.0)
+# 腕（wrist_flex / wrist_yaw / wrist_roll）行程宽度（经验值、非厂商规定）：两代八台有效腕
+# 实测 160.5–186.5°（最窄代际 A 右腕 yaw `1053..2879` = 1826 tick ≈ 160.5°、最宽代际 A 右腕 flex
+# `969..3091` = 2122 tick ≈ 186.5°），区间 150–200° 两侧留 ≥10° 余量（下界 160.5−150 = 10.5°、
+# 上界 200−186.5 = 13.5°）。四台 `*_wrist_roll` 都是满圈占位，不计入上述实测。
+WRIST_WIDTH_DEG_RANGE = (150.0, 200.0)
 # (0, 4095) 满圈是厂商标定的占位值、不是量出来的行程（经验值、非厂商规定）：放行，且不做宽度判定。
 PLACEHOLDER_FULL_RANGE = (0, 4095)
-# 归零位：标定的 half-turn 归零把 ``Present_Position`` 定在 2047 附近（经验值、非厂商规定）。
-ZERO_POSITION_TICK = 2047
-# range 中心离归零位超过这个角度就告警（经验值、非厂商规定；数量级核对，约半圈的半数）。
-ZERO_POINT_OFFSET_WARN_DEG = 90.0
+# **阈值类**判据只有上列四类（三族宽度 + 满圈占位）；另有数据集形状（``WRONG_DATASET``）与
+# 接受名单两条机制，均非阈值。曾有一条「`range` 中点离归零位太远即告警」的判据，
+# 本轮整条删除：它只有夹爪有物理依据（vendor 侧 half-turn 归零），套到肩／腕属外推；
+# 其目标场景（旧代际左夹爪 51 tick ≈ 4.5°）已由夹爪宽度区间覆盖。恢复须先给肩／腕的
+# 物理依据，见 ``docs/ADR.md`` D23 决定 17。
 
 # 接受名单文件的 schema 版本；改动条目语义时才加。
 SCHEMA_VERSION = 1
@@ -194,7 +205,7 @@ def _width_family(name: str) -> tuple[str, tuple[float, float]] | None:
 
     三族：``*_gripper``（夹爪）、``*_shoulder_pan`` / ``*_shoulder_lift``（肩）、
     ``*_wrist_flex`` / ``*_wrist_yaw`` / ``*_wrist_roll``（腕）。其余（``*_elbow_flex``、
-    ``base_*``、``lift_axis``）**没有宽度判定**，只参与中心偏离判定。
+    ``base_*``、``lift_axis``）**没有宽度判定**。
 
     区间在**调用时**从模块全局读，所以改常量（含测试里的 monkeypatch）立刻反映到判定与文案。
     """
@@ -212,11 +223,6 @@ def _width_deg(low: int, high: int) -> float:
     return (high - low) * DEG_PER_TICK
 
 
-def _center_deg(low: int, high: int) -> float:
-    """``range`` 中点相对归零位 :data:`ZERO_POSITION_TICK` 的偏移角度。"""
-    return ((low + high) / 2 - ZERO_POSITION_TICK) * DEG_PER_TICK
-
-
 def _width_note(name: str, low: int, high: int) -> tuple[str | None, str]:
     """宽度判定：返回（不合格文案或 ``None``，合格时的人读说明）。"""
     width_ticks = high - low
@@ -232,18 +238,6 @@ def _width_note(name: str, low: int, high: int) -> tuple[str | None, str]:
     if expected_low <= width_deg <= expected_high:
         return None, f"行程宽度 {width_ticks} tick ≈ {width_deg:.1f}°，在{window}内"
     return f"行程宽度 {width_ticks} tick ≈ {width_deg:.1f}°，不在{window}内", ""
-
-
-def _center_problem(low: int, high: int) -> str | None:
-    """中心偏离判定：超出 :data:`ZERO_POINT_OFFSET_WARN_DEG` 返回不合格文案。"""
-    center_deg = _center_deg(low, high)
-    if abs(center_deg) <= ZERO_POINT_OFFSET_WARN_DEG:
-        return None
-    return (
-        f"range 中心 {(low + high) / 2:.1f} 偏离归零位 {ZERO_POSITION_TICK} 约 "
-        f"{center_deg:+.1f}°，超出 {ZERO_POINT_OFFSET_WARN_DEG:.0f}° 的数量级上限"
-        "（经验值、非厂商规定）"
-    )
 
 
 def _accepted_detail(entry: AcceptedEntry, problems: list[str]) -> str:
@@ -364,7 +358,7 @@ def classify_motors(
             continue
 
         width_problem, width_note = _width_note(name, low, high)
-        problems = [item for item in (width_problem, _center_problem(low, high)) if item]
+        problems = [width_problem] if width_problem else []
         notes = [width_note] if width_note else []
         accepted_entry = entries_by_motor.get(name)
         if accepted_entry is not None and current_id is not None:
@@ -417,9 +411,7 @@ def describe_thresholds() -> tuple[str, ...]:
         f"夹爪 {GRIPPER_WIDTH_DEG_RANGE[0]:.0f}–{GRIPPER_WIDTH_DEG_RANGE[1]:.0f}°、"
         f"肩 {SHOULDER_WIDTH_DEG_RANGE[0]:.0f}–{SHOULDER_WIDTH_DEG_RANGE[1]:.0f}°、"
         f"腕 {WRIST_WIDTH_DEG_RANGE[0]:.0f}–{WRIST_WIDTH_DEG_RANGE[1]:.0f}°",
-        f"{PLACEHOLDER_FULL_RANGE} 满圈视为占位行程，放行且不做宽度判定；"
-        f"range 中心偏离归零位 {ZERO_POSITION_TICK} 超过 "
-        f"{ZERO_POINT_OFFSET_WARN_DEG:.0f}° 即告警",
+        f"{PLACEHOLDER_FULL_RANGE} 满圈视为占位行程，放行且不做宽度判定",
     )
 
 

@@ -1,23 +1,25 @@
 """``calibration/envelope.py`` 的离线契约测试（阈值与判定的唯一来源）。
 
-**这是离线契约测试，当前 23 条全绿，不是待实现的红阶段草稿。** 被测模块
+**这是离线契约测试，当前 25 条全绿，不是待实现的红阶段草稿。** 被测模块
 ``src/alohamini_cartesian/calibration/envelope.py`` 已实现。契约意图不变——断言先于实现，
 **缺实现文件要响亮失败、不 ``skip``**：缺文件是「契约没有对象」，不是「可以忽略」。不得为了
 让测试变绿去改产品代码迁就，也不得放宽断言。
 
-锁的六件事：
+锁的五件事：
 
 - **四态判定**：``OK`` / ``UNMEASURED_RANGE``（``(0, 4095)`` 满圈占位，放行且不计不合格）/
   ``IMPLAUSIBLE``（提醒、可继续）/ ``WRONG_DATASET``（只有臂、没有底盘与升降轴 → 不可继续，
   文案点出「遥操臂」）。
-- **阈值只有一处**：夹爪 120–135°、肩 190–240°、腕 160–190°、占位 ``(0, 4095)``、归零位
-  2047、中心偏离 90°，常量名与值都冻在 ``envelope`` 里；``identity.describe_plausibility`` /
+- **阈值只有一处**：夹爪 60–160°、肩 180–260°、腕 150–200°、占位 ``(0, 4095)``，常量名与值都
+  冻在 ``envelope`` 里；``identity.describe_plausibility`` /
   ``identity.validate_plausibility`` 降级成薄封装（改 ``envelope`` 常量要反映到输出）。
+  已删除的判据（range 中心离归零位 2047 超过 90° → ``IMPLAUSIBLE``，连同常量
+  ``ZERO_POSITION_TICK`` / ``ZERO_POINT_OFFSET_WARN_DEG`` 与私有辅助 ``_center_deg`` /
+  ``_center_problem``）不得以任何形式残留在模块里。
 - **身份字段不参与判定**：``id`` / ``drive_mode`` / ``homing_offset`` 怎么变都不改 verdict
   与 ``detail``；range 不是整数交给结构校验，``envelope`` 跳过该电机、不打 verdict。
 - **宽度判定按电机名族**：夹爪 / 肩 / 腕三族按宽度区间判；``*_elbow_flex``、``base_*``、
   ``lift_axis`` 无宽度判定 → ``OK``。
-- **中心偏离**：宽度合格但 range 中心离归零位 2047 超过 90° → 仍 ``IMPLAUSIBLE``。
 - **接受名单**：``motor`` + ``observed_range_min/max`` + ``calib_id`` 三者都对上 → 该电机
   ``OK`` 并带「已接受」信息行；只 motor 对上而 range / ``calib_id`` 对不上 → 名单过期，
   照旧 ``IMPLAUSIBLE`` 且 ``detail`` 含「名单过期」。
@@ -66,7 +68,7 @@ _PLACEHOLDER_MOTORS = frozenset(
 )
 # 代际 A（tests/fixtures/calibration/AlohaMiniRobot.20261022.mac-snapshot.json）里按宽度区间判
 # OK 的那 11 台：18 台减去 1 台不合格与 6 台占位。本代不合格的是左夹爪
-# ``arm_left_gripper`` 2021..2072 = 51 tick ≈ 4.5°（夹爪区间 120–135° 之外）；
+# ``arm_left_gripper`` 2021..2072 = 51 tick ≈ 4.5°（夹爪区间 60–160° 之外）；
 # 本代的 ``arm_right_shoulder_lift`` 939..3258 = 2319 tick ≈ 203.8° 合格。
 _GEN_A_OK_MOTORS = frozenset(
     {
@@ -85,9 +87,9 @@ _GEN_A_OK_MOTORS = frozenset(
 )
 # 代际 B（tests/fixtures/calibration/AlohaMiniRobot.20261110.pi-live.json）里判 OK 的那 11 台：
 # 18 台减去 1 台不合格与 6 台占位。本代不合格的是右肩 lift
-# ``arm_right_shoulder_lift`` 905..2048 = 1143 tick ≈ 100.5°（肩区间 190–240° 之外）；
-# 本代的左夹爪 ``arm_left_gripper`` 2018..3483 = 1465 tick ≈ 128.8° 落在夹爪区间 120–135° 内，
-# 且中心离归零位 2047 只偏 +61.8°（< 90°），因此合格。
+# ``arm_right_shoulder_lift`` 905..2048 = 1143 tick ≈ 100.5°（肩区间 180–260° 之外）；
+# 本代的左夹爪 ``arm_left_gripper`` 2018..3483 = 1465 tick ≈ 128.8° 落在夹爪区间 60–160° 内，
+# 因此合格。
 # 两代的差别正是「左夹爪」与「右肩 lift」这一对互换，故必须分成两个集合，不能共用一个常量。
 _GEN_B_OK_MOTORS = frozenset(
     {
@@ -105,7 +107,7 @@ _GEN_B_OK_MOTORS = frozenset(
     }
 )
 
-# 合成表的各族 range：宽度都落在经验区间内，中心都压归零位 2047（偏离 0）。
+# 合成表的各族 range：宽度都落在经验区间内。
 _PLAUSIBLE_RANGES: dict[str, tuple[int, int]] = {
     "shoulder_pan": (852, 3242),  # 2390 tick ≈ 210.0°
     "shoulder_lift": (852, 3242),
@@ -247,15 +249,24 @@ def _accepted_entry(motors: dict[str, Any], **overrides: Any) -> dict[str, Any]:
 
 
 def test_module_exposes_the_frozen_threshold_constants() -> None:
-    """阈值常量的名字与值都冻结：夹爪 120–135°、肩 190–240°、腕 160–190°、占位、归零位、90°。"""
+    """阈值常量的名字与值都冻结：夹爪 60–160°、肩 180–260°、腕 150–200°、占位 ``(0, 4095)``。
+
+    同时锁住「被删的判据不得以常量或私有函数形式残留在模块里」：「range 中心离归零位
+    2047 超过 90° → ``IMPLAUSIBLE``」整条判据已删除，它的常量（``ZERO_POSITION_TICK`` /
+    ``ZERO_POINT_OFFSET_WARN_DEG``）与私有辅助（``_center_deg`` / ``_center_problem``）都
+    不得留下——留着就是一条还在生效或随时会被接回来的死代码。
+    """
     envelope = _load_envelope()
 
-    assert envelope.GRIPPER_WIDTH_DEG_RANGE == (120.0, 135.0)
-    assert envelope.SHOULDER_WIDTH_DEG_RANGE == (190.0, 240.0)
-    assert envelope.WRIST_WIDTH_DEG_RANGE == (160.0, 190.0)
+    assert envelope.GRIPPER_WIDTH_DEG_RANGE == (60.0, 160.0)
+    assert envelope.SHOULDER_WIDTH_DEG_RANGE == (180.0, 260.0)
+    assert envelope.WRIST_WIDTH_DEG_RANGE == (150.0, 200.0)
     assert envelope.PLACEHOLDER_FULL_RANGE == (0, 4095)
-    assert envelope.ZERO_POSITION_TICK == 2047
-    assert envelope.ZERO_POINT_OFFSET_WARN_DEG == 90.0
+    # 已删除的判据不得残留：常量与私有辅助都不该还在模块命名空间里。
+    assert not hasattr(envelope, "ZERO_POSITION_TICK")
+    assert not hasattr(envelope, "ZERO_POINT_OFFSET_WARN_DEG")
+    assert not hasattr(envelope, "_center_deg")
+    assert not hasattr(envelope, "_center_problem")
 
 
 def test_verdict_enum_member_names_and_values_are_frozen() -> None:
@@ -289,7 +300,9 @@ def test_generation_a_flags_the_left_gripper_with_a_non_empty_detail() -> None:
     assert detail.strip() != ""
     # 契约要求 detail 写明：实测度数、该族区间、以及「经验值非厂商规定」的性质。
     assert "°" in detail
-    assert "120" in detail and "135" in detail
+    # 锁完整的区间片段，不锁两端数字：``"160"`` 含子串 ``"60"``，分两条断会被蕴含成只锁上端。
+    # 片段取自实现的文案「…不在夹爪经验区间 60–160°（经验值、非厂商规定）内」。
+    assert "60–160" in detail
     assert "经验" in detail
 
 
@@ -322,7 +335,8 @@ def test_generation_b_flags_the_right_shoulder_lift() -> None:
     assert _verdict_map(report)["arm_right_shoulder_lift"] == "IMPLAUSIBLE"
     detail = _detail_of(report, "arm_right_shoulder_lift")
     assert detail.strip() != ""
-    assert "190" in detail and "240" in detail
+    # 同样锁完整区间片段（「180」与「260」互不包含，但片段锁与两端锁等价且更贴文案）。
+    assert "180–260" in detail
     assert "经验" in detail
 
 
@@ -360,6 +374,84 @@ def test_a_51_tick_left_gripper_is_implausible() -> None:
     assert report.verdict.value == "IMPLAUSIBLE"
     assert len(report.implausible) == 1
     assert report.implausible[0].motor == "arm_left_gripper"
+
+
+# 「中心偏离」行为锁的平移量算式：``round(95 / (360/4096)) = round(1080.888…) = 1081`` tick，
+# ``1081 × 360/4096 = 95.009765625°``，即中点偏移 +95.01°，严格超过已删除判据的 90°。
+# 逐族核对平移后仍落在 0..4095 内且宽度不变：
+#   夹爪基线 (1319, 2775) 宽 1456 tick → (2400, 3856)，上行余量 4095 − 2775 = 1320 ≥ 1081；
+#   腕基线   (1080, 3014) 宽 1934 tick → (2161, 4095)，上行余量 4095 − 3014 = 1081，正好贴顶。
+# 肩族基线 (852, 3242) 宽 2390 tick 只有 4095 − 3242 = 853 tick 上行余量（≈ +74.97°），够不到
+# 90°；且穷举过 0..4095 内所有宽度落在 180–260° 的肩区间，中点相对 2047 的偏移绝对值上确界
+# 恰为 90.0°，旧判据严格 ``> 90°`` 故恒不触发。即**合法 tick 值下肩族造不出会触发旧判据的
+# 电机**，因此本参数化只含夹爪与腕——硬写成立 74.97° 只会给出锁不住任何东西的假覆盖。
+# 肩族缺口与候选处置登记在 `TODO.md` §4 的工程债行「『中心偏移大但宽度合格 → OK』的行为锁
+# 只覆盖夹爪族与腕族，肩族没有」（按主题指认，不写行号）。
+_CENTER_OFFSET_SHIFT_TICKS = 1081
+# 已删除判据的两个数字（归零位 2047、告警阈 90°）：模块里已经不许可它们存在（符号锁断言
+# ``hasattr`` 为 False），这里只作「构造目标」的字面量，用来验证构造确实越过了旧判据。
+_DELETED_ZERO_POSITION_TICK = 2047
+_DELETED_CENTER_WARN_DEG = 90.0
+
+
+@pytest.mark.parametrize("suffix", ["gripper", "wrist_flex"])
+def test_a_plausible_width_with_a_large_center_offset_stays_ok(suffix: str) -> None:
+    """宽度合格、整体平移 1081 tick（中点偏移 +95.01°）→ ``OK``。
+
+    旧判据（已删除）是「``range`` 中点离归零位 2047 超过 90° → ``IMPLAUSIBLE``，即使宽度
+    合格」。删除后只看宽度，本形态必须 ``OK``；若有人只对某一族把中心判据以内联数字接回去，
+    该族这一条会红。三族逐族锁定，不共用一条夹爪用例冒充覆盖。
+
+    平移量算式：``round(95 / (360/4096)) = 1081`` tick，``1081 × 360/4096 = 95.009765625°``。
+    平移后区间仍在 ``0..4095`` 内、宽度不变：
+
+    ========  ==================  ==================  ========================
+    族        基线（宽度 tick）    平移 1081 tick 后    平移后中点偏移
+    ========  ==================  ==================  ========================
+    夹爪      1319..2775（1456）   2400..3856（1456）   +95.01°（中心 3128）
+    腕        1080..3014（1934）   2161..4095（1934）   +95.01°（中心 3128）
+    ========  ==================  ==================  ========================
+
+    这是行为锁，与 ``test_module_exposes_the_frozen_threshold_constants`` 里的符号锁
+    （``hasattr`` 为 False）互补：符号锁防「留着常量与私有函数」，这条防「换个写法接回来」。
+
+    肩族不在此参数化内，原因是几何约束、不是漏写：基线 ``(852, 3242)`` 宽 2390 tick，在
+    ``0..4095`` 内最多整体上移 ``4095 − 3242 = 853`` tick ≈ +74.97°；换成任意宽度落在肩族
+    经验区间 180–260° 的区间，中点相对 2047 的偏移绝对值上确界恰为 90.0°
+    （``4095 − 2048/2 − 2047 = 1024`` tick，宽度取最窄的 180.0° = 2048 tick），旧判据用的是
+    严格 ``> 90°`` 故恒不触发，所以**合法 tick 值下肩族不存在会触发旧判据的电机**。要锁住
+    「只对肩接回中心判据」需要越界 tick 值或把宽度压到 180° 以下，两者都与本文件其余断言
+    冲突，故本参数化保留「只有夹爪族与腕族」的现状；该缺口与两条候选收口方式登记在
+    `TODO.md` §4 的工程债行「『中心偏移大但宽度合格 → OK』的行为锁只覆盖夹爪族与腕族，
+    肩族没有」（按主题指认，不写行号）。
+    """
+    envelope = _load_envelope()
+    base_low, base_high = _PLAUSIBLE_RANGES[suffix]
+    shifted_low = base_low + _CENTER_OFFSET_SHIFT_TICKS
+    shifted_high = base_high + _CENTER_OFFSET_SHIFT_TICKS
+    # 构造前提：平移后的区间合法（0..4095）、宽度与基线完全相同。
+    assert 0 <= shifted_low < shifted_high <= 4095
+    assert shifted_high - shifted_low == base_high - base_low
+    center_offset_deg = (
+        (shifted_low + shifted_high) / 2 - _DELETED_ZERO_POSITION_TICK
+    ) * identity.DEG_PER_TICK
+    assert center_offset_deg == pytest.approx(95.01, abs=0.01)
+    # 构造确实越过了旧判据的阈值——否则这条锁不住任何东西。
+    assert center_offset_deg > _DELETED_CENTER_WARN_DEG
+    motors = _plausible_motors()
+    motor = f"arm_left_{suffix}"
+    motors[motor]["range_min"] = shifted_low
+    motors[motor]["range_max"] = shifted_high
+
+    report = envelope.classify_motors(motors)
+
+    assert _verdict_map(report)[motor] == "OK"
+    detail = _detail_of(report, motor)
+    assert "中心" not in detail
+    assert "归零位" not in detail
+    assert "2047" not in detail
+    assert report.verdict.value == "OK"
+    assert report.implausible == ()
 
 
 def test_placeholder_full_range_does_not_count_as_a_failure() -> None:
@@ -409,22 +501,6 @@ def test_identity_fields_do_not_change_any_verdict_or_detail() -> None:
         (item.motor, item.verdict, item.detail) for item in baseline.motors
     ]
     assert mutated.verdict is baseline.verdict
-
-
-def test_a_range_center_far_from_zero_position_is_implausible_even_when_width_fits() -> None:
-    """宽度 1456 tick ≈ 128° 落在夹爪区间内，但中心偏离归零位 95° > 90° → 仍 ``IMPLAUSIBLE``。"""
-    envelope = _load_envelope()
-    motors = _plausible_motors()
-    motors["arm_left_gripper"]["range_min"] = 2400
-    motors["arm_left_gripper"]["range_max"] = 3856
-
-    report = envelope.classify_motors(motors)
-
-    assert _verdict_map(report)["arm_left_gripper"] == "IMPLAUSIBLE"
-    detail = _detail_of(report, "arm_left_gripper")
-    assert detail.strip() != ""
-    # 措辞自由，但必须点出这是中心/归零位的问题，而不是宽度的问题。
-    assert any(word in detail for word in ("中心", "偏离", "2047"))
 
 
 def test_a_non_integer_range_is_skipped_without_any_verdict() -> None:
@@ -547,6 +623,11 @@ def test_describe_plausibility_reflects_the_envelope_constants(
     """``identity.describe_plausibility`` 是薄封装：改 ``envelope`` 常量就改输出。
 
     返回类型仍是 ``tuple[str, ...]``；阈值说明由 ``envelope`` 渲染，identity 不再自己带数字。
+
+    末尾三条是**文案锁**：渲染文本不得再提已删除的中心判据（归零位 ``2047``、「中心」
+    「归零位」字样）。它与 ``test_module_exposes_the_frozen_threshold_constants`` 的符号锁
+    （``hasattr`` 为 False）互补——符号锁管「模块里没有那个常量 / 函数」，文案锁管「输出里
+    没有那条判据的说辞」。
     """
     envelope = _load_envelope()
     monkeypatch.setattr(envelope, "GRIPPER_WIDTH_DEG_RANGE", (101.0, 202.0))
@@ -558,6 +639,29 @@ def test_describe_plausibility_reflects_the_envelope_constants(
     assert all(isinstance(line, str) for line in lines)
     text = " ".join(lines)
     assert "101" in text and "202" in text
+    assert "2047" not in text
+    assert "中心" not in text
+    assert "归零位" not in text
+
+
+def test_describe_plausibility_renders_the_wrist_window_without_patching() -> None:
+    """默认（未 monkeypatch）渲染文本里带腕族区间 150–200°：腕族此前没有任何渲染文案锁。
+
+    与 ``test_describe_plausibility_reflects_the_envelope_constants`` 分工：那条 monkeypatch
+    后只锁夹爪 ``101``/``202``（证明渲染读模块全局）；这条锁「腕族在场且是 150–200°」——
+    若有人把腕从 ``describe_thresholds`` 里删掉、或换回旧的 160–190，只有这条会红。
+
+    同时把「输出里没有已删除判据的说辞」这条文案锁复制一份到**默认**渲染：monkeypatch 那条
+    只覆盖被改过的渲染，默认渲染此前没被锁过。
+    """
+    text = " ".join(identity.describe_plausibility())
+
+    assert "腕 150–200°" in text
+    assert "150" in text
+    assert "200" in text
+    assert "2047" not in text
+    assert "中心" not in text
+    assert "归零位" not in text
 
 
 def test_validate_plausibility_delegates_to_plausibility_warnings() -> None:

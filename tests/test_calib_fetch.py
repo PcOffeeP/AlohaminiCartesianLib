@@ -1,10 +1,6 @@
 """``tools/calib_fetch.py``（标定抓取）与相关改造点的离线契约测试。
 
-**这是离线契约测试，共 30 条，不是待实现的红阶段草稿。** 其中 29 条绿，1 条红：
-``test_a_failed_overrides_write_is_blocked_without_a_traceback`` 钉的是「留痕写不出来 = 不可
-继续（退出 ``4``）时不留下任何落盘文件」，而当前 ``tools/calib_fetch.py`` 先把快照写盘、
-再试写留痕，于是退出 ``4`` 时快照已经落在盘上。该红项是待裁决的实现顺序问题（不是测试写错），
-按真实契约保留，不放宽断言。其余被测对象都已落地：
+**这是离线契约测试，共 32 条，当前全绿，不是待实现的红阶段草稿。** 被测对象都已落地：
 ``tools/calib_fetch.py``、接受名单 ``configs/calib-envelope-accepted.yaml``、
 ``CalibrationRegistry.append_if_absent``，以及 ``tools/calib_health.py`` 的
 ``--accepted`` / ``--session-anchor`` 两个参数。契约意图不变——断言先于实现，**缺实现文件
@@ -17,8 +13,9 @@
   每台一行 ``CALIB_MOTOR: <motor> <verdict> <detail>`` / ``CALIB_ENVELOPE: <汇总>`` /
   ``CALIB_ENVELOPE_IMPLAUSIBLE: <台数>``，以及未声明不合格时的 ``continue_hint`` 提示行。
 - **退出码**：``0`` 通过（含已用 ``--allow-implausible`` 留痕）；``1`` 有 ``IMPLAUSIBLE`` 且
-  未声明理由（提醒、不阻断，仍写出快照）；``4`` 不可继续（``WRONG_DATASET`` / 结构自洽失败 /
-  读不到远端文件 / 接受名单坏）。
+  未声明理由（提醒、不阻断，仍写出快照）；``2`` 用法错误（``--from-file`` 与 ``--host`` 都没给
+  **或同时给**；``--allow-implausible`` 缺 ``--out``）；``4`` 不可继续（``WRONG_DATASET`` /
+  结构自洽失败 / 读不到远端文件 / 接受名单坏）。
 - **ssh 失败不回落本地缓存**：非零退出、或 stderr 有内容而 stdout 空 → 直接退出 ``4``，
   且 ``--out`` 指定的文件**不存在**（不产生冒充标定的落盘文件）。
 - **``--out`` 写原文**：``--ssh-binary`` 把 fixture ``cat`` 出来时，落盘内容与 fixture 字节相同。
@@ -78,7 +75,7 @@ _REMOTE_PATH = (
     "/home/pi5/.cache/huggingface/lerobot/calibration/robots/alohamini/AlohaMiniRobot.json"
 )
 
-# 合成表的各族 range：宽度都落在经验区间内，中心都压归零位 2047。
+# 合成表的各族 range：宽度都落在经验区间内。
 _PLAUSIBLE_RANGES: dict[str, tuple[int, int]] = {
     "shoulder_pan": (852, 3242),  # 2390 tick ≈ 210.0°
     "shoulder_lift": (852, 3242),
@@ -308,7 +305,7 @@ def test_from_file_generation_b_reports_the_right_shoulder_lift_and_exits_one(
 ) -> None:
     """代际 B 走 ``--from-file``：``CALIB_MOTOR: arm_right_shoulder_lift IMPLAUSIBLE``。
 
-    右肩 lift 只有 1143 tick ≈ 100.4°，落在肩的 190–240° 之外，退出码 1。
+    右肩 lift 只有 1143 tick ≈ 100.4°，落在肩的 180–260° 之外，退出码 1。
     """
     accepted = _write_empty_accepted(tmp_path / "accepted.yaml")
 
@@ -359,6 +356,85 @@ def test_a_constructed_51_tick_gripper_file_exits_one(
     assert code == 1
     assert "CALIB_MOTOR: arm_left_gripper IMPLAUSIBLE" in out
     assert "CALIB_ENVELOPE: IMPLAUSIBLE" in out
+
+
+# ---------------------------------------------------------------- 用法错误（退出码 2）
+
+
+def test_no_input_flag_is_a_usage_error_with_exit_two(
+    fetch: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """既不给 ``--from-file`` 也不给 ``--host`` → 退出码 2，stderr 点名用法错误与缺的开关。
+
+    这个触发点是 ``docs/field-ops/reference/gates.md`` §10 的 ``calib_fetch`` 行里 ``2`` 的
+    三个触发点之一：**①``--from-file`` 与 ``--host`` 都没给**。三条用例（本条、
+    ``test_from_file_and_host_together_is_a_usage_error_with_exit_two``、
+    ``test_allow_implausible_without_out_is_a_usage_error_with_exit_two``）合起来才是登记的
+    ``2`` 的全部触发点。
+    """
+    code = fetch.main([])
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert fetch.EXIT_USAGE == 2
+    assert "用法错误" in captured.err
+    assert "必须给 --from-file 或 --host 之一" in captured.err
+
+
+def test_allow_implausible_without_out_is_a_usage_error_with_exit_two(
+    fetch: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``--from-file <有效 fixture>`` + ``--allow-implausible "理由"`` 但缺 ``--out`` → 退出码 2。
+
+    stderr 必须点名「用法错误」并点出 ``--allow-implausible``：留痕要给出落点，脚本不猜路径。
+    这是 ``docs/field-ops/reference/gates.md`` §10 的 ``calib_fetch`` 行里 ``2`` 的三个触发点
+    之一：**③``--allow-implausible`` 缺 ``--out``**。三条用例（本条、
+    ``test_no_input_flag_is_a_usage_error_with_exit_two``、
+    ``test_from_file_and_host_together_is_a_usage_error_with_exit_two``）合起来才是登记的
+    ``2`` 的全部触发点。
+    """
+    accepted = _write_empty_accepted(tmp_path / "accepted.yaml")
+
+    code = fetch.main(
+        [
+            "--from-file",
+            str(_GEN_A),
+            "--accepted",
+            str(accepted),
+            "--registry",
+            str(tmp_path / "calib-registry.yaml"),
+            "--allow-implausible",
+            "左夹爪 51 tick 是已知实物行程，已人工核对",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "用法错误" in captured.err
+    assert "--allow-implausible" in captured.err
+
+
+def test_from_file_and_host_together_is_a_usage_error_with_exit_two(
+    fetch: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``--from-file`` 与 ``--host`` **同时给** → 退出码 2（argparse 互斥组报的）。
+
+    互斥组由 argparse 抛出 ``SystemExit(2)``，与另两条走 ``_blocked_usage`` 返回 ``int`` 的
+    机制不同，故单列：这里断言的是 ``SystemExit.code``，不是 ``main()`` 的返回值。
+
+    这是 ``docs/field-ops/reference/gates.md`` §10 的 ``calib_fetch`` 行里 ``2`` 的三个触发点
+    之一：**②``--from-file`` 与 ``--host`` 同时给**。三条用例（本条、
+    ``test_no_input_flag_is_a_usage_error_with_exit_two``、
+    ``test_allow_implausible_without_out_is_a_usage_error_with_exit_two``）合起来才是登记的
+    ``2`` 的全部触发点。
+    """
+    with pytest.raises(SystemExit) as excinfo:
+        fetch.main(["--from-file", str(_GEN_A), "--host", "pi5"])
+
+    captured = capsys.readouterr()
+    assert excinfo.value.code == 2
+    assert fetch.EXIT_USAGE == 2
+    assert "not allowed with argument" in captured.err
 
 
 # ---------------------------------------------------------------- 不可继续的两种形态（退出码 4）

@@ -51,8 +51,8 @@ CALIB_ID_LENGTH = 12
 ALLOWED_DRIVE_MODES = (0, 1)
 
 # ---- 判定阈值已移出本模块：唯一来源是 :mod:`calibration/envelope.py` ----
-# 夹爪／肩／腕的经验宽度区间、`(0, 4095)` 满圈占位、归零位 2047、中心偏离 90° 上限，
-# 这六个数现在只在 ``calibration/envelope.py`` 里作为可执行常量存在（沿用原常量名）。
+# 夹爪／肩／腕的经验宽度区间、`(0, 4095)` 满圈占位，这几个数现在只在
+# ``calibration/envelope.py`` 里作为可执行常量存在（沿用原常量名）。
 # 此处刻意不保留第二套判定阈值：两份常量迟早会漂，漂了以后「谁说了算」就没有答案。
 #
 # 本模块剩下的两件合理性活都是薄封装，函数体只做转发（延迟 import，见各函数注释）：
@@ -298,7 +298,7 @@ def describe_plausibility() -> tuple[str, ...]:
 def validate_plausibility(motors: Mapping[str, Any]) -> list[str]:
     """合理性校验：返回告警清单，**永不阻断**。
 
-    薄封装：判定（三族的经验宽度区间、``(0, 4095)`` 满圈占位放行、中心偏离归零位）全部
+    薄封装：判定（三族的经验宽度区间、``(0, 4095)`` 满圈占位放行）全部
     委托 :func:`~alohamini_cartesian.calibration.envelope.plausibility_warnings`，
     本模块不持有第二套阈值。永不抛异常：遥操臂那种残缺表也只报告、不阻断。
     """

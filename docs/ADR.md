@@ -772,19 +772,19 @@ V01 是本阶段唯一挡住「能不能说不接 leader 就算通」的条目�
 
 标定数值直接决定下发刻度：`range_min` / `range_max` 定行程，`homing_offset` 定零点，换一批数值，同一条命令的物理含义就变。现场出现过「行程宽度明显异常却照旧往下跑」的情形——旧代际（`calib_id 2905048c28a2`）的左夹爪 `range` 只有 `2021..2072`（51 tick ≈ 4.5°），被当正常值用了很久（D14 那条只读确认就是这么来的），直到 2026-11-10 重标定才变成 `2018..3483`（1465 tick ≈ 128.8°）。当时的判据里没有「这个行程宽度像不像真标定」这一层，异常只能靠人偶然发现。
 
-同时，旧的合理性检查把阈值写在 `src/alohamini_cartesian/calibration/identity.py` 里。任何人另写一处判据，就无从判断谁是标准。上一轮任务书把「代际 A / 代际 B 判 OK」与包络数值并列写，本身自相矛盾。本轮裁决为**保留阈值、改验收口径**：不放宽阈值去让已知异常的两代都过，而把「异常可见」与「能不能继续」拆成两件事。
+同时，旧的合理性检查把阈值写在 `src/alohamini_cartesian/calibration/identity.py` 里。任何人另写一处判据，就无从判断谁是标准。上一轮任务书把「代际 A / 代际 B 判 OK」与包络数值并列写，本身自相矛盾。本轮裁决为**保留阈值这一层（单一来源）、改验收口径**：**不为洗白已知异常样本而放宽**——两个已知异常样本（旧代际左夹爪 4.5°、代际 B 右肩 lift 100.5°）照旧判 `IMPLAUSIBLE`；把「异常可见」与「能不能继续」拆成两件事。区间本身另按两代有效样本实算放宽为夹爪 60–160°、肩 180–260°、腕 150–200°，理由见「已知代价」第 1 条，两侧余量见 `src/alohamini_cartesian/calibration/envelope.py` 的阈值注释（三处 `*_WIDTH_DEG_RANGE` 常量的上文注释，本文件不复述数字）。
 
 ### 决定
 
-1. **阈值的唯一来源是 `src/alohamini_cartesian/calibration/envelope.py`。** 六个常量（全部是**经验值、非厂商规定**）：夹爪宽度 `GRIPPER_WIDTH_DEG_RANGE = (120.0, 135.0)`；肩（`shoulder_pan` / `shoulder_lift`）`SHOULDER_WIDTH_DEG_RANGE = (190.0, 240.0)`；腕（`wrist_flex` / `wrist_yaw` / `wrist_roll`）`WRIST_WIDTH_DEG_RANGE = (160.0, 190.0)`；满圈占位 `PLACEHOLDER_FULL_RANGE = (0, 4095)`；归零位 `ZERO_POSITION_TICK = 2047`；中心偏离上限 `ZERO_POINT_OFFSET_WARN_DEG = 90.0`。改阈值只改这一处，别处不再写第二套数字。
+1. **阈值的唯一来源是 `src/alohamini_cartesian/calibration/envelope.py`。** 四个常量（全部是**经验值、非厂商规定**）：夹爪宽度 `GRIPPER_WIDTH_DEG_RANGE = (60.0, 160.0)`；肩（`shoulder_pan` / `shoulder_lift`）`SHOULDER_WIDTH_DEG_RANGE = (180.0, 260.0)`；腕（`wrist_flex` / `wrist_yaw` / `wrist_roll`）`WRIST_WIDTH_DEG_RANGE = (150.0, 200.0)`；满圈占位 `PLACEHOLDER_FULL_RANGE = (0, 4095)`。改阈值只改这一处，别处不再写第二套数字。
 2. **四态**：`OK` 可继续；`IMPLAUSIBLE` 提醒、可继续（要留痕）；`WRONG_DATASET` 不可继续；`unmeasured_range` 是 `(0, 4095)` 满圈占位，放行、不计入不合格。汇总优先级 `WRONG_DATASET` > `IMPLAUSIBLE` > `OK` > `unmeasured_range`，因此「6 台占位 + 12 台合格」的汇总是 `OK`。
-3. **哪些字段不判**：`homing_offset` 不设包络（它是标定时算出来的偏移量，没有先验宽度）；`id` / `drive_mode` 不参与判定，只记录（接线与驱动方向的错由 D22 的跨代际比对拦）；`*_elbow_flex` / `base_*` / `lift_axis` 无宽度判定，只参与中心偏离判定。
+3. **哪些字段不判**：`homing_offset` 不设包络（它是标定时算出来的偏移量，没有先验宽度）；`id` / `drive_mode` 不参与判定，只记录（接线与驱动方向的错由 D22 的跨代际比对拦）；`*_elbow_flex` / `base_*` / `lift_axis` 无宽度判定。
 4. **数据集形状粗筛**：既没有任何 `base_*`、也没有 `lift_axis` 的电机表判 `WRONG_DATASET`——那是遥操臂（leader）那一侧的数据，不能用于下发。这条只拦这一种形状（反向的「有 `lift_axis` 但没轮子」不拦），最终靠 18 台数与结构自洽校验兜底。
 5. **结构自洽复用 `identity.validate_structure`**，不为包络另写一套台数 / 缺字段 / 取值检查，避免两套标准各说各话。
 6. **`identity.validate_plausibility` / `describe_plausibility` 降为薄封装**：函数体内延迟 import `envelope`（依赖方向是 `identity ← envelope`，模块级互相 import 会成环），语义仍是「只报告、不阻断」。旧的三组阈值常量与其判据已从 `identity.py` 删除，不再并存第二套标准。
 7. **接受名单机制**：`configs/calib-envelope-accepted.yaml` 登记「实测行程落在经验区间之外、但已由人现场确认为真实机械限位」的条目。经验值有误判的可能，堵死一切不合经验区间的行程会让「真机就是这样」也无路可走；名单把例外变成一条带问责链的记录，而不是把阈值往下调。
 8. **名单条目九字段、命中三要素**：条目九个字段全必填——`motor` / `observed_range_min` / `observed_range_max` / `measured_on_tick` / `method` / `confirmed_by` / `confirmed_at_utc` / `calib_id` / `reason`。命中须三者同时对上：`motor` 相同、`observed_range_min` / `observed_range_max` 与本次实测 `range_min` / `range_max` 精确相等、`calib_id` 与本次一致。命中后该电机不再报 `IMPLAUSIBLE`，但保留一行「已接受」信息（含 method / confirmed_by / confirmed_at_utc）；任一不符即「名单过期」，照旧报 `IMPLAUSIBLE`，`detail` 里写明名单过期。
-9. **交付的是空模板**（`schema_version: 1` + `accepted: []`），未预填任何电机。理由只有一条：经验值需现场实测才能证伪，预填等于替现场写答案。最直白的例子是右肩 `arm_right_shoulder_lift` 的 `905..2048`（1143 tick ≈ 100.5°）：它落在肩经验区间 `190–240°` 之外，判 `IMPLAUSIBLE`，但现场 S1 还没推过这条臂，不知道 100.5° 是机械极限还是标定没扫满，所以既不放开也不预填。
+9. **交付的是空模板**（`schema_version: 1` + `accepted: []`），未预填任何电机。理由只有一条：经验值需现场实测才能证伪，预填等于替现场写答案。最直白的例子是右肩 `arm_right_shoulder_lift` 的 `905..2048`（1143 tick ≈ 100.5°）：它落在肩经验区间 `180–260°` 之外，判 `IMPLAUSIBLE`，但现场 S1 还没推过这条臂，不知道 100.5° 是机械极限还是标定没扫满，所以既不放开也不预填。
 10. **`tools/calib_fetch.py` 是每轮开工的第一步**：取一份标定（`--host` 走 ssh，或 `--from-file` 读本地）、跑包络、可选登记。开关为 `--from-file` / `--host` / `--kind {robot,teleop}`（默认 `robot`）/ `--remote-path` / `--user`（默认 `pi5`）/ `--ssh-binary` / `--accepted` / `--registry` / `--out` / `--record` / `--allow-implausible` / `--dry-run`。
 11. **退出码 0 / 1 / 2 / 4**：`0` 通过（含 `--dry-run`、含用 `--allow-implausible` 留痕后的通过）；`1` 有 `IMPLAUSIBLE` 且未声明理由（提醒、不阻断）；`2` 用法错误；`4` 不可继续（`WRONG_DATASET` / `--kind teleop` / 结构自洽失败 / 接受名单坏 / 远端读不到 / ssh 超时）。
 12. **远端读不到不回落任何本地缓存。** 非零退出、起不了 ssh、stdout 为空、超时，一律退出 `4`。拿缓存冒充「刚抓的标定」比抓不到更危险。ssh 调用带 `-o BatchMode=yes -o ConnectTimeout=20` 与 20 秒 `subprocess.run(timeout=)`，都取模块常量 `SSH_TIMEOUT_S`（现场网络慢可调这一处），超时落 `4`。
@@ -792,6 +792,7 @@ V01 是本阶段唯一挡住「能不能说不接 leader 就算通」的条目�
 14. **会话锚定与第五态。** `tools/calib_health.py --session-anchor <calib_id>` 执法「会话内不可变」：锚点与文件 `calib_id` 不符时 stdout 打 `SESSION_ANCHOR: MISMATCH <anchor> -> <current>` 与 `CALIB_STATE: CALIB_SESSION_DRIFT`，退出码 `4`。这是第五个状态，**只在传了 `--session-anchor` 时才可能出现**；不传时行为与之前逐字一致，既有四态与退出码在其他所有路径上不变。
 15. **`--accepted` 默认就跑包络判定**（默认取仓库内那份名单），只在 stdout 追加 `CALIB_MOTOR:` / `CALIB_ENVELOPE:` / `CALIB_ENVELOPE_IMPLAUSIBLE:` 行，不改状态与退出码。
 16. **登记幂等**：`CalibrationRegistry.append_if_absent` 按 `calib_id` 幂等追加（已存在返回 `False`、不覆盖首条），`tools/calib_register.py` 与 `tools/calib_fetch.py --record` 都走它。
+17. **（补记，本轮）「`range` 中心偏离归零位」判据已删除，不保留任何形式。** 删掉的是常量 `ZERO_POSITION_TICK = 2047` / `ZERO_POINT_OFFSET_WARN_DEG = 90.0`、私有辅助 `_center_deg` / `_center_problem`，以及 `IMPLAUSIBLE` 文案与 `describe_thresholds()` 里的对应句子。理由两条：其一，该判据不分族别、对每台电机一律套用，而「归到 2047 附近」只有夹爪有物理依据（`lerobot` 的 `feetech.py:287` 的 `half_turn_homings` 把 `Present_Position` 归零），套到肩／腕属外推；其二，它原本要抓的目标场景（旧代际左夹爪 `2021..2072` 51 tick ≈ 4.5°）已由宽度判据覆盖，删掉不丢判别力。**恢复须先给出肩／腕的物理依据**（例如 vendor 侧同类 half-turn 归零证据），并说明为何对肩／腕成立；在此之前不恢复（与 `TODO.md` §4 的同名条目互相指认）。
 
 ### 后果
 
@@ -806,7 +807,9 @@ V01 是本阶段唯一挡住「能不能说不接 leader 就算通」的条目�
 
 **已知代价**
 
-1. **三个区间是经验值**：只在本项目看过的两代真机上核对过（旧代际左夹爪 51 tick、现役右肩 lift 1143 tick 都是区间外样本），换机型或换批次要重新核；把它们当规格用会误判。
+1. **三个区间是经验值**：只在本项目看过的两代真机上核对过（旧代际左夹爪 51 tick、现役右肩 lift 1143 tick 都是区间外样本），换机型或换批次要重新核；把它们当规格用会误判。区间按两代真标定实算放宽为夹爪 60–160°、肩 180–260°、腕 150–200°；旧区间窄到贴边——按旧区间算，代际 A 右腕 yaw 160.5° 距下界仅 0.5°、代际 A 左肩 pan 237.3° 距上界 2.7°、代际 B 右肩 pan 196.1° 距下界 6.1°。
+   - **检测力损失（放宽的直接代价）**：区间放宽后，「标定没扫满」的中度形态不再被判 `IMPLAUSIBLE`，只看宽度分不出来（人话：只扫了半个夹爪行程也算「合格」）。**下侧**：夹爪 60–119°、肩 180–189°、腕 150–159° 这三段原来都落在旧区间下界（120° / 190° / 160°）之外，本轮起算合格。**上侧同样放宽**：夹爪 136–160°、肩 241–260°、腕 191–200° 也由不合格转为合格（旧区间上界是 135° / 240° / 190°）。两个已知异常样本仍被抓到——旧代际左夹爪 `2021..2072` 51 tick ≈ 4.5° 低于夹爪下界 60°、代际 B 右肩 lift `905..2048` 1143 tick ≈ 100.5° 低于肩下界 180°——所以损失只在中间带，且不涉及这两个样本；本文说「不在两端」，指的是这两个已知离群样本仍落在区间外，与区间的上界、下界无关。
+   - **肩族的中心偏离在合法 tick 值下不可达**：在 `0..4095` 内、宽度落在肩区间 180–260° 的任何区间，其中点相对归零位 2047 的偏移绝对值**最大恰为 90.0°**，而旧判据是严格 `> 90°`。算式：最窄的合法宽度是 180.0° = 180 × 4096 / 360 = 2048 tick，此时区间只能取 `(2047, 4095)`（下端再小则上端越界），中点 = (2047 + 4095) / 2 = 3071，偏移 = 3071 − 2047 = 1024 tick，折 1024 × 360 / 4096 = 90.0°；另一侧下端顶 0 时中点 1024、偏移 −1023 tick ≈ −89.9°，绝对值更小；顶到 4095 时偏移 = 2048 − 宽度/2 tick，宽度越宽余量越少，只减不增。所以那条判据对肩族本来就不可能触发——上面的数值算术只证明了**肩族**不可达。**腕族不在其列**：腕区间 150–200° 允许更窄的宽度，在 `0..4095` 内可以造出超过 90° 的中点偏移，上确界约 104.99°（宽度取最窄的 150° ≈ 1706.7 tick、区间顶到 `(2388, 4095)`，中点 3241.5、偏移 +1194.5 tick ≈ +104.99°），旧判据对腕族是会触发的。因此删除腕侧的依据不是「不可达」，而是**物理依据**：half-turn 归零只对夹爪成立（`lerobot` 的 `feetech.py:287` 的 `half_turn_homings`），腕没有对应的物理依据（决定 17）。由此测试侧只有夹爪族与腕族有「中心偏移大但宽度合格 → `OK`」的行为锁（`tests/test_calibration_envelope.py` 的 `test_a_plausible_width_with_a_large_center_offset_stays_ok` 只参数化 `gripper` 与 `wrist_flex`），**肩族这一格没有行为锁**，属已登记的测试覆盖缺口（`TODO.md` §4 那行「『中心偏移大但宽度合格 → OK』的行为锁只覆盖夹爪族与腕族，**肩族没有**」）。
 2. **接受名单目前是空的**：`arm_right_shoulder_lift` 的 100.5° 仍需现场 S1 推臂实测后才能登记（确认真实机械限位）或修标定（确认是标定没扫满）。在此之前它每次都报 `IMPLAUSIBLE`，每次都要人判断。
 3. **真实 ssh 路径与 Pi 侧默认路径未经真机验证**：本轮 Pi 关机，只用假程序与 `--from-file` 验证过；`--host` 走真 ssh 取标定这条路一次也没跑过。
 4. **`--kind teleop` 的默认远端路径是推定值**：按 lerobot 的 `calibration/teleoperators/<类型>/<id>.json` 目录约定推出，Pi 侧未 `ls` 核对，对不上要用 `--remote-path` 显式给。
