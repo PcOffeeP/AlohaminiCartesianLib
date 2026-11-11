@@ -283,7 +283,7 @@ A1 行改成按代际断开，三件事要分清：
 >
 > 处置顺序：**先 `tools/calib_health.py` 判态 → 再看 A 组差异怎么记 → `CALIB_NEW_UNREGISTERED` 走 `tools/calib_register.py --from-file … --write` 登记**。`CALIB_KNOWN` 的代际差异只作事实记录；`CALIB_SUSPECT` / `CALIB_CORRUPT` 阻断并按事故处置。**任何情况下都不得改标定文件去「对齐」**——重标定只能来自现场实测。
 >
-> 处置见 [T0](../next-mission.md#mission-t0)：先登记新代际（calib sha256、18 个电机的 8 个字段、登记时间、登记人），再按 T0 写明的口径重取 V12 指纹、改写 `CALIB_FIELD_DIFFS` 结论、换比对基准。
+> 处置见 [T0](../next-mission.md#mission-t0)：先登记新代际——身份用 `calib_id`（由 18 电机 × `id` / `drive_mode` / `homing_offset` / `range_min` / `range_max` 五字段决定），`file_sha256` 与 `byte_size` 仅作溯源辅助、**不用于判代际**；登记动作是 `uv run --no-sync python tools/calib_register.py --from-file … --write`，判据是 `tools/calib_health.py` 输出 `CALIB_STATE: CALIB_KNOWN`。之后再按 T0 写明的口径重取 V12 指纹、改写 `CALIB_FIELD_DIFFS` 结论、换比对基准。
 >
 > 本节本轮改了四处：**A1 行判据**按代际改写、**A2 行判据**补上「`id` / `drive_mode` 跨代际也不放过」、**表后新增三条要点**（`calib_id` 怎么算 / 怎么比 / 「变了」与「变了却没人知道」的区别）、**2026-11-10 警告块**改写为指向新工具；B / C 两行与前两条口径要点未改，第三条口径要点已按代际拆开。在 T0 的新基线登记完成之前，跨代际的比对结论**不具判事故效力**，只能记成「待 T0 登记后再判」。
 >
