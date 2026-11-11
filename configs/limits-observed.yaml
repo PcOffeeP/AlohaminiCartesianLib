@@ -1,0 +1,23 @@
+# 层 2：现场实测极限（schema_version 1）。当前为空模板 = 层 2 缺席。
+#
+# 这个文件只放**现场实测**出来的关节行程极限。本文件里的值必须是现场实测，没有实测就保持
+# motors: {}；空文件表示层 2 缺席，绝不允许用标定值或估计值顶替。标定 range 是「标定时量到
+# 的行程」，不是「现场量到的可用极限」；把标定值填进这里会让层 3 冒充层 2，估计值同理。
+#
+# 每台电机一条，五个字段全部必填——缺 measured_on 或 method 就是没有溯源证据的裸数字，
+# 解析侧会报错而不是猜（见 calibration/limits.py::load_observed_limits）。
+#
+#   motors:
+#     <电机名>：                 # 与标定文件里的电机名一致
+#       min_tick: <整数>          # 量程下限，与标定文件同一 tick 系
+#       max_tick: <整数>          # 量程上限，同一 tick 系，必须大于 min_tick
+#       measured_on: "YYYY-MM-DD" # 实测日期，日粒度即可，不填时刻
+#       calib_id: "<12 位十六进制>" # 这批实测对应的代际 id，identity.calib_id() 算出的值
+#       method: "<怎么测的>"       # 写给下一个看这份文件的人，例如扫程方式与采集手段
+#
+# 单位注意：min_tick / max_tick 是 tick，不是度。tick ↔ 度的换算要按代际取 signs / zeros，
+# calibration/limits.py 不做也不该做这件事；调用方把三个限位层放进同一单位后再交给
+# resolve_joint_limit()。
+
+schema_version: 1
+motors: {}

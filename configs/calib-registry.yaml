@@ -1,0 +1,249 @@
+# 标定代际登记表：一台 AlohaMini 每一代标定一条记录，按登记顺序排列。
+#
+# 身份判定一律用 calib_id（只由 18 台电机 × id/drive_mode/homing_offset/range_min/
+# range_max 这五个字段决定，与电机顺序、字段顺序、输入形状无关）。
+# file_sha256 + byte_size 只是溯源辅助：同样的标定值换个字节格式（缩进、键顺序）就是
+# 另一个文件哈希，所以不能用它判「是不是同一代」。
+#
+# 本文件由 identity.calib_id() / file_sha256() 实算生成，禁止手改 calib_id 与 motors：
+# 想加一代就跑 tools/calib_register.py（写盘会重写本文件，注释不保留，但记录内容不动）。
+# first_seen 不是 datetime 字段而是文本：粒度由登记人决定，可以只到日。
+# 统一约定：acknowledged_by 为 null 表示「登记人待现场填写」（两条记录都适用），不是「没人看」。
+# 填之前不要用空字符串占位：null 与空串的语义不同，健康检查会把两者原样打出来。
+
+schema_version: 1
+generations:
+  # ---- 代际 A：2026-10-22 macOS 快照（归档原件，只读拷贝在 tests/fixtures/calibration/） ----
+  - calib_id: "2905048c28a2"
+    first_seen: "2026-10-22"
+    source: archive-20261022
+    file_sha256: "6d089d3879b538a806dd5008dba66cde1bdb5a819aa7c4987becd0bf6b6e4c56"
+    byte_size: 2880
+    motors:
+      arm_left_elbow_flex:
+        id: 3
+        drive_mode: 0
+        homing_offset: -1322
+        range_min: 947
+        range_max: 3109
+      arm_left_gripper:
+        id: 7
+        drive_mode: 0
+        homing_offset: 1571
+        range_min: 2021
+        range_max: 2072
+      arm_left_shoulder_lift:
+        id: 2
+        drive_mode: 0
+        homing_offset: -1130
+        range_min: 930
+        range_max: 3229
+      arm_left_shoulder_pan:
+        id: 1
+        drive_mode: 0
+        homing_offset: -1359
+        range_min: 627
+        range_max: 3327
+      arm_left_wrist_flex:
+        id: 4
+        drive_mode: 0
+        homing_offset: -1651
+        range_min: 934
+        range_max: 3049
+      arm_left_wrist_roll:
+        id: 6
+        drive_mode: 0
+        homing_offset: -266
+        range_min: 0
+        range_max: 4095
+      arm_left_wrist_yaw:
+        id: 5
+        drive_mode: 0
+        homing_offset: -1975
+        range_min: 1114
+        range_max: 3070
+      arm_right_elbow_flex:
+        id: 3
+        drive_mode: 0
+        homing_offset: -1248
+        range_min: 965
+        range_max: 3105
+      arm_right_gripper:
+        id: 7
+        drive_mode: 0
+        homing_offset: -1964
+        range_min: 2010
+        range_max: 3479
+      arm_right_shoulder_lift:
+        id: 2
+        drive_mode: 0
+        homing_offset: -818
+        range_min: 939
+        range_max: 3258
+      arm_right_shoulder_pan:
+        id: 1
+        drive_mode: 0
+        homing_offset: -1988
+        range_min: 1247
+        range_max: 3743
+      arm_right_wrist_flex:
+        id: 4
+        drive_mode: 0
+        homing_offset: -1345
+        range_min: 969
+        range_max: 3091
+      arm_right_wrist_roll:
+        id: 6
+        drive_mode: 0
+        homing_offset: -1030
+        range_min: 0
+        range_max: 4095
+      arm_right_wrist_yaw:
+        id: 5
+        drive_mode: 0
+        homing_offset: -20
+        range_min: 1053
+        range_max: 2879
+      base_back_wheel:
+        id: 9
+        drive_mode: 0
+        homing_offset: 0
+        range_min: 0
+        range_max: 4095
+      base_left_wheel:
+        id: 8
+        drive_mode: 0
+        homing_offset: 0
+        range_min: 0
+        range_max: 4095
+      base_right_wheel:
+        id: 10
+        drive_mode: 0
+        homing_offset: 0
+        range_min: 0
+        range_max: 4095
+      lift_axis:
+        id: 11
+        drive_mode: 0
+        homing_offset: 0
+        range_min: 0
+        range_max: 4095
+    note: "first_seen 只记到日：取自归档文件名 20261022 与该文件 mtime 的本地墙钟 2026-10-22 16:20（本机 stat 报时区偏移 +0800，非 UTC 换算）；无更早的精确 UTC 时点证据，故不得当精确时刻使用。"
+    acknowledged_by: null
+  # ---- 代际 B：2026-11-10 Pi 上现场重标定（活文件，只读拷贝在 tests/fixtures/calibration/） ----
+  - calib_id: "4a80c0fd4421"
+    first_seen: "2026-11-10T11:58:15Z"
+    source: pi-live-20261110
+    file_sha256: "d6594b999eb8533932adf20b6b5be413768c521f9f082109454cd323e183dfcf"
+    byte_size: 2882
+    motors:
+      arm_left_elbow_flex:
+        id: 3
+        drive_mode: 0
+        homing_offset: -1170
+        range_min: 801
+        range_max: 2953
+      arm_left_gripper:
+        id: 7
+        drive_mode: 0
+        homing_offset: 1570
+        range_min: 2018
+        range_max: 3483
+      arm_left_shoulder_lift:
+        id: 2
+        drive_mode: 0
+        homing_offset: -1209
+        range_min: 1005
+        range_max: 3201
+      arm_left_shoulder_pan:
+        id: 1
+        drive_mode: 0
+        homing_offset: -1398
+        range_min: 670
+        range_max: 2956
+      arm_left_wrist_flex:
+        id: 4
+        drive_mode: 0
+        homing_offset: -1728
+        range_min: 1008
+        range_max: 3120
+      arm_left_wrist_roll:
+        id: 6
+        drive_mode: 0
+        homing_offset: -502
+        range_min: 0
+        range_max: 4095
+      arm_left_wrist_yaw:
+        id: 5
+        drive_mode: 0
+        homing_offset: -1958
+        range_min: 1113
+        range_max: 3047
+      arm_right_elbow_flex:
+        id: 3
+        drive_mode: 0
+        homing_offset: -1281
+        range_min: 1000
+        range_max: 3093
+      arm_right_gripper:
+        id: 7
+        drive_mode: 0
+        homing_offset: -2012
+        range_min: 2030
+        range_max: 3509
+      arm_right_shoulder_lift:
+        id: 2
+        drive_mode: 0
+        homing_offset: -784
+        range_min: 905
+        range_max: 2048
+      arm_right_shoulder_pan:
+        id: 1
+        drive_mode: 0
+        homing_offset: -1837
+        range_min: 1231
+        range_max: 3462
+      arm_right_wrist_flex:
+        id: 4
+        drive_mode: 0
+        homing_offset: -1244
+        range_min: 876
+        range_max: 2992
+      arm_right_wrist_roll:
+        id: 6
+        drive_mode: 0
+        homing_offset: -991
+        range_min: 0
+        range_max: 4095
+      arm_right_wrist_yaw:
+        id: 5
+        drive_mode: 0
+        homing_offset: -34
+        range_min: 1075
+        range_max: 2991
+      base_back_wheel:
+        id: 9
+        drive_mode: 0
+        homing_offset: 0
+        range_min: 0
+        range_max: 4095
+      base_left_wheel:
+        id: 8
+        drive_mode: 0
+        homing_offset: 0
+        range_min: 0
+        range_max: 4095
+      base_right_wheel:
+        id: 10
+        drive_mode: 0
+        homing_offset: 0
+        range_min: 0
+        range_max: 4095
+      lift_axis:
+        id: 11
+        drive_mode: 0
+        homing_offset: 0
+        range_min: 0
+        range_max: 4095
+    note: "登记人待现场填写。14 台手臂电机 homing_offset 变动，其中 12 台的 range_min/range_max 也变；两台 wrist_roll 仅 homing_offset 变动（range 两侧都是 0..4095，左 -266 → -502、右 -1030 → -991）；base_left_wheel/base_back_wheel/base_right_wheel/lift_axis 未动；id 与 drive_mode 全 18 项未变；左夹爪 51 tick 异常消失（2021..2072 → 2018..3483，51 → 1465 tick）；右肩 shoulder_lift 行程收窄（2319 → 1143 tick，≈203.8° → ≈100.5°）。"
+    acknowledged_by: null
