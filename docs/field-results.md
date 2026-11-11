@@ -7,8 +7,27 @@
 - 2026-11-06 节：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261106/`
 - 2026-11-05 节：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261104/`
 - 2026-10-25 及更早：`/Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261025/`（索引 [evidence/s4-20261025/README.md](file:///Users/pcoffeep/pi-workspace/alohamini-cartesian-teleop/evidence/s4-20261025/README.md)）
+- 2026-11-10 节（**非现场日，只读侦察，无新增测量**）：`/Users/pcoffeep/pi-workspace/Cartesianlib-workbench/calibration/`（标定原件与归档）与 `/Users/pcoffeep/pi-workspace/Cartesianlib-workbench/notes/2026-11-10-recalibration.md`（逐字段表）；另在仓库内 `configs/calib-registry.yaml`
 
 下表「证据文件」列给的是**该节所属目录**下的相对路径（各节首段的「条件」一句已写明本节用哪个目录）。逐条命令、判据在 [docs/field-ops/README.md](field-ops/README.md)，退出码表在 [docs/field-ops/reference/gates.md](field-ops/reference/gates.md) §10，本文件只记拿到了什么。
+
+## 2026-11-10（**非现场日**）· 只读侦察与用户告知
+
+**性质标注：本节非现场日——未起 Host、无任何运动、无新增测量。** 全部内容为只读侦察的读数、两份标定原件的逐字段复算，以及用户告知的物理事实（标「用户告知」）；没有下发过任何命令。
+
+条件：同日 pi 侧只读侦察（2026-11-10，未动机器人）；现役标定文件 `~/.cache/huggingface/lerobot/calibration/robots/alohamini/AlohaMiniRobot.json` 已在 `2026-11-10 11:58:15 +0000` 被原地覆写（mtime 与 ctime 同值、同 inode，pi 上无备份），逐字段复算用的是 Mac 上的副本 `/Users/pcoffeep/pi-workspace/Cartesianlib-workbench/calibration/AlohaMiniRobot.json`（2882 字节）与旧代际归档 `6d089d38…`（2880 字节）。下表「证据文件」列若无前缀，指 `/Users/pcoffeep/pi-workspace/Cartesianlib-workbench/` 下的相对路径。
+
+| 结论 | 关键数字 | 条件 | 证据文件 |
+| --- | --- | --- | --- |
+| **标定被完整重写，换代际**：代际 A `2905048c28a2`（`source: archive-20261022`）→ 代际 B `4a80c0fd4421`（`source: pi-live-20261110`，`first_seen: 2026-11-10T11:58:15Z`） | 2880 → 2882 字节；`file_sha256` `6d089d3879b538a806dd5008dba66cde1bdb5a819aa7c4987becd0bf6b6e4c56` → `d6594b999eb8533932adf20b6b5be413768c521f9f082109454cd323e183dfcf`。身份按 `calib_id` 判（= 18 电机 × `id`/`drive_mode`/`homing_offset`/`range_min`/`range_max` 五字段规范化后的 sha256 前 12 位），`file_sha256` / `byte_size` **只作溯源辅助、不用于判代际** | 只读 `stat` + 两份原件复算；未连设备、未起 Host | `calibration/AlohaMiniRobot.json`、`notes/2026-11-10-recalibration.md`；仓库内 `configs/calib-registry.yaml` 两条记录 |
+| 变动面：**14 个手臂电机变动**，三只轮子与 `lift_axis` 未动，18 项 `id` / `drive_mode` 全未变 | 14 台 `homing_offset` 变，其中 12 台 `range_min`/`range_max` 也变；两台 `wrist_roll` 只动 `homing_offset`（range 两侧都是 `0..4095`）；`base_left_wheel` / `base_back_wheel` / `base_right_wheel` / `lift_axis` 四字段全同（`0 / 0 / 4095`） | 逐字段复算两份原件 | `notes/2026-11-10-recalibration.md`（逐字段变化表） |
+| **左夹爪 51 tick 异常消失** | `arm_left_gripper` `2021..2072`（51 tick / 4.48°）→ `2018..3483`（**1465 tick / 128.8°**），与右侧 1479 tick（`2030..3509`，130.0°）基本一致 | 同上 | `notes/2026-11-10-recalibration.md`；调查结案见 `docs/investigations/gripper-range-51-tick.md` |
+| **右肩 lift 行程收窄**：`arm_right_shoulder_lift` | `939..3258`（2319 tick / **203.8°**）→ `905..2048`（1143 tick / **100.5°**），`range_max` 少 1210 tick | 同上 | `notes/2026-11-10-recalibration.md` |
+| 双肩 pan 行程收窄 | `arm_left_shoulder_pan` 2700 → **2286** tick（`627..3327` → `670..2956`；237.3° → 200.9°）；`arm_right_shoulder_pan` 2496 → **2231** tick（`1247..3743` → `1231..3462`；219.4° → 196.1°） | 同上 | `notes/2026-11-10-recalibration.md` |
+| **控制代码无数值常量改动** | 厂商仓 `/home/pi5/lerobot_alohamini`（分支 `p1a-merged`、HEAD `6aee1f81`）唯一未提交改动是把三个摄像头（backward / chest / wrist_left）从注释改为启用，**无任何数值常量变化**；`P_Coefficient=16` / `I_Coefficient=0` / `_JOINT_STALL_MIN_COMMAND_ERROR_DEG=2.0` / `arm_acceleration=100` / `lift_target_speed_mm_s=150.0` 逐项核过未变 | 只读 `git status` / `git diff`；未改厂商仓 | `notes/2026-11-10-recalibration.md`（摄像头启用）；PID 与 stall 常量的逐项核对记在同一次侦察的台账 `docs/field-ops/next-mission.md` §0「变了 / 没变」表 |
+| **供电改为分开（pi 与机械臂不再共电池）** | **用户告知的物理事实，软件无法验证**。空载旁证（2026-11-10 13:18–13:20 GMT）：`vcgencmd get_throttled` = `0x0`；`EXT5V_V` = 5.02098 V / 5.01294 V；dmesg 与 `journalctl -k` 各 711 行内欠压／降频关键词命中 **0** 次；无 over-current；本 boot 无 USB disconnect / reset。三条限制：**空载**（没跑过任何运动）、**pi 无舵机母线遥测**（`/sys/class/power_supply/` 为空）、**历史日志不可追**（`/var/log/syslog*` 与 `kern.log*` 不存在，`journalctl` 只有本 boot）。故**不能说「供电改造已见效」**，也不得据此改任何阈值 | 只读采样，load 0.00、无 python 进程 | `notes/2026-11-10-recalibration.md`（同日其他事实）；处置口径见 `docs/field-ops/next-mission.md` §5 |
+| 旧部署清理 | 用户本人于 `13:09` 删除 `lerobot_alohamini.legacy-752fd799-20261015`；`lerobot_alohamini.legacy-ec65318f-20261025`（6.3 G）仍在 | 只读侦察；删除动作由用户执行 | `notes/2026-11-10-recalibration.md`（同日其他事实） |
+| pi 环境状态 | Raspberry Pi 5 / Debian 13 (trixie) / 内核 6.12.47，启动 `11:30:02 GMT`；**Host 未运行**（无 lerobot / python 进程，无自定义 systemd 服务）；`/dev/ttyACM0`（SN `5B14029263`）与 `/dev/ttyACM1`（SN `5B14111703`）都在、开机 4 秒内枚举成功；根分区 `/dev/mmcblk0p2` 29 G 已用 23 G、**剩 4.8 G（83%）**；`ssh pi5@10.34.170.98` 免密可通、`pi5.local` 不可解析 | 只读侦察 | `notes/2026-11-10-recalibration.md`（同日其他事实） |
 
 ## 2026-11-08（现场验收日）· S4 现场窗口（第 4 次）
 

@@ -24,7 +24,7 @@
 | 项 | 变了吗 | 依据 |
 | --- | --- | --- |
 | 现役标定文件 | 变了：2880 → 2882 字节，sha256 由 `6d089d3879b538a806dd5008dba66cde1bdb5a819aa7c4987becd0bf6b6e4c56` 换成 `d6594b999eb8533932adf20b6b5be413768c521f9f082109454cd323e183dfcf` | 上表第 1 行 |
-| 左夹爪行程 | 变了：`2021..2072`（51 tick / 4.5°）→ `2018..3483`（1465 tick / 128.8°），与右侧 1479 tick 基本一致 | 同上；`docs/investigations/gripper-range-51-tick.md` 的前提据此失效（该文件本轮未改） |
+| 左夹爪行程 | 变了：`2021..2072`（51 tick / 4.5°）→ `2018..3483`（1465 tick / 128.8°），与右侧 1479 tick 基本一致 | 同上；`docs/investigations/gripper-range-51-tick.md` 的前提据此失效，该文件已按此关闭（状态块与「结论」段追加，原文保留） |
 | 右肩 lift 行程 | 变了：`939..3258`（2319 tick / 203.8°）→ `905..2048`（1143 tick / 100.5°） | 同上；风险见 [§4](#mission-limit-risk) |
 | 供电 | 变了：pi 与机械臂不再共电池（用户告知） | [§5](#mission-power) |
 | 控制代码 | 没变：厂商仓 `/home/pi5/lerobot_alohamini`（分支 `p1a-merged`、HEAD `6aee1f81`）唯一未提交改动是把三个摄像头（backward / chest / wrist_left）从注释改为启用，**无任何数值常量变化** | 2026-11-10 只读侦察 |
@@ -79,12 +79,12 @@
 | 项 | 内容 |
 | --- | --- |
 | 目的 | 把 2026-11-10 的新标定定成「已登记的一代」，并写明三处被旧基线顶着的产物各自怎么处置——不登记，本轮所有「限位交集 / 单位口径 / 标定没被改过」类结论都没有可比基线 |
-| 现状 | 新标定 sha256 与旧基线不同（`d6594b99…` 对 `6d089d38…`，2882 对 2880 字节，14 个手臂电机字段变动）。三处会因这次**预期变更**而报不一致：① `docs/acceptance-baseline.md` V12 的实机证据（`tools/verify_unit_consistency.py` 比对 18/18、差异 0 个，而其中的指纹是 2026-10-25 的）；② `completed-work.md` §1 第 4 条的 `CALIB_FIELD_DIFFS: 0`；③ [§4.1c](runbook/3-health.md#sec-4-1c) 的 A 组判据（标定字段任一不等即判事故）——本轮现场跑它**必然**报出 14 个电机 |
-| 要交付的东西 | 一份「新代际已登记」的记录，四项不可缺：① 现役标定的 sha256 与字节数（`d6594b999eb8533932adf20b6b5be413768c521f9f082109454cd323e183dfcf` / 2882 字节）；② 18 个电机的 8 个字段逐项值（`id` / `model` / `normalization` / `range_min` / `range_max` / `homing_offset` / `drive_mode` / `resolution`，与 §4.1c 的 `CALIB_FIELDS` 同口径）；③ 登记时间（UTC）；④ 登记人。数据源是归档副本 `Cartesianlib-workbench/calibration/AlohaMiniRobot.json`，**不需要连 pi** |
-| 三处受影响基线怎么处置 | ① **V12**：用新指纹重跑 `tools/verify_unit_consistency.py`，或在文档里标注该证据失效；改 `docs/acceptance-baseline.md` **需另一次任务授权**，T0 里只写处置口径、不改判据。② **`CALIB_FIELD_DIFFS: 0`**：结论改写为按代际分段（本文档本轮已在 `completed-work.md` §1 第 4 条追加「不跨代际成立」的限定，只加限定、未改原句；分段改写同样需授权）。③ **§4.1c A 组**：判据本身不改；在新代际登记完成前，该比对结论不具判事故效力；登记后的比对基准是「新代际第一份指纹」 |
-| 产物 | `$S4DIR/stdout/calib-gen2-registry-$STAMP.md`。T0 可离线做，产物仍与现场证据同根，便于与 §4.1c 的比对产物并列 |
-| 不过怎么办 | 四项缺一、或三处处置没写 → T0 不过，**T3 降级为「不可执行，记录原因」**（依赖见 [§6](#mission-order)）。不得只记一个 sha256 就算登记，也不得把「已看到新标定」当成「已登记」 |
-| 彻底做法（**待决，未批准**） | 把标定代际化（每份标定带代际号与 sha256，指纹与证据按代际归档）＋把 §4.1c 的 A 组判据改成不变量形式（比「同一代际内」而不是「跨代际恒等」）。这是**待决方案，用户尚未批准实施**；本轮 T0 只做最小处置，**不修改 `docs/acceptance-baseline.md` 的判据语义**。方案存放位置 `/Users/pcoffeep/pi-workspace/Cartesianlib-workbench/notes/`（**尚未落文档**） |
+| 现状 | 新标定 sha256 与旧基线不同（`d6594b99…` 对 `6d089d38…`，2882 对 2880 字节，14 个手臂电机字段变动）。三处会因这次**预期变更**而报不一致：① `docs/acceptance-baseline.md` V12 的实机证据（`tools/verify_unit_consistency.py` 比对 18/18、差异 0 个，而其中的指纹是 2026-10-25 的）；② `completed-work.md` §1 第 4 条的 `CALIB_FIELD_DIFFS: 0`；③ [§4.1c](runbook/3-health.md#sec-4-1c) 的 A 组判据（已按代际断开：同代际内标定字段任一不等即判事故，跨代际先判态）——拿旧代际基线跑本节第二步会量出这 14 个电机的差异，但**不再断言事故**：先跑 `tools/calib_health.py` 判态，现役代际已登记、正常应输出 `CALIB_STATE: CALIB_KNOWN`；若输出 `CALIB_NEW_UNREGISTERED`（非阻断）则按下面「不过怎么办」的登记流程收尾，不记为事故 |
+| 要交付的东西 | 一份「新代际已登记」的记录，四项不可缺：① 登记键 `calib_id`（代际身份，只由 `id` / `drive_mode` / `homing_offset` / `range_min` / `range_max` 五个字段决定，现役为 `4a80c0fd4421`），随附 `file_sha256` 与 `byte_size` 作**溯源辅助**（`d6594b999eb8533932adf20b6b5be413768c521f9f082109454cd323e183dfcf` / 2882 字节）——**身份判定用 `calib_id`，不用文件哈希**，同一个标定值换个字节格式就是另一个文件哈希；② 18 个电机 × 5 个字段逐项值（`id` / `drive_mode` / `homing_offset` / `range_min` / `range_max`，即 `calib_id` 的输入，与 `calibration/identity.py` 的 `CANONICAL_FIELDS` 同口径）；③ 登记时间（UTC）；④ 登记人。数据源是归档副本 `Cartesianlib-workbench/calibration/AlohaMiniRobot.json` 与现役文件 `pi-live-20261110`，两者都已登记在 `configs/calib-registry.yaml`；**不需要连 pi** |
+| 三处受影响基线怎么处置 | ① **V12**：`docs/acceptance-baseline.md` 的 V12 行已按代际分写、旧代际证据标注「新代际下失效」，处置是用新指纹重跑 `tools/verify_unit_consistency.py` 并把结果记进产物；再改该文件判据语义**需另一次任务授权**。② **`CALIB_FIELD_DIFFS: 0`**：结论改写为按代际分段（本文档已在 `completed-work.md` §1 第 4 条追加「不跨代际成立」的限定，只加限定、未改原句；分段改写同样需授权）。③ **§4.1c A 组**：判据已按代际断开（比「同一代际内」而不是「跨代际恒等」，见 `docs/ADR.md` D22）；在新代际登记完成前，跨代际的比对结论不具判事故效力；登记后的比对基准是「新代际第一份指纹」 |
+| 产物 | `$S4DIR/stdout/calib-gen2-registry-$STAMP.md`。T0 可离线做，产物仍与现场证据同根，便于与 §4.1c 的比对产物并列。内容 = 引用登记表里的那一条（`calib_id` / `source` / `first_seen` / `file_sha256` / `byte_size` / `acknowledged_by`）＋ `tools/calib_health.py` 的健康检查结论原文（`CALIB_STATE` 行与退出码） |
+| 不过怎么办 | 可执行判据（不再靠目测）：① 跑 `uv run --no-sync python tools/calib_health.py --calib-file <标定文件>`（`--registry` 省略时默认就是仓库内 `configs/calib-registry.yaml`），现役标定必须输出 `CALIB_STATE: CALIB_KNOWN` 且退出码 `0`；② 输出 `CALIB_NEW_UNREGISTERED`（退出码 `1`）**不算过**——那是「新代际还没登记」的非阻断警告，须先跑 `uv run --no-sync python tools/calib_register.py --from-file <标定文件> --write` 登记（再跑 ① 应变 `CALIB_KNOWN`）；③ `CALIB_SUSPECT`（退出码 `3`）/ `CALIB_CORRUPT`（退出码 `4`）一律不过，按事故处置，**不得改标定文件去「对齐」**。四项缺一、或三处处置没写 → T0 不过，**T3 降级为「不可执行，记录原因」**（依赖见 [§6](#mission-order)）。不得只记一个 `file_sha256` 就算登记，也不得把「已看到新标定」当成「已登记」 |
+| 已落地的做法（ADR D22） | 原「彻底做法」那一行已落地，见 `docs/ADR.md` D22。`src/alohamini_cartesian/calibration/` 子包（`identity` / `registry` / `limits`）已实现，`configs/calib-registry.yaml` 已登记两条真实代际（`2905048c28a2`、`4a80c0fd4421`），`tools/calib_health.py` 给四态健康检查（`CALIB_KNOWN` / `CALIB_NEW_UNREGISTERED` / `CALIB_SUSPECT` / `CALIB_CORRUPT`），`tools/calib_register.py` 负责登记。三层限位模块**已实现但未接入控制路径**（D22 决定 7：前置是现场实测层，`configs/limits-observed.yaml` 仍是空模板）。本卡现在只剩「补登记人」（`acknowledged_by` 仍是 `null`）＋ 上面那行「三处受影响基线怎么处置」 |
 
 <a id="mission-s1"></a>
 ### 3.3 S1 行程复核（现场步骤，排在开场落 scope 之后、T1 之前）
