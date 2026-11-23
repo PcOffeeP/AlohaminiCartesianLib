@@ -1,0 +1,23 @@
+AlohaMini Cartesian (`alohamini-cartesian`)
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product includes software and kinematic model assets derived from the
+following third-party Apache License 2.0 works:
+
+1. HuggingFace LeRobot (`lerobot`)
+   Copyright 2024-2025 The HuggingFace Inc. team. All rights reserved.
+   License: Apache License, Version 2.0
+   Derived modules in this repository:
+   - src/alohamini_cartesian/control/{__init__,api,arm_ik,commands,controller}.py
+   - src/alohamini_cartesian/kinematics/{joint_adapter,model_specs}.py
+
+2. AM-ARM (`liyiteng/AM-ARM`)
+   License: Apache License, Version 2.0
+   Derived asset in this repository:
+   - src/alohamini_cartesian/kinematics/assets/am_arm200/kinematics.urdf
+   Upstream source: `am-arm200pro.urdf`
+   Upstream commit: `5b03af1ef6c80595bd988e0137cf8e7c35811eb6`
+   Upstream file sha256: `c38669d46d2bf804c112a6d8ce926074c8ff65ba70917503e09b77c75e285030`
+   Modifications: stripped inertial, visual/collision mesh references, gripper,
+   and camera links/joints while preserving the 6-DOF kinematic chain origins,
+   axes, and joint limits.

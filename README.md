@@ -18,14 +18,14 @@ AlohaMini 笛卡尔控制的产品侧库：对机器人运行时的适配协议�
 
 版本 `v0.7.0`：`pyproject.toml` 的 `version` 与 `src/alohamini_cartesian/__init__.py` 的 `__version__` 一致。
 
-本轮 `uv run --no-sync python -m pytest tests -o addopts=""` 报 `1496 passed, 2 skipped`。`2 skipped` 是两个 parity 文件缺 `lerobot` 整体跳过；`2` 不等于全部通过。
+当前离线测试集可通过 `uv run --no-sync python -m pytest tests -o addopts=""` 现场查实时汇总（主环境缺 `lerobot` 时两个 parity 文件整体跳过，跳过不等于差分对照通过）。
 
 验收矩阵现状（与 [docs/acceptance-baseline.md](docs/acceptance-baseline.md) §2.3 一致）：
 
 | 维度 | 有证据 | 部分 | 不适用 | 未取 |
 | --- | --- | --- | --- | --- |
 | 软件侧 | 10 条 | 3 条（V01、V06、V11） | 0 条 | 0 条 |
-| 实机侧 | 2 条（V01、V12） | 1 条（V10） | 1 条（V09） | 9 条 |
+| 实机侧 | 3 条（V01、V12[新代际待重取]、V13） | 1 条（V10） | 1 条（V09） | 8 条 |
 
 - **V01 已通过**：判据按 [docs/ADR.md](docs/ADR.md) D20——达成率 `≥50%`，分母 `abs(--delta-deg) × --steps`（`--anchor present` 且逐步实际命令增量与 `--delta-deg` 不等时改用 `Σ(cmd_deg − baseline_deg)`，并在记录里写明用的是哪个分母）；步末残余按关节类别分级（肩类 `≤2°`，其余轴 `≤2 tick`）。2026-11-08 `--anchor command` 两轮双侧过门槛，达成率 `77.3626%` / `79.1209%` / `82.6374%`（轮一两侧同为 `77.3626%`；轮二左 `79.1209%`、右 `82.6374%`）。
 - **V12 已核对**：离线、盘上真机数据，`tools/verify_unit_consistency.py` 18/18 电机两侧 `range_min`/`range_max` 完全相等，差异 0 个、退出码 `0`；限定「只证明两侧单位口径一致，不含 URDF 限位交集」。

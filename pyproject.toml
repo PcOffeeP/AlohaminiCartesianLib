@@ -8,7 +8,7 @@ version = "0.7.0"
 description = "AlohaMini 笛卡尔遥操作的独立库：机器人运行时适配协议、能力探测与配置覆盖。"
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "MIT" }
+license = { file = "LICENSE" }
 dependencies = ["numpy>=1.26"]
 
 [project.optional-dependencies]
