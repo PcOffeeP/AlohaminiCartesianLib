@@ -55,7 +55,7 @@ git log --oneline -3                    # 最近提交
 - **必须走 `uv`**：裸 `ruff` 不在 `PATH` 上（`exit 127`）；裸 `python`、`pytest` 解析到 miniconda，不是本库的 `.venv`。
 - **必须带 `--no-sync`**：本仓库没有 `uv.lock`，不带它的 `uv run` 会自行解析依赖并新写一个 `uv.lock`。`--no-sync` 只复用现有 `.venv`（editable 安装），不装包、不改环境、不产生新文件。
 - **pytest 不要再追加 `-q`**：`addopts = "-q"` 已生效，再加会变成 `-qq` 并隐藏 `N passed, M skipped` 汇总行。要看汇总行用 `uv run --no-sync python -m pytest tests -o addopts=""`。
-- **本机当前快照**：本包已以 editable 方式装进 `.venv`，`uv run --no-sync` 直接复用，不必先 `pip install -e .`。这条描述的是当前这台机器与环境，可能变化；换环境先确认，不以本文件为准。
+- **本机当前快照**：本包已以 editable 方式装进主工作区的 `.venv`，在主工作区里 `uv run --no-sync` 直接复用，不必先 `pip install -e .`。在独立 worktree（`../alohamini-cartesian-lib-<线名>`，不含 `.venv/`）中执行时，须显式加 `UV_PROJECT_ENVIRONMENT=../alohamini-cartesian-lib/.venv` 复用主工作区 `.venv`（避免新建空 `.venv`）；`pytest` 借 `pyproject.toml` 的 `pythonpath = ["src"]` 自动加载当前 worktree 源码，若在 worktree 中直接运行 `python tools/...` 或 `benchmarks/...`，另须加 `PYTHONPATH=src` 避免误导入主工作区 `src/`。这条描述的是当前这台机器与环境，可能变化；换环境先确认，不以本文件为准。
 
 ## 6 项目现状（速查指针，动态内容以来源为准）
 
@@ -109,7 +109,7 @@ git log --oneline -3                    # 最近提交
   git worktree add --no-track ../alohamini-cartesian-lib-<线名> -b work/<线名> origin/main
   ```
   不要在主工作区切换分支，同一 worktree 内不得并行两个写入者。
-- **交付与 PR**：在任务分支完成开发并跑通本项目准入检查（`uv run --no-sync ruff check . && uv run --no-sync ruff format --check . && uv run --no-sync python -m pytest tests -o addopts=""`）后，推送 `work/<线名>` 到 `origin` 并创建指向 `main` 的 PR（`gh pr create --base main`，严格按 `.github/PULL_REQUEST_TEMPLATE.md` 填写）。
+- **交付与 PR**：在任务分支完成开发并跑通本项目准入检查（`UV_PROJECT_ENVIRONMENT=../alohamini-cartesian-lib/.venv uv run --no-sync ruff check . && UV_PROJECT_ENVIRONMENT=../alohamini-cartesian-lib/.venv uv run --no-sync ruff format --check . && UV_PROJECT_ENVIRONMENT=../alohamini-cartesian-lib/.venv uv run --no-sync python -m pytest tests -o addopts=""`）后，推送 `work/<线名>` 到 `origin` 并创建指向 `main` 的 PR（`gh pr create --base main`，严格按 `.github/PULL_REQUEST_TEMPLATE.md` 填写）。
 - **权限红线**：允许 Agent 推送自己的 `work/*` 任务分支并创建/更新 PR；**严禁** push `main`，**严禁**自行合并 PR，也不要本地直接合并回主线。
 - **合并与自动清理**：PR 统一由用户在远端审查并通过所有 Required Status Checks 后以 **Create a merge commit** 合并（保留“任务信封”合并节点）；远程 `work/*` 分支在 PR 合并后自动删除。对已通过 Merge Commit 合入 `origin/main` 且工作树完全干净的本地 `work/*` 分支及对应 worktree，已永久预授权 Agent 通过 `bash tools/sync_and_clean.sh` 自动清理，无需逐次请示；未合并、含未提交改动或用途不明的分支严禁删除。
 <!-- git-pr-workflow:end -->
