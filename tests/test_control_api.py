@@ -225,12 +225,8 @@ class _ClientFactory:
 # ===========================================================================
 
 
-def test_char_3_controller_gripper_command_is_interlock_only() -> None:
-    """A GripperCommand arms ACTIVE(ARM) but never sends or solves.
-
-    A wrong implementation that forwards the gripper command to the sender, or
-    that reports ``sent=True``, is caught here.
-    """
+def test_char_3_controller_rejects_non_pose_gripper_command() -> None:
+    """A GripperCommand is rejected by single-arm CartesianController with zero send (ADR D25)."""
 
     class _RecordingSender:
         def __init__(self) -> None:
@@ -260,10 +256,10 @@ def test_char_3_controller_gripper_command_is_interlock_only() -> None:
 
     assert outcome.sent is False
     assert outcome.action is None
-    assert outcome.error_code is None
+    assert outcome.error_code is ControlError.UNSUPPORTED_TARGET
     assert sender.calls == []
-    assert machine.state is ControlState.ACTIVE
-    assert machine.active_stage is Stage.ARM
+    assert machine.state is ControlState.READY
+    assert machine.active_stage is None
 
 
 def test_char_4_fault_reset_clears_last_reason() -> None:

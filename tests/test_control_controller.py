@@ -1151,380 +1151,40 @@ def test_t_c10_7_unknown_blocked_direction_is_failsafe_no_motion() -> None:
 
 
 # ===========================================================================
-# P4-B cycle 4 —— T-C5 底盘显式停车 + T-C6 控制器级阶段互锁
-# (appended; 既有 50 例未动)
-# ===========================================================================
-#
-# Required behavior (acceptance, 本 cycle 冻结):
-# - T-C5 (D014): 同一 CartesianController 实例在 ACTIVE(BASE_LIFT) 下, tick 收到底盘类
-#   目标 (BaseCommand) 或本周期无新目标 (None, 「间隙」) 时:
-#     * 底盘运动命令 (x/y/turn 任一非零) 正常透传: 经 sender 恰发一次
-#       `{"x.vel": x, "y.vel": y, "theta.vel": turn}`, sent=True, error_code=None;
-#     * 显式零速 (BaseCommand(0,0,0,...)) 与「间隙」(None) 都必须经 sender 显式发送
-#       `{"x.vel":0,"y.vel":0,"theta.vel":0}` (D014: 不依赖 watchdog 兜底);
-#     * 停止/退出路径 (StopCommand->STANDBY, ReleaseCommand->SETTLING) 之后的底盘 tick
-#       仍必须显式发送全零速度 (不得因「非 ACTIVE(BASE_LIFT)」而静默跳过);
-#     * dry_run=True 时底盘全路径 sender 调用恒 0 (action 仍给出拟发送值);
-#     * 底盘路径绝不求解 IK, action 键恰为 alohamini 底盘动作键 x.vel/y.vel/theta.vel.
-# - T-C6 (V03/D003, P2 裁定语义): 控制器把运动类命令交由状态机裁决, 跨阶段冲突时状态机
-#   置 BLOCKED 且抛 MotionBlocked, 且**零发送**:
-#     * ACTIVE(ARM) + tick 收到 BASE_LIFT 类目标 (含显式零速) -> BLOCKED + raise;
-#     * ACTIVE(BASE_LIFT) + tick 收到 ARM 类命令 -> BLOCKED + raise (对称反向);
-#     * 互锁后经 release + 停稳窗口 -> READY 的恢复路径为状态机既有行为, 且可再次驱动.
-#
-# 冻结 seam (本 cycle 设计并冻结, 待主 Agent 固化; 相对既有 50 例的 `tick(feedback,
-# target)` 签名保持向后兼容):
-#   - `CartesianController.tick(feedback, target)` 以 target 的**类型**分派底盘/机械臂:
-#       target: BaseCommand                     -> 底盘 (BASE_LIFT) 路径
-#       target: None                            -> 底盘「间隙」(无新目标) 路径
-#       target: ArmCommand                      -> 机械臂命令路径 (仅用于阶段互锁裁决)
-#       target: numpy.ndarray (4x4 pose) 及其它 -> 既有机械臂 pose 路径 (行为不变)
-#   - 底盘路径 (BaseCommand/None):
-#       * machine ACTIVE 时命令先交 `machine.handle(target)` 裁决:
-#           - 同阶段 (BASE_LIFT) -> no-op, 继续发送;
-#           - 跨阶段 (ARM)       -> state=BLOCKED, 抛 MotionBlocked, 不发送;
-#         ACTIVE(BASE_LIFT) 下发送 `{"x.vel":x,"y.vel":y,"theta.vel":turn}`
-#         (target is None -> 全零);
-#       * machine 非 ACTIVE (STANDBY/READY/SETTLING/BLOCKED/FAULT) 时不交状态机
-#         (避免误激活/误抛), 一律显式发送全零速度 (停止/间隙/退出安全路径);
-#       * machine ACTIVE(ARM) 且 target is None -> NOT_ACTIVE, 不发送.
-#   - 机械臂命令路径 (ArmCommand): 仅把命令交 `machine.handle` 做阶段裁决; 跨阶段 ->
-#     BLOCKED + raise, 零发送. (同阶段语义不在本 cycle 范围.)
-#   - 底盘动作键冻结为 alohamini 既有动作空间 `x.vel` / `y.vel` / `theta.vel`
-#     (alohamini.py:819-820, alohamini_host.py:401-403, replay_bi.py:126).
-#
-# 本 cycle 有意区分以下 reasonable-but-WRONG 实现 (每个都会被至少一个用例捕获):
-# - 底盘目标被机械臂路径吞掉: ACTIVE(ARM) 下收到底盘目标仍照常求解/发送
-#   (T-C6.1/T-C6.2: 会真的发出机械臂动作 -> sender 非空且未抛 MotionBlocked);
-# - 「只切状态不发零速」: 显式零速/间隙/停止/退出时不发全零 (T-C5.2/T-C5.3/T-C5.4/T-C5.5);
-# - 只按 nonzero 请求发送, 间隙时沿用上一速度 (T-C5.3);
-# - 底盘路径漏做 dry_run 拦截 (T-C5.6/T-C5.7);
-# - 底盘路径误走 IK 或误用 `.pos` 键 (T-C5.1/T-C5.8);
-# - 互锁只置 BLOCKED 不抛出, 或先发送再互锁 (T-C6.1/T-C6.2/T-C6.3);
-# - 反向只锁单向 (T-C6.3).
-#
-# Pure logic only: 注入 FakeClock, 无真实时钟 / sleep / IO / 随机 / 硬件.
+# ADR D25 (Q4-A): CartesianController 仅负责单臂 4x4 位姿闭环
+# Base/Lift/Gripper/ArmCommand 路由与跨阶段互锁由 ControlStateMachine + AlohaMiniControl 承担，
+# controller.tick() 收到非 ndarray 目标一律 fail-closed 返回 UNSUPPORTED_TARGET、零发送、不解 IK。
 # ===========================================================================
 
-BASE_ACTION_ZERO: dict[str, float] = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
 
-
-def base_action(x: float, y: float, turn: float) -> dict[str, float]:
-    """Frozen expectation for the alohamini base action dict (identity mapping)."""
-    return {"x.vel": float(x), "y.vel": float(y), "theta.vel": float(turn)}
-
-
-def base_command(
-    x: float = 0.0, y: float = 0.0, turn: float = 0.0, *, seconds: float = 1.0
-) -> object:
-    """构造带显式速度分量与时长参数的 BaseCommand。"""
-    from alohamini_cartesian.control.commands import BaseCommand
-
-    return BaseCommand(x=x, y=y, turn=turn, seconds=seconds)
-
-
-def base_stop_command() -> object:
-    """D014/D017 explicit zero-velocity base command (pure-data base stop)."""
-    from alohamini_cartesian.control.commands import BaseCommand
-
-    return BaseCommand(x=0.0, y=0.0, turn=0.0, seconds=0.0)
-
-
-def arm_command(
-    *, dx: float = 0.01, dy: float = 0.0, dz: float = 0.0, side: str = "left"
-) -> object:
-    """构造指定侧的小幅平移 ArmCommand。"""
-    from alohamini_cartesian.control.commands import ArmCommand, Side
-
-    return ArmCommand(side=Side.LEFT if side == "left" else Side.RIGHT, dx=dx, dy=dy, dz=dz)
-
-
-def make_base_controller(*, dry_run: bool = False) -> SimpleNamespace:
-    """Controller in ACTIVE(BASE_LIFT); empty IK script makes any base-path solve fail."""
-    return make_controller([], dry_run=dry_run, stage="base")
-
-
-def assert_base_action_close(actual: dict[str, float], expected: dict[str, float]) -> None:
-    """断言底盘动作与冻结期望完全一致。"""
-    assert set(actual) == set(expected)
-    for key, value in expected.items():
-        assert actual[key] == pytest.approx(value, abs=1e-12), f"key {key!r}"
-
-
-# ---------------------------------------------------------------------------
-# T-C5.1 — 底盘运动命令在 ACTIVE(BASE_LIFT) 下正常透传 (x/y/turn -> x.vel/y.vel/theta.vel).
-# 若实现不建底盘路径, 这里会返回 NOT_ACTIVE 且零发送.
-# ---------------------------------------------------------------------------
-def test_t_c5_1_base_drive_command_passes_through() -> None:
-    """底盘运动命令在 ACTIVE(BASE_LIFT) 下透传为 x/y/theta.vel。"""
-    ctx = make_base_controller()
-
-    outcome = ctx.controller.tick(
-        make_feedback(BASE_Q), base_command(x=0.15, y=-0.08, turn=12.0, seconds=1.0)
-    )
-
-    expected = base_action(0.15, -0.08, 12.0)
-    assert outcome.sent is True
-    assert outcome.error_code is None
-    assert outcome.action is not None
-    assert_base_action_close(outcome.action, expected)
-    assert len(ctx.sender.calls) == 1
-    assert_base_action_close(ctx.sender.calls[0], expected)
-    assert ctx.ik.calls == []  # 底盘路径绝不为机械臂求解
-
-
-# ---------------------------------------------------------------------------
-# T-C5.2 — 显式零速 BaseCommand 仍必须经 sender 显式发送全零速度 (D014).
-# 若实现把零速当「无操作」跳过发送, sender 为空 -> RED.
-# ---------------------------------------------------------------------------
-def test_t_c5_2_base_explicit_zero_command_sends_zero_velocity() -> None:
-    """显式零速底盘命令仍须经 sender 发送全零速度。"""
-    ctx = make_base_controller()
-
-    outcome = ctx.controller.tick(make_feedback(BASE_Q), base_stop_command())
-
-    assert outcome.sent is True
-    assert outcome.error_code is None
-    assert len(ctx.sender.calls) == 1
-    assert_base_action_close(ctx.sender.calls[0], BASE_ACTION_ZERO)
-
-
-# ---------------------------------------------------------------------------
-# T-C5.3 — 「间隙」(本周期无新目标, target=None) 必须显式发送全零速度, 不得沿用上一速度.
-# 若实现只在 nonzero 请求时发送, 第 2 次调用不发零 -> RED.
-# ---------------------------------------------------------------------------
-def test_t_c5_3_base_gap_without_request_sends_zero_velocity() -> None:
-    """无新目标的间隙周期必须显式发送全零速度。"""
-    ctx = make_base_controller()
-    fb = make_feedback(BASE_Q)
-
-    ctx.controller.tick(fb, base_command(x=0.2, y=0.0, turn=0.0, seconds=1.0))
-    gap = ctx.controller.tick(fb, None)
-
-    assert gap.sent is True
-    assert gap.error_code is None
-    assert len(ctx.sender.calls) == 2
-    assert_base_action_close(ctx.sender.calls[1], BASE_ACTION_ZERO)
-
-
-# ---------------------------------------------------------------------------
-# T-C5.4 — 停止路径: 驱动后 StopCommand -> STANDBY, 随后的底盘 tick 仍须显式发全零.
-# 「只切状态不发零速」的实现会在此零发送 -> RED.
-# ---------------------------------------------------------------------------
-def test_t_c5_4_base_stop_path_sends_explicit_zero_velocity() -> None:
-    """停止路径：切到 STANDBY 后底盘 tick 仍发全零速度。"""
-    from alohamini_cartesian.control.commands import ControlState, StopCommand
-
-    ctx = make_base_controller()
-    fb = make_feedback(BASE_Q)
-    ctx.controller.tick(fb, base_command(x=0.2, y=0.0, turn=0.0, seconds=1.0))
-
-    ctx.machine.handle(StopCommand())
-    assert ctx.machine.state is ControlState.STANDBY
-
-    outcome = ctx.controller.tick(fb, base_stop_command())
-
-    assert outcome.sent is True
-    assert outcome.error_code is None
-    assert_base_action_close(ctx.sender.calls[-1], BASE_ACTION_ZERO)
-
-
-# ---------------------------------------------------------------------------
-# T-C5.5 — 退出路径: 驱动后 ReleaseCommand -> SETTLING, 随后无新目标的底盘 tick 仍须显式发全零.
-# ---------------------------------------------------------------------------
-def test_t_c5_5_base_exit_path_sends_explicit_zero_velocity() -> None:
-    """退出路径：release 后无新目标的底盘 tick 仍发全零速度。"""
-    from alohamini_cartesian.control.commands import ControlState, ReleaseCommand
-
-    ctx = make_base_controller()
-    fb = make_feedback(BASE_Q)
-    ctx.controller.tick(fb, base_command(x=0.2, y=0.0, turn=0.0, seconds=1.0))
-
-    ctx.machine.handle(ReleaseCommand())
-    assert ctx.machine.state is ControlState.SETTLING
-
-    outcome = ctx.controller.tick(fb, None)
-
-    assert outcome.sent is True
-    assert outcome.error_code is None
-    assert_base_action_close(ctx.sender.calls[-1], BASE_ACTION_ZERO)
-
-
-# ---------------------------------------------------------------------------
-# T-C5.6 — dry_run: 底盘驱动/显式零速/间隙三路径 sender 恒 0, 但 action 仍给出拟发送值.
-# 若 dry_run 只在机械臂路径生效, 底盘路径会泄漏发送 -> RED.
-# ---------------------------------------------------------------------------
-def test_t_c5_6_dry_run_base_drive_zero_and_gap_never_send() -> None:
-    """dry_run 下底盘驱动、零速与间隙三路径 sender 恒 0。"""
-    ctx = make_base_controller(dry_run=True)
-    fb = make_feedback(BASE_Q)
-
-    o_drive = ctx.controller.tick(fb, base_command(x=0.2, y=0.0, turn=0.0, seconds=1.0))
-    o_zero = ctx.controller.tick(fb, base_stop_command())
-    o_gap = ctx.controller.tick(fb, None)
-
-    assert ctx.sender.calls == []
-    for outcome in (o_drive, o_zero, o_gap):
-        assert outcome.sent is False
-        assert outcome.error_code is None
-        assert outcome.action is not None
-    assert_base_action_close(o_drive.action, base_action(0.2, 0.0, 0.0))
-    assert_base_action_close(o_zero.action, BASE_ACTION_ZERO)
-    assert_base_action_close(o_gap.action, BASE_ACTION_ZERO)
-
-
-# ---------------------------------------------------------------------------
-# T-C5.7 — dry_run: 停止/退出路径 sender 恒 0.
-# ---------------------------------------------------------------------------
-def test_t_c5_7_dry_run_base_stop_and_exit_paths_never_send() -> None:
-    """dry_run 下底盘 stop 与 exit 路径 sender 恒 0。"""
-    from alohamini_cartesian.control.commands import ReleaseCommand, StopCommand
-
-    fb = make_feedback(BASE_Q)
-
-    ctx_stop = make_base_controller(dry_run=True)
-    ctx_stop.controller.tick(fb, base_command(x=0.2, y=0.0, turn=0.0, seconds=1.0))
-    ctx_stop.machine.handle(StopCommand())
-    o_stop = ctx_stop.controller.tick(fb, None)
-
-    ctx_exit = make_base_controller(dry_run=True)
-    ctx_exit.controller.tick(fb, base_command(x=0.2, y=0.0, turn=0.0, seconds=1.0))
-    ctx_exit.machine.handle(ReleaseCommand())
-    o_exit = ctx_exit.controller.tick(fb, None)
-
-    assert ctx_stop.sender.calls == []
-    assert ctx_exit.sender.calls == []
-    for outcome in (o_stop, o_exit):
-        assert outcome.sent is False
-        assert outcome.error_code is None
-        assert outcome.action is not None
-        assert_base_action_close(outcome.action, BASE_ACTION_ZERO)
-
-
-# ---------------------------------------------------------------------------
-# T-C5.8 — 底盘动作键恰为 alohamini 既有动作空间 x.vel/y.vel/theta.vel, 且为恒等映射.
-# 若误用 `.pos` 键或改写数值, 集合/数值断言失败 -> RED.
-# ---------------------------------------------------------------------------
-def test_t_c5_8_base_action_uses_alohamini_base_velocity_keys() -> None:
-    """底盘动作键恰为 x.vel/y.vel/theta.vel，且为恒等映射。"""
-    ctx = make_base_controller()
-
-    ctx.controller.tick(make_feedback(BASE_Q), base_command(x=1.5, y=-2.5, turn=3.5, seconds=1.0))
-
-    assert len(ctx.sender.calls) == 1
-    assert set(ctx.sender.calls[0]) == {"x.vel", "y.vel", "theta.vel"}
-    assert_base_action_close(ctx.sender.calls[0], base_action(1.5, -2.5, 3.5))
-
-
-# ---------------------------------------------------------------------------
-# T-C5.9 — 底盘未激活 (STANDBY) 时绝不放行驱动速度: 驱动请求被显式全零取代.
-# 若实现无视状态透传底盘驱动, 会发出 x.vel=0.9 -> RED; 若实现完全无底盘路径, sent=False -> RED.
-# ---------------------------------------------------------------------------
-def test_t_c5_9_base_drive_is_not_sent_when_base_is_not_active() -> None:
-    """底盘未激活时驱动请求被显式全零速度取代。"""
-    from alohamini_cartesian.control.commands import ControlState, StopCommand
-
-    ctx = make_base_controller()
-    ctx.machine.handle(StopCommand())
-    assert ctx.machine.state is ControlState.STANDBY
-
-    outcome = ctx.controller.tick(
-        make_feedback(BASE_Q), base_command(x=0.9, y=0.0, turn=0.0, seconds=1.0)
-    )
-
-    assert outcome.sent is True
-    assert all(call == BASE_ACTION_ZERO for call in ctx.sender.calls)
-    assert_base_action_close(ctx.sender.calls[-1], BASE_ACTION_ZERO)
-    assert ctx.ik.calls == []
-
-
-# ---------------------------------------------------------------------------
-# T-C6.1 — ACTIVE(ARM) + tick 收到 BASE_LIFT 类目标: 状态机置 BLOCKED 且抛 MotionBlocked,
-# 零发送. 现状 (机械臂路径吞掉底盘目标) 会真的求解并发出机械臂动作 (未抛, sender 非空).
-# ---------------------------------------------------------------------------
-def test_t_c6_1_active_arm_receiving_base_target_blocks_with_zero_send() -> None:
-    """ACTIVE(ARM) 收到底盘目标：锁存 BLOCKED、抛出、零发送。"""
-    from alohamini_cartesian.control.commands import ControlState, MotionBlocked, Stage
-
-    ctx = make_controller([ik_ok(q_delta(0.5))], stage="arm")
-    assert ctx.machine.state is ControlState.ACTIVE
-    assert ctx.machine.active_stage is Stage.ARM
-
-    with pytest.raises(MotionBlocked):
-        ctx.controller.tick(
-            make_feedback(BASE_Q), base_command(x=0.1, y=0.0, turn=0.0, seconds=1.0)
-        )
-
-    assert ctx.machine.state is ControlState.BLOCKED
-    assert ctx.machine.active_stage is None
-    assert ctx.sender.calls == []
-    assert ctx.ik.calls == []
-
-
-# ---------------------------------------------------------------------------
-# T-C6.2 — 显式零速 BaseCommand 仍是 BASE_LIFT 类目标, ACTIVE(ARM) 下不得当作无害空操作.
-# ---------------------------------------------------------------------------
-def test_t_c6_2_active_arm_receiving_explicit_zero_base_target_still_blocks() -> None:
-    """显式零速底盘目标在 ACTIVE(ARM) 下同样触发互锁。"""
-    from alohamini_cartesian.control.commands import ControlState, MotionBlocked
-
-    ctx = make_controller([ik_ok(q_delta(0.5))], stage="arm")
-
-    with pytest.raises(MotionBlocked):
-        ctx.controller.tick(make_feedback(BASE_Q), base_stop_command())
-
-    assert ctx.machine.state is ControlState.BLOCKED
-    assert ctx.sender.calls == []
-
-
-# ---------------------------------------------------------------------------
-# T-C6.3 — 对称反向: ACTIVE(BASE_LIFT) + tick 收到 ARM 类命令 -> BLOCKED + raise, 零发送.
-# 现状返回 NOT_ACTIVE 且不抛 -> RED.
-# ---------------------------------------------------------------------------
-def test_t_c6_3_active_base_lift_receiving_arm_target_blocks_with_zero_send() -> None:
-    """对称反向：ACTIVE(BASE_LIFT) 收到机械臂命令即互锁且零发送。"""
-    from alohamini_cartesian.control.commands import ControlState, MotionBlocked, Stage
-
-    ctx = make_base_controller()
-    assert ctx.machine.active_stage is Stage.BASE_LIFT
-
-    with pytest.raises(MotionBlocked):
-        ctx.controller.tick(make_feedback(BASE_Q), arm_command(dx=0.01))
-
-    assert ctx.machine.state is ControlState.BLOCKED
-    assert ctx.machine.active_stage is None
-    assert ctx.sender.calls == []
-    assert ctx.ik.calls == []
-
-
-# ---------------------------------------------------------------------------
-# T-C6.4 — 互锁可恢复: BLOCKED + release + 停稳窗口 -> READY (状态机既有行为),
-# 恢复后可重新激活底盘并再次正常透传.
-# ---------------------------------------------------------------------------
-def test_t_c6_4_interlock_is_recoverable_via_state_machine_release_and_settle() -> None:
-    """互锁可经 release 加停稳窗口恢复，并重新激活底盘。"""
+def test_non_pose_commands_and_none_return_unsupported_target_with_zero_send() -> None:
+    """Base/Arm/Gripper/Lift 命令与 None 交给单臂控制器均返回 UNSUPPORTED_TARGET 且零发送。"""
     from alohamini_cartesian.control.commands import (
+        ArmCommand,
         BaseCommand,
-        ControlState,
-        MotionBlocked,
-        ReleaseCommand,
-        Stage,
+        GripperAction,
+        GripperCommand,
+        LiftCommand,
+        Side,
     )
 
-    ctx = make_base_controller()
-    with pytest.raises(MotionBlocked):
-        ctx.controller.tick(make_feedback(BASE_Q), arm_command(dx=0.01))
-    assert ctx.machine.state is ControlState.BLOCKED
-
-    ctx.machine.handle(ReleaseCommand())
-    ctx.machine.on_feedback(2, settled=True)  # settled_samples=1 -> READY
-    assert ctx.machine.state is ControlState.READY
-
-    ctx.machine.handle(BaseCommand(x=0.3, y=0.0, turn=0.0, seconds=1.0))
-    assert ctx.machine.active_stage is Stage.BASE_LIFT
-    outcome = ctx.controller.tick(make_feedback(BASE_Q), base_command(x=0.3))
-    assert outcome.sent is True
-    assert_base_action_close(ctx.sender.calls[-1], base_action(0.3, 0.0, 0.0))
+    ctx = make_controller([ik_ok(q_delta(0.5))])
+    fb = make_feedback(BASE_Q)
+    rejected_targets = [
+        BaseCommand(x=0.1, y=0.0, turn=0.0, seconds=1.0),
+        BaseCommand(x=0.0, y=0.0, turn=0.0, seconds=0.0),
+        ArmCommand(side=Side.LEFT, dx=0.01, dy=0.0, dz=0.0),
+        GripperCommand(side=Side.LEFT, action=GripperAction.OPEN),
+        LiftCommand(delta_mm=5.0),
+        None,
+    ]
+    for target in rejected_targets:
+        outcome = ctx.controller.tick(fb, target)
+        assert outcome.sent is False
+        assert outcome.action is None
+        assert outcome.error_code is ctx.mod.ControlError.UNSUPPORTED_TARGET
+    assert ctx.sender.calls == []
+    assert ctx.ik.calls == []
 
 
 # ===========================================================================
@@ -1985,97 +1645,6 @@ def test_t_c9_0_unsupported_target_error_vocabulary_exists() -> None:
     """冻结词汇：ControlError 提供 UNSUPPORTED_TARGET 成员。"""
     mod = load_controller()
     assert "UNSUPPORTED_TARGET" in mod.ControlError.__members__
-
-
-def gripper_open_command(*, side: str = "left") -> object:
-    """构造打开指定侧夹爪的 GripperCommand。"""
-    from alohamini_cartesian.control.commands import GripperAction, GripperCommand, Side
-
-    return GripperCommand(
-        side=Side.LEFT if side == "left" else Side.RIGHT, action=GripperAction.OPEN
-    )
-
-
-def lift_command(*, delta_mm: float = 5.0) -> object:
-    """构造抬升 delta_mm 毫米的 LiftCommand。"""
-    from alohamini_cartesian.control.commands import LiftCommand
-
-    return LiftCommand(delta_mm=delta_mm)
-
-
-# ---------------------------------------------------------------------------
-# T-C9.1 — ACTIVE(ARM) + GripperCommand: ARM 类同阶段无操作, 零发送、不解 IK.
-# else 兜底实现会把它当 arm pose 求解并发送 -> RED.
-# ---------------------------------------------------------------------------
-def test_t_c9_1_gripper_command_is_arm_stage_interlock_only() -> None:
-    """ACTIVE(ARM) 下 GripperCommand 为同阶段无操作：零发送、不解 IK。"""
-    ctx = make_controller([ik_ok(q_delta(0.5))])
-
-    outcome = ctx.controller.tick(make_feedback(BASE_Q), gripper_open_command())
-
-    assert outcome.sent is False
-    assert outcome.action is None
-    assert outcome.error_code is None
-    assert ctx.sender.calls == []
-    assert ctx.ik.calls == []
-    assert ctx.machine.state.name == "ACTIVE"
-
-
-# ---------------------------------------------------------------------------
-# T-C9.2 — ACTIVE(BASE_LIFT) + GripperCommand: 跨阶段冲突 -> BLOCKED + MotionBlocked、零发送.
-# else 兜底实现会返回 NOT_ACTIVE (不置 BLOCKED, 不抛) -> RED.
-# ---------------------------------------------------------------------------
-def test_t_c9_2_gripper_command_cross_stage_blocks_on_base_lift() -> None:
-    """ACTIVE(BASE_LIFT) 下 GripperCommand 跨阶段冲突：BLOCKED、抛出、零发送。"""
-    from alohamini_cartesian.control.commands import ControlState, MotionBlocked, Stage
-
-    ctx = make_base_controller()
-    assert ctx.machine.active_stage is Stage.BASE_LIFT
-
-    with pytest.raises(MotionBlocked):
-        ctx.controller.tick(make_feedback(BASE_Q), gripper_open_command())
-
-    assert ctx.machine.state is ControlState.BLOCKED
-    assert ctx.machine.active_stage is None
-    assert ctx.sender.calls == []
-    assert ctx.ik.calls == []
-
-
-# ---------------------------------------------------------------------------
-# T-C9.3 — ACTIVE(BASE_LIFT) + LiftCommand: BASE_LIFT 类同阶段无操作, 零发送、不解 IK.
-# else 兜底实现会返回 NOT_ACTIVE (error_code 非 None) -> RED.
-# ---------------------------------------------------------------------------
-def test_t_c9_3_lift_command_is_base_stage_interlock_only() -> None:
-    """ACTIVE(BASE_LIFT) 下 LiftCommand 为同阶段无操作：零发送、不解 IK。"""
-    ctx = make_base_controller()
-
-    outcome = ctx.controller.tick(make_feedback(BASE_Q), lift_command())
-
-    assert outcome.sent is False
-    assert outcome.action is None
-    assert outcome.error_code is None
-    assert ctx.sender.calls == []
-    assert ctx.ik.calls == []
-
-
-# ---------------------------------------------------------------------------
-# T-C9.4 — ACTIVE(ARM) + LiftCommand: 跨阶段冲突 -> BLOCKED + MotionBlocked、零发送.
-# else 兜底实现会把它当 arm pose 求解并发送 (未抛, sender 非空) -> RED.
-# ---------------------------------------------------------------------------
-def test_t_c9_4_lift_command_cross_stage_blocks_on_arm() -> None:
-    """ACTIVE(ARM) 下 LiftCommand 跨阶段冲突：BLOCKED、抛出、零发送。"""
-    from alohamini_cartesian.control.commands import ControlState, MotionBlocked, Stage
-
-    ctx = make_controller([ik_ok(q_delta(0.5))], stage="arm")
-    assert ctx.machine.active_stage is Stage.ARM
-
-    with pytest.raises(MotionBlocked):
-        ctx.controller.tick(make_feedback(BASE_Q), lift_command())
-
-    assert ctx.machine.state is ControlState.BLOCKED
-    assert ctx.machine.active_stage is None
-    assert ctx.sender.calls == []
-    assert ctx.ik.calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -2601,28 +2170,6 @@ def test_t_c18_4_dry_run_never_arms_deadline() -> None:
         assert out.error_code is None  # 已算出拟发送动作
         assert ctx.controller.next_deadline is None, "dry_run 无实际发送不得武装 deadline"
     assert ctx.sender.calls == []
-
-
-# ---------------------------------------------------------------------------
-# T-C18.5 — 任何实际发送 (含底盘显式零速) 都武装 deadline (「上次实际发送时刻」泛化).
-# 仅在 arm 路径更新 deadline 的实现会在此为 None -> RED (seam 待主 Agent 裁定).
-# ---------------------------------------------------------------------------
-def test_t_c18_5_actual_base_send_also_arms_deadline() -> None:
-    """任何实际发送（含底盘显式零速）都武装 deadline。"""
-    ctx = make_cycle6_controller(
-        [],
-        stage="base",
-        keepalive_interval_s=KEEPALIVE_INTERVAL_S,
-        clock_start=KEEPALIVE_CLOCK_START,
-    )
-
-    assert ctx.controller.next_deadline is None
-    out = ctx.controller.tick(make_feedback(BASE_Q), base_command(x=0.1, y=0.0, turn=0.0))
-    assert out.sent is True
-    assert len(ctx.sender.calls) == 1
-    assert ctx.controller.next_deadline == pytest.approx(
-        KEEPALIVE_CLOCK_START + KEEPALIVE_INTERVAL_S
-    )
 
 
 # ===========================================================================

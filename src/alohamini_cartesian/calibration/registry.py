@@ -193,18 +193,14 @@ class CalibrationRegistry:
     def append_if_absent(self, record: GenerationRecord) -> bool:
         """按 ``calib_id`` 幂等追加：已存在则返回 ``False``、不追加、不覆盖首条。
 
-        这是登记的主入口（``tools/calib_register.py --write`` 与 ``tools/calib_fetch.py``
-        的 ``--record`` 都走它）：调用方不必先 ``find()`` 再 ``register()``。
+        这是登记的唯一入口（``tools/calib_register.py --write`` 与 ``tools/calib_fetch.py``
+        的 ``--record`` 都走它）：调用方不必先 ``find()`` 再写入。
         落盘不在这里发生——要写文件得另调 :meth:`save`。
         """
         if self.find(record.calib_id) is not None:
             return False
         self._generations.append(record)
         return True
-
-    def register(self, record: GenerationRecord) -> bool:
-        """旧名，等价于 :meth:`append_if_absent`（同 ``calib_id`` 已存在时返回 ``False``）。"""
-        return self.append_if_absent(record)
 
     def save(self) -> None:
         """把当前记录写回 :attr:`path`（YAML，UTF-8，不转义非 ASCII，不重排字段）。"""

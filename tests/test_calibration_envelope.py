@@ -11,8 +11,8 @@
   ``IMPLAUSIBLE``（提醒、可继续）/ ``WRONG_DATASET``（只有臂、没有底盘与升降轴 → 不可继续，
   文案点出「遥操臂」）。
 - **阈值只有一处**：夹爪 60–160°、肩 180–260°、腕 150–200°、占位 ``(0, 4095)``，常量名与值都
-  冻在 ``envelope`` 里；``identity.describe_plausibility`` /
-  ``identity.validate_plausibility`` 降级成薄封装（改 ``envelope`` 常量要反映到输出）。
+  冻在 ``envelope`` 里；``envelope.describe_thresholds`` /
+  ``envelope.plausibility_warnings`` 直接提供渲染与告警列表（改 ``envelope`` 常量要反映到输出）。
   已删除的判据（range 中心离归零位 2047 超过 90° → ``IMPLAUSIBLE``，连同常量
   ``ZERO_POSITION_TICK`` / ``ZERO_POINT_OFFSET_WARN_DEG`` 与私有辅助 ``_center_deg`` /
   ``_center_problem``）不得以任何形式残留在模块里。
@@ -614,25 +614,21 @@ def test_a_stale_accepted_entry_with_a_different_calib_id_still_warns(tmp_path: 
     assert "名单过期" in _detail_of(report, "arm_left_gripper")
 
 
-# ---------------------------------------------------------------- identity 侧薄封装
+# ---------------------------------------------------------------- 阈值渲染与告警清单
 
 
-def test_describe_plausibility_reflects_the_envelope_constants(
+def test_describe_thresholds_reflects_the_envelope_constants(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``identity.describe_plausibility`` 是薄封装：改 ``envelope`` 常量就改输出。
+    """``envelope.describe_thresholds`` 读取模块常量：改 ``envelope`` 常量就改输出。
 
-    返回类型仍是 ``tuple[str, ...]``；阈值说明由 ``envelope`` 渲染，identity 不再自己带数字。
-
-    末尾三条是**文案锁**：渲染文本不得再提已删除的中心判据（归零位 ``2047``、「中心」
-    「归零位」字样）。它与 ``test_module_exposes_the_frozen_threshold_constants`` 的符号锁
-    （``hasattr`` 为 False）互补——符号锁管「模块里没有那个常量 / 函数」，文案锁管「输出里
-    没有那条判据的说辞」。
+    返回类型仍是 ``tuple[str, ...]``；末尾三条是**文案锁**：渲染文本不得再提已删除的
+    中心判据（归零位 ``2047``、「中心」「归零位」字样）。
     """
     envelope = _load_envelope()
     monkeypatch.setattr(envelope, "GRIPPER_WIDTH_DEG_RANGE", (101.0, 202.0))
 
-    lines = identity.describe_plausibility()
+    lines = envelope.describe_thresholds()
 
     assert isinstance(lines, tuple)
     assert lines
@@ -644,17 +640,10 @@ def test_describe_plausibility_reflects_the_envelope_constants(
     assert "归零位" not in text
 
 
-def test_describe_plausibility_renders_the_wrist_window_without_patching() -> None:
-    """默认（未 monkeypatch）渲染文本里带腕族区间 150–200°：腕族此前没有任何渲染文案锁。
-
-    与 ``test_describe_plausibility_reflects_the_envelope_constants`` 分工：那条 monkeypatch
-    后只锁夹爪 ``101``/``202``（证明渲染读模块全局）；这条锁「腕族在场且是 150–200°」——
-    若有人把腕从 ``describe_thresholds`` 里删掉、或换回旧的 160–190，只有这条会红。
-
-    同时把「输出里没有已删除判据的说辞」这条文案锁复制一份到**默认**渲染：monkeypatch 那条
-    只覆盖被改过的渲染，默认渲染此前没被锁过。
-    """
-    text = " ".join(identity.describe_plausibility())
+def test_describe_thresholds_renders_the_wrist_window_without_patching() -> None:
+    """默认（未 monkeypatch）渲染文本里带腕族区间 150–200°。"""
+    envelope = _load_envelope()
+    text = " ".join(envelope.describe_thresholds())
 
     assert "腕 150–200°" in text
     assert "150" in text
@@ -664,28 +653,30 @@ def test_describe_plausibility_renders_the_wrist_window_without_patching() -> No
     assert "归零位" not in text
 
 
-def test_validate_plausibility_delegates_to_plausibility_warnings() -> None:
-    """``identity.validate_plausibility`` 委托 ``envelope.plausibility_warnings``。
-
-    内容一致、返回 ``list[str]``、永不抛异常（只报告不阻断）。
-    """
+def test_plausibility_warnings_reports_without_blocking() -> None:
+    """``envelope.plausibility_warnings`` 返回 ``list[str]``、永不抛异常（只报告不阻断）。"""
     envelope = _load_envelope()
     motors = _fixture_motors(_GEN_A)
 
-    warnings = identity.validate_plausibility(motors)
+    warnings = envelope.plausibility_warnings(motors)
 
     assert isinstance(warnings, list)
     assert all(isinstance(item, str) for item in warnings)
-    assert warnings == envelope.plausibility_warnings(motors)
     assert any("arm_left_gripper" in item for item in warnings)
 
 
-def test_validate_plausibility_never_raises_on_an_arm_only_table() -> None:
+def test_plausibility_warnings_never_raises_on_an_arm_only_table() -> None:
     """遥操臂形态（只有 14 台手臂）也不抛异常：合理性校验只告警、不阻断。"""
     envelope = _load_envelope()
     motors = _teleop_only_motors()
 
-    warnings = identity.validate_plausibility(motors)
+    warnings = envelope.plausibility_warnings(motors)
 
     assert isinstance(warnings, list)
-    assert warnings == envelope.plausibility_warnings(motors)
+    assert any("遥操臂" in item for item in warnings)
+
+
+def test_identity_no_longer_exposes_plausibility_wrappers() -> None:
+    """``identity`` 不再保留转发包络判定的薄封装（单向依赖 ``identity ← envelope``）。"""
+    assert not hasattr(identity, "describe_plausibility")
+    assert not hasattr(identity, "validate_plausibility")
