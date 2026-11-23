@@ -1,0 +1,61 @@
+# 项目专属 PR 自动检查（Lint + 离线测试含 placo 数值 IK 用例）
+# 刻意不监听 edited，防止修改 PR 文案错别字时打断并重跑完整构建测试。
+
+name: PR Checks
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: pr-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ruff:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install ruff
+        run: python -m pip install --upgrade pip "ruff>=0.6"
+
+      - name: Run ruff check and format check
+        run: |
+          ruff check .
+          ruff format --check .
+
+  pytest:
+    name: pytest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install package with yaml and kinematics extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[yaml,kinematics]" "pytest>=8.0"
+
+      - name: Run offline test suite
+        run: |
+          echo "Note: tests/*_lerobot_parity.py are skipped without vendor lerobot fork."
+          python -m pytest tests -o addopts=""

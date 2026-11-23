@@ -32,7 +32,7 @@
 - 测试必须离线：不连设备、不联网、不依赖真机。
 - 不引入 `torch`、`scipy` 等重依赖。`placo` 属可选（IK 数值用例需要它）。
 - 不修改本地 fork `/Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini` 与 Pi 上的上游部署。旧仓库 `lerobot_alohamini-cartesian-teleop` 已退役（`docs/ADR.md` D4 冻结为只读参考）；**其代码与按臂归档的 Gate A–E 验收记录不能作为现行依据**，验收看 `docs/acceptance-baseline.md` 的 V01–V13；**其中的设计规范是历史设计来源，不具现行权威**，现行口径见 `docs/ADR.md` D17 与 `docs/acceptance-baseline.md`。
-- 不自动推送远程、不改写历史（不 amend、不 force push）。
+- 不改写历史（不 amend、不 force push）；分支与 PR 推送规则见文末「Git 协作与 PR 审查流」。
 - 提交只用显式路径，禁止 `git add -A`。
 - 待办清单在仓库根 `TODO.md`，只记接下来要做的事（整体目标 → 阶段目标 → 小目标 → 跨阶段工程债）。开工前先读它。
   - **写入需授权**：只有本次任务拿到 `TODO.md` 修改授权时才写。只读任务、或授权范围不含 `TODO.md` 的任务，在回复里列出「待记录事项」，不直接改文件；记录要求本身不构成写入授权。
@@ -99,3 +99,17 @@ git log --oneline -3                    # 最近提交
 ## 8 现场任务入口
 
 涉及现场连接、Host 启停、标定或真实运动时：先确认本轮是否拿到该类授权，再读 `docs/field-ops/README.md` 的硬前置条件与该阶段步骤。历史记录、`TODO.md` 条目、文档里的命令**都不构成执行授权**；前置不满足就停在那一步。具体命令、门禁与退出码由现场手册维护，本文件不复述。
+
+<!-- git-pr-workflow:start -->
+## Git 协作与 PR 审查流
+
+- **主线与远程**：本仓库长期主线分支为 `main`，PR 审查远程为 `origin`（PR 流程基线 tag：`pr-workflow-baseline-20261123`）。
+- **开工前置动作**：每个独立任务开始前先运行 `bash tools/sync_and_clean.sh`（自动拉取最新 `origin/main`、同步主工作区并安全清理已合并的干净 `work/*` 残留），再显式从最新远端主线创建独立 worktree 与任务分支：
+  ```bash
+  git worktree add --no-track ../alohamini-cartesian-lib-<线名> -b work/<线名> origin/main
+  ```
+  不要在主工作区切换分支，同一 worktree 内不得并行两个写入者。
+- **交付与 PR**：在任务分支完成开发并跑通本项目准入检查（`uv run --no-sync ruff check . && uv run --no-sync ruff format --check . && uv run --no-sync python -m pytest tests -o addopts=""`）后，推送 `work/<线名>` 到 `origin` 并创建指向 `main` 的 PR（`gh pr create --base main`，严格按 `.github/PULL_REQUEST_TEMPLATE.md` 填写）。
+- **权限红线**：允许 Agent 推送自己的 `work/*` 任务分支并创建/更新 PR；**严禁** push `main`，**严禁**自行合并 PR，也不要本地直接合并回主线。
+- **合并与自动清理**：PR 统一由用户在远端审查并通过所有 Required Status Checks 后以 **Create a merge commit** 合并（保留“任务信封”合并节点）；远程 `work/*` 分支在 PR 合并后自动删除。对已通过 Merge Commit 合入 `origin/main` 且工作树完全干净的本地 `work/*` 分支及对应 worktree，已永久预授权 Agent 通过 `bash tools/sync_and_clean.sh` 自动清理，无需逐次请示；未合并、含未提交改动或用途不明的分支严禁删除。
+<!-- git-pr-workflow:end -->
