@@ -1,6 +1,6 @@
 # 架构决策记录（ADR）
 
-本文记录 `alohamini-cartesian` 自 v0.1.0 起沿用的设计取舍与流程红线，编号 D1–D23。本文件收设计取舍；纯流程条目仅收 D19 一类发版纪律，不再追加。每条按背景、决定、后果三段记录，后果同时写正面收益与已知代价。状态写作「已接受（自 vX.Y.Z 起）」；已落地但尚未发版的条目写作「已接受（未发版：…）」并写明当前 `pyproject.toml` 版本与 `docs/changelog.md` 缺行，不记具体日期。新的重大取舍按顺序追加编号，已接受的条目不回改。
+本文记录 `alohamini-cartesian` 自 v0.1.0 起沿用的设计取舍与流程红线，编号 D1–D25。本文件收设计取舍；纯流程条目仅收 D19 一类发版纪律，不再追加。每条按背景、决定、后果三段记录，后果同时写正面收益与已知代价。状态写作「已接受（自 vX.Y.Z 起）」；已落地但尚未发版的条目写作「已接受（未发版：…）」并写明当前 `pyproject.toml` 版本与 `docs/changelog.md` 缺行，不记具体日期。新的重大取舍按顺序追加编号，已接受的条目不回改。
 
 ## 索引
 
@@ -30,6 +30,7 @@
 | D22 | 标定代际化：把标定从常量改为带代际的输入 | 已接受（未发版：`pyproject.toml` 为 0.7.0，`docs/changelog.md` 无 D22 条目） |
 | D23 | 标定包络检查与标定抓取：阈值单一来源、不合格不硬阻断、会话内不可变 | 已接受（未发版：`pyproject.toml` 为 0.7.0，`docs/changelog.md` 无 D23 条目） |
 | D24 | `ArmHandle.move_to` 默认保持起始姿态、航点二分步进、暴露真机跟随参数与 `Stage.BASE_LIFT` 解耦 | 已接受（未发版：`pyproject.toml` 为 0.7.0，`docs/changelog.md` 无 D24 条目） |
+| D25 | 移除未接入旧模块与重复转发层、收敛单臂控制器、拆分超长基准脚本并瘦身文档与许可对齐 | 已接受（未发版：`pyproject.toml` 为 0.7.0，`docs/changelog.md` 无 D25 条目） |
 
 ## D1 依赖形态：独立包，lerobot 作为可选 extra
 
@@ -842,3 +843,25 @@ V01 是本阶段唯一挡住「能不能说不接 leader 就算通」的条目�
 
 正面：真实 `ArmIK` 9 cm 直线移动闭环离线验证一次通过且无 `STEP_LIMIT` 死锁；升降与底盘不再被手臂 `signs`/`zeros` 标定阻塞；消除 3 次多余相机帧请求；IK 整步耗时降低约 20 倍；状态机消除长跑 O(N) 扫描与内存泄漏。
 已知代价：依赖旧行为（`move_to` 隐式转世界单位姿态、`robot_dry_run` 预期在 priming 被拒及 3 次相机帧）的调用方或测试需同步切换；真机上航点步进仍待 Phase 3 现场窗口验证。
+
+## D25 移除未接入旧模块与重复转发层、收敛单臂控制器、拆分超长基准脚本并瘦身文档与许可对齐
+
+状态：已接受（未发版：`pyproject.toml` 为 0.7.0，`docs/changelog.md` 无 D25 条目）
+
+### 背景
+
+经过七个版本演进，仓库内积累了一批未接入生产路径或由历史兼容留下的包袱：① `calibration/limits.py` 与空模板 `configs/limits-observed.yaml` 从未接入控制回路；② `adapter/lerobot_version.py` 在 `src/` 内零调用点，仅被自测文件导入，且与 D16「运行时看能力探测而非版本号」原则重影；③ `calibration/identity.py` 保留转发 `envelope.py` 的薄封装，`CalibrationRegistry.register()` 仅是 `append_if_absent()` 的别名；④ `CartesianController.tick()` 残留 `BaseCommand`/`ArmCommand`/`GripperCommand`/`LiftCommand`/`None` 五条死路由分支，实际生产路由和跨阶段互锁已完全由 `ControlStateMachine` + `AlohaMiniControl` 承担；⑤ `benchmarks/alohamini_io/measure_latency.py` 单文件达 3,670 行且重复实现了 `deg_per_unit` 换算公式；⑥ `tests/test_doc_line_references.py` 锁死 182 处绝对行号，导致正常重构源码频繁误红；⑦ 仓库根缺少 Apache-2.0 `LICENSE` / `NOTICE` 与一页式架构导览，`TODO.md` 膨胀至 47 KB，过渡表 `docs/field-ops/reference/mapping.md` 与 `4-experiments.md` §10.7 460 行内嵌脚本造成高接手成本。
+
+### 决定
+
+1. **许可与署名对齐（Q5）**：根目录新增 Apache-2.0 `LICENSE`（与 `AM-ARM-LICENSE` 逐字节一致）与 `NOTICE`（署名 HuggingFace `lerobot` 与 `liyiteng/AM-ARM` URDF 溯源 sha256），对齐 `pyproject.toml`。
+2. **文档行号守卫降级为路径存在性守卫（Q1）**：`tests/test_doc_line_references.py` 保留目标文件解析、外部白名单与同名碰撞锁，不再锁死源码绝对行号与空行。
+3. **移除未接入模块与重复别名（Q2-A / Q3-A）**：删除 `calibration/limits.py`、`configs/limits-observed.yaml`、`adapter/lerobot_version.py` 及对应测试；删除 `identity.describe_plausibility` / `identity.validate_plausibility` 薄封装（调用方直连 `calibration.envelope`，保持 `identity ← envelope` 单向依赖）与 `CalibrationRegistry.register()` 别名；新增统一标定子命令入口 `tools/calib.py`（`fetch`/`health`/`register`，兼容保留三份独立脚本）。
+4. **收敛单臂控制器（Q4-A）**：`CartesianController.tick()` 仅接受单臂 4×4 `numpy.ndarray` 位姿，其余目标一律 fail-closed 返回 `ControlError.UNSUPPORTED_TARGET` 且零发送；`_ingest_feedback()` 在传入 `resolved` 时不再重复触发 `machine.reset()`。同步更新 `docs/acceptance-baseline.md` V03 软件证据行（移除失效的 `test_t_c6_*` 指针，保留 `test_control_commands.py` 与 `test_control_api.py` 互锁证据）。
+5. **拆分基准脚本并消除公式重复**：将 `benchmarks/alohamini_io/measure_latency.py` 拆分为 `benchmarks/alohamini_io/_ml_impl/`（`common.py` / `cli.py` / `rtt.py` / `safety.py`），`measure_latency.py` 保留入口与追踪发送核心并重导出全部既有符号（通过全部 472 条基准契约测试），移除 `pyproject.toml` 对 `measure_latency.py` 的 `per-file-ignores` 豁免；`deg_per_unit` 复用 `capability/detect.py` 作为唯一换算口径。
+6. **文档瘦身与新人入口**：删除过渡表 `docs/field-ops/reference/mapping.md`；将 `TODO.md` 瘦身至当前活跃事项并将已关闭/低优工程债归档至 `docs/archive/engineering-debt-archive-2026-11.md`；新增一页式 `docs/ARCHITECTURE.md`（含分层图与术语消歧表）；用 `tools/run_cartesian_move.py` / `tools/calibrate_kinematics.py` 替代 `4-experiments.md` §10.7 的 460 行内嵌脚本。
+
+### 后果
+
+正面：净减少两千余行孤立/重复代码与文档噪音，新工程师接手路径从跨 10+ 长文档收敛到 `docs/ARCHITECTURE.md` 一页入口；单臂控制器职责清晰单一；全仓 `deg_per_unit` 换算归口唯一来源；`measure_latency.py` 移除全部 lint 豁免且不破坏任何冻结契约。
+已知代价：若未来现场实测得到真实物理限位并需建立三层限位，需从零设计并与控制路径同步接入；旧代码里依赖 `adapter.lerobot_version`、`calibration.limits`、`CalibrationRegistry.register` 或向 `CartesianController.tick` 直接投递 `BaseCommand` 的外部脚本需按新边界调整。

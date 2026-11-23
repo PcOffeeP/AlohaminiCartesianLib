@@ -76,7 +76,6 @@ addopts = "-q"
 #   消息），ruff format 已经把所有可拆的行都拆完了；再拆就要改字符串内容。
 [tool.ruff.lint.per-file-ignores]
 "benchmarks/alohamini_io/capture_robot_fingerprint.py" = ["D103", "D107", "E501"]
-"benchmarks/alohamini_io/measure_latency.py" = ["D103", "D107", "E501"]
 "tests/benchmarks/test_capture_robot_fingerprint.py" = ["ANN001", "ANN201", "ANN202", "ANN204"]
 "tests/benchmarks/test_measure_latency.py" = [
     "ANN001",

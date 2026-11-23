@@ -35,7 +35,6 @@ DOCUMENTS = (
     "docs/field-ops/reference/artifacts.md",
     "docs/field-ops/reference/troubleshooting.md",
     "docs/field-ops/reference/env-rebuild.md",
-    "docs/field-ops/reference/mapping.md",
     "docs/field-results.md",
 )
 
