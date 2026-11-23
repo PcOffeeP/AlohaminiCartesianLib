@@ -3306,3 +3306,26 @@ def test_t_ik_19_4_within_limits_with_excessive_residual_reports_residual(
         "an in-limit solution that misses the target by more than residual_limit_m must be "
         "RESIDUAL, not JOINT_LIMIT: " + describe_t_ik_19_outcome(result, limits, q_injected)
     )
+
+
+def test_arm_ik_cached_robot_recovers_cleanly_after_qp_error() -> None:
+    """缓存 RobotWrapper 后，一次极值 QPError 不得污染后续合法 solve() 与 fk() 的结果。"""
+    _, arm = make_arm_ik()
+    seed = np.asarray(SOLVE_SEED_Q, dtype=float)
+    limits = dict(arm._urdf_limits_deg)
+    target = arm.fk(seed + np.array([3.0, -2.0, 4.0, -1.0, 2.0, -3.0]))
+
+    baseline = arm.solve(seed, target, limits)
+    assert baseline.ok is True
+
+    # Trigger an infeasible QP via extreme translation target (placo RuntimeError).
+    extreme_target = np.eye(4, dtype=float)
+    extreme_target[:3, 3] = [1e300, 0.0, 0.0]
+    with pytest.raises(RuntimeError):
+        arm.solve(seed, extreme_target, limits)
+
+    # Next valid solve and fk must match baseline with zero state contamination.
+    after = arm.solve(seed, target, limits)
+    assert after.ok is True
+    assert np.allclose(after.q_deg, baseline.q_deg, atol=1e-12)
+    assert np.allclose(arm.fk(seed), arm.fk(seed), atol=1e-12)

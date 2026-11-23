@@ -86,12 +86,10 @@ SUBPROCESS_TIMEOUT_S = 60
 SKIP_NOTICE_LITERAL = "需要 vendor 环境"
 HOWTO_RUN_LITERAL = "PYTHONPATH"
 
-# 真机分支的取帧口径：脚本自己那次观测的关键字，以及库内无参 ``get_observation()`` 的次数。
-# 后者落回厂商默认 ``include_cameras=True``（``alohamini_client.py:535``），对应文档里
-# 「真机分支仍会多发 3 次相机帧请求」（``height_before``、``move_by`` 内部的 ``height()``、
-# priming 首帧）。数字变了就得同步示例与文档口径，所以这里按契约写死成一个常量。
+# 真机分支的取帧口径（ADR D24）：脚本与库内状态读帧全部传 ``include_cameras=False``，
+# 无关键字（落回厂商默认 ``include_cameras=True``）的相机帧请求次数必须为 0。
 SCRIPT_OBSERVATION_KWARGS: dict[str, Any] = {"include_cameras": False}
-LIB_INTERNAL_CAMERA_FETCHES = 3
+LIB_INTERNAL_CAMERA_FETCHES = 0
 
 # 真机路径读数行的形态；契约 D 用正则取数，不做子串匹配。
 READOUT_RE = re.compile(r"send_action 调用次数: (\d+) 次发送")
@@ -1303,17 +1301,18 @@ def test_example_real_branch_pins_observation_fetch_sequence(
     )
 
 
-def test_example_real_branch_prints_lift_command_rejected(real_branch_run: _RealBranchRun) -> None:
-    """契约 C：命令步结局被如实打印为「被拒 / MotionNotEnabled」，不是静默吞掉。"""
+def test_example_real_branch_prints_lift_command_dry_run_completed(
+    real_branch_run: _RealBranchRun,
+) -> None:
+    """契约 C（ADR D24）：无手臂 adapter 时升降轴 dry-run 正常跑通并打印前后高度读数。"""
     stdout = real_branch_run.stdout
 
-    assert "被拒" in stdout, (
-        f"stdout 里没有「被拒」：无 adapter 时命令必须在 priming 阶段被拒并说清楚\n"
+    assert "升降高度读数" in stdout, (
+        f"stdout 里没有「升降高度读数」：Stage.BASE_LIFT dry-run 应完整跑过状态机\n"
         f"{_describe_run(real_branch_run)}"
     )
-    assert "MotionNotEnabled" in stdout, (
-        f"stdout 里没有「MotionNotEnabled」：拒绝原因必须点名控制层异常类型\n"
-        f"{_describe_run(real_branch_run)}"
+    assert "before=142.50 mm，after=142.50 mm" in stdout, (
+        f"dry-run 前后高度读数不匹配预期\n{_describe_run(real_branch_run)}"
     )
 
 

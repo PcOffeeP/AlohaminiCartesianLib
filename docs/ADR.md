@@ -29,6 +29,7 @@
 | D21 | URDF 采用厂商上游参数、零实测，验收由 §10.7 卷尺实测收口 | 已接受（未发版） |
 | D22 | 标定代际化：把标定从常量改为带代际的输入 | 已接受（未发版：`pyproject.toml` 为 0.7.0，`docs/changelog.md` 无 D22 条目） |
 | D23 | 标定包络检查与标定抓取：阈值单一来源、不合格不硬阻断、会话内不可变 | 已接受（未发版：`pyproject.toml` 为 0.7.0，`docs/changelog.md` 无 D23 条目） |
+| D24 | `ArmHandle.move_to` 默认保持起始姿态、航点二分步进、暴露真机跟随参数与 `Stage.BASE_LIFT` 解耦 | 已接受（未发版：`pyproject.toml` 为 0.7.0，`docs/changelog.md` 无 D24 条目） |
 
 ## D1 依赖形态：独立包，lerobot 作为可选 extra
 
@@ -819,3 +820,25 @@ V01 是本阶段唯一挡住「能不能说不接 leader 就算通」的条目�
 触发重新评估的条件（达成任一条即重新评估）：① 现场 S1 拿到 `arm_right_shoulder_lift` 与 `arm_left_shoulder_pan` 的实测行程，接受名单需按实测重核（可能登记、可能修标定、也可能反过来收紧区间）；② 出现第三个代际且宽度分布明显与本项目看过的两代不同，三个经验区间要重新核定；③ 出现需要硬阻断（而非提醒）的实际事故，`IMPLAUSIBLE` 的「可继续」口径要重新论证。
 
 相关提交：代码与测试 `d92885a`。
+
+## D24 `ArmHandle.move_to` 默认保持起始姿态、航点二分步进、暴露真机跟随参数与 `Stage.BASE_LIFT` 解耦
+
+状态：已接受（未发版：`pyproject.toml` 为 0.7.0，`docs/changelog.md` 无 D24 条目）
+
+### 背景
+
+全面审查暴露出 `control/api.py` 存在四处真机阻塞：① `ArmHandle.move_to` 硬编码目标姿态为 `np.eye(4)`，导致轻微平移也会触发约 153.6° 腕部翻转；② `_precheck_straight_path` 验证完路径后丢弃航点，循环将未插值的最终目标整包交给 `CartesianController.tick`，任何超过 `max_joint_step_deg=2.0°`（约 1 cm 位移）的移动均被 `STEP_LIMIT` 持续拒发至 `MotionTimeout`；③ `follow_error_tolerance_deg=1.0` 与 `_SETTLED_MAX_JOINT_DELTA_DEG=0.1°` 硬编码且不可配，与 D20 实测的肩轴 `1.04°–1.13°` 稳态残余冲突；④ `LiftHandle`/`BaseHandle` 在 priming 阶段强依赖 6 轴手臂 `JointKinematicAdapter`，且内部读帧未传 `include_cameras=False` 导致 3 次多余相机图像突发。
+
+### 决定
+
+1. **姿态默认保持 + 签名向后兼容**：`ArmHandle.move_to(x, y, z, timeout_s=None, *, orientation=None)` 与 `move_by` 保留位置参数 `timeout_s`。当 `orientation is None` 时锁定起始实测 FK 姿态 `R_start`（首帧无有效 `q_current` 时 fail-closed，不下发任何动作）；显式传入 `orientation` 时做 SO(3) 球面插值。
+2. **链式航点二分与受控推进**：`_precheck_straight_path` 沿直线位置 + SO(3) 旋转用链式 `q_prev` 求解，相邻航点 `max|Δq| > max_joint_step_deg` 时递归二分（至多 `_MAX_BISECT_DEPTH = 6` 层）；循环仅在控制器接受当拍（`outcome.error_code is None and outcome.action is not None`）且满足 `dry_run` 虚拟步进或真机滞后在 `waypoint_lead_deg` 以内时推进 `wp_idx`。
+3. **暴露可配参数**：`connect()` 暴露 `max_joint_step_deg=2.0`、`follow_error_tolerance_deg=1.0`、`follow_error_timeout_s=1.0`、`settled_max_joint_delta_deg=0.1`、`waypoint_lead_deg=None`（默认值保持既有测试 100% 兼容；真机 CLI `tools/run_cartesian_move.py` 默认注入 `follow_error_tolerance_deg=2.5`、`settled_max_joint_delta_deg=0.2` 对齐 D20 口径）。
+4. **`Stage.BASE_LIFT` 解耦与 `include_cameras=False`**：`Stage.ARM`（臂与夹爪）仍强制手臂 `adapter`；`Stage.BASE_LIFT`（升降与底盘）无手臂 `adapter` 时可基于 `lift_axis.height_mm` 与可选底盘速度键完成 priming；内部状态读帧统一走 `_read_state_observation` 优先传 `include_cameras=False`（无参桩自动回落）。同步更新 `examples/robot_dry_run.py` 与 `tests/test_robot_dry_run_example.py`。
+5. **底层性能与内存修复**：`ControlStateMachine` 用标量高水位 + 有序闭区间折叠替代无限增长 `set[int]`（保持精确重放/回归语义，正常递增流为 O(1)）；`ArmIK` 缓存只读 URDF 限位与内存 `RobotWrapper` 实例，单步 `step_time_ms p99` 从 `1.371 ms` 降至 `0.068 ms`（Apple M4 实测）。
+6. **正式化现场 CLI**：新增 `tools/calibrate_kinematics.py` 与 `tools/run_cartesian_move.py`，复用 `config/overlay.py` 与 `kinematics/model_specs.py`。
+
+### 后果
+
+正面：真实 `ArmIK` 9 cm 直线移动闭环离线验证一次通过且无 `STEP_LIMIT` 死锁；升降与底盘不再被手臂 `signs`/`zeros` 标定阻塞；消除 3 次多余相机帧请求；IK 整步耗时降低约 20 倍；状态机消除长跑 O(N) 扫描与内存泄漏。
+已知代价：依赖旧行为（`move_to` 隐式转世界单位姿态、`robot_dry_run` 预期在 priming 被拒及 3 次相机帧）的调用方或测试需同步切换；真机上航点步进仍待 Phase 3 现场窗口验证。

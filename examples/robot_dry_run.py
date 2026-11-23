@@ -1,62 +1,16 @@
 """真机 dry-run 示例：把厂商 ``AlohaMiniClient`` 注入本库 ``connect(dry_run=True)``。
 
-这是「真 client 注入」的参考实现：用真实的厂商客户端打开本库会话，**零发送、只读观测**
-（「只读」指不发动作，不等于不请求图像——相机帧缺口见本文件第 3 节末段）。
+这是「真 client 注入」的参考实现：用真实的厂商客户端打开本库会话，**零发送、只读状态观测**
+（所有读帧均带 ``include_cameras=False``，不触发多余相机图像突发）。
 
-1. 这是什么。``examples/minimal_dry_run.py`` 用内存里的假 transport 演示调用形状；这份脚本
-   换成真的 ``AlohaMiniClient``（厂商 ``lerobot_alohamini`` 的客户端），经
-   ``connect(..., client_factory=...)`` 注入本库。脚本做三件事：读一次观测、对升降轴下一条
-   dry-run 命令、断开。命令在 priming 阶段的 adapter 门禁就被拒（第 3 节），本会话
-   ``send_action`` 一次都不会被调用；结尾把包在真 client 外面的计数代理的实测调用次数打印
-   出来，随后做显式零发送门禁（不是硬编码的 0）。
-2. 真机怎么跑。厂商 client 只存在于装了 ``lerobot`` 的环境里，本库主环境（只有 numpy）没有
-   它。两条命令：第一条把 vendor 快照与本库的 ``src`` 一起放进 ``PYTHONPATH``（本库没装进
-   vendor 环境，所以要带 ``:src``），第二条用 vendor 环境的解释器跑本脚本；``--host`` 就是
-   机器人 Pi 的 IP/主机名::
+1. 脚本做三件事：预热并读一次状态观测、对升降轴下一条 ``dry_run=True`` 的 ``lift.move_by``
+   命令（按 ADR D24，``Stage.BASE_LIFT`` 不再强依赖 6 轴手臂 ``JointKinematicAdapter``，
+   在 ``dry_run=True`` 下完整跑过状态机但不下发任何动作）、断开会话；结尾按实测计数代理
+   做显式零发送门禁（不是硬编码的 0）。
+2. 真机跑法（主环境无 ``lerobot`` 时走跳过分支、退出码 ``0``）::
 
        export PYTHONPATH=<vendor fork>/src:src
        .venvs/alohamini-lerobot/bin/python examples/robot_dry_run.py --host <Pi 的 IP>
-
-   在 Pi 本机上跑时省掉 ``--host``（默认 ``127.0.0.1``）。解释器路径与 ``--host`` 都按本机
-   环境替换。主环境（无 ``lerobot``）下脚本走跳过分支：打印跳过文案、退出码 ``0``，不连设备、
-   不联网。
-3. 零发送的保证来自哪条库内路径。本脚本**不注入** ``JointKinematicAdapter``（也不建
-   ``placo`` IK），所以命令根本进不了状态机；实际生效的是这三处：
-
-   - ``src/alohamini_cartesian/control/api.py:860-862``：**priming 阶段的 adapter 门禁**。
-     ``session._prime_state_machine()`` 在 ``LiftHandle.move_to`` 的 ``state.handle()`` 之前
-     调用（``api.py:513``）；会话没有 adapter、且观测也没带显式的 ``settled``/``valid`` 时，
-     它抛 ``MotionNotEnabled("motion requires a kinematic adapter; ...")``。命令在读第一帧
-     反馈之后就被拒绝，没有任何动作进状态机。厂商 ``AlohaMiniClient`` 既不在观测字典里给
-     ``_control_status``，也没有 ``latest_control_status`` 旁路属性（已按源码核对），
-     ``_has_explicit_settled_valid`` 恒为 False，所以真机上同样落在这条分支；
-   - ``src/alohamini_cartesian/control/api.py:674-675``：``connect(dry_run=True)`` 连初始保持
-     都不发（``if not dry_run: self._send_initial_hold()``）；
-   - ``src/alohamini_cartesian/control/api.py:913-914``：``disconnect()`` 的底座零速同样只在
-     非 dry-run 下发。
-
-   另外两处常被当成「零发送门禁」的代码在本脚本里**不可达 / 不适用**，不要按它们解释：
-   ``api.py:519-520``（升降轴到位后的下发门禁）位于 ``state.handle()`` 之后，无 adapter 时
-   前面已经抛错，走不到；``controller.py:169-172``（臂 ``CartesianController._send()`` 的
-   dry-run 早退）属于臂控制器，而控制器在 ``adapter``、``ik_factory``、``clock``、``sleeper``
-   四者齐备时才构造（构造条件见 ``api.py:653-672``），本脚本不建控制器。
-
-   为什么命令的是升降轴而不是臂：臂的 ``move_by``/``move_to`` 需要 ``adapter`` 与
-   ``ik_factory``（``placo``，可选 extra ``kinematics``），库内唯一的 adapter
-   ``JointKinematicAdapter`` 需要每侧六关节完整的 ``signs``/``zeros``，现场没有标定值；
-   伪造这些值与 ``AGENTS.md`` 第 3 节的证据纪律冲突，因此不在真机路径上指挥臂。升降轴同样要
-   过 adapter 门禁，只是不需要 IK，所以在真机上的预期结果是**命令被拒**，而不是真的走到下发
-   门禁。
-
-   「只读」只约束下发，不约束观测请求：本脚本自身的两次取帧都走
-   ``include_cameras=False``（先 ``prime_observation_request_window(include_cameras=False)``，
-   再 ``get_observation(include_cameras=False)``），而库内 ``LiftHandle.height()``
-   （``src/alohamini_cartesian/control/api.py:494``）与 ``_prime_state_machine()`` 的首帧
-   （``control/api.py:845``）调的是**无参** ``get_observation()``，落回厂商默认
-   ``include_cameras=True``（``lerobot/robots/alohamini/alohamini_client.py:535``）。所以真机
-   分支仍会多发 3 次相机帧请求（``height_before``、``move_by`` 内部的 ``height()``、priming
-   首帧），正是厂商 docstring（``alohamini_client.py:279-285``）警告的「unintended image
-   burst」。要做到真正 state-only，需改库侧 ``get_observation`` 的调用签名，本轮不做。
 """
 
 from __future__ import annotations
@@ -348,10 +302,7 @@ def _run_dry_run_lift_command(session: AlohaMiniControl) -> None:
     Args:
         session: ``connect(dry_run=True)`` 打开的会话。
     """
-    print(
-        f"命令：lift.move_by(delta_mm={_LIFT_STEP_MM})"
-        "（dry_run=True，无 adapter，预期在 priming 阶段被拒）"
-    )
+    print(f"命令：lift.move_by(delta_mm={_LIFT_STEP_MM})（dry_run=True，零发送）")
     try:
         height_before = session.lift.height()
         session.lift.move_by(delta_mm=_LIFT_STEP_MM)

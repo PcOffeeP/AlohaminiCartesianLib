@@ -26,6 +26,7 @@ contains no I/O, no clock, and no hardware coupling.
 
 from __future__ import annotations
 
+import bisect
 import math
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -186,8 +187,60 @@ class ControlStateMachine:
         self._last_reason: str | None = None
         self._last_valid = False
         self._consecutive_settled = 0
-        self._seen_sample_ids: set[int] = set()
+        # Sorted, disjoint, non-adjacent closed intervals [lo, hi] of seen sample IDs.
+        # Normal consecutive monotonic streams fold into a single [start, high_water]
+        # interval, keeping lookup, insertion, and memory strictly O(1) while preserving
+        # exact membership semantics for replayed old IDs vs unseen regressions.
+        self._seen_ranges: list[list[int]] = []
+        self._high_water_sample_id: int | None = None
         self._blocked_released = False
+
+    def _has_seen_sample_id(self, sample_id: int) -> bool:
+        """Return ``True`` if ``sample_id`` has already been observed in this session."""
+        if not self._seen_ranges:
+            return False
+        # Fast path for the common case: check the trailing (highest) interval first.
+        last_lo, last_hi = self._seen_ranges[-1]
+        if sample_id >= last_lo:
+            return sample_id <= last_hi
+        # Binary search earlier intervals by their upper bound.
+        idx = bisect.bisect_left(self._seen_ranges, [sample_id, sample_id])
+        if idx < len(self._seen_ranges) and self._seen_ranges[idx][0] == sample_id:
+            return True
+        if idx > 0 and self._seen_ranges[idx - 1][0] <= sample_id <= self._seen_ranges[idx - 1][1]:
+            return True
+        return False
+
+    def _record_seen_sample_id(self, sample_id: int) -> None:
+        """Record ``sample_id`` into the disjoint interval set and update the high-water mark."""
+        if self._high_water_sample_id is None or sample_id > self._high_water_sample_id:
+            self._high_water_sample_id = sample_id
+        if not self._seen_ranges:
+            self._seen_ranges.append([sample_id, sample_id])
+            return
+        last = self._seen_ranges[-1]
+        if sample_id == last[1] + 1:
+            last[1] = sample_id
+            return
+        if sample_id > last[1] + 1:
+            self._seen_ranges.append([sample_id, sample_id])
+            return
+        idx = bisect.bisect_left(self._seen_ranges, [sample_id, sample_id])
+        merge_left = idx > 0 and self._seen_ranges[idx - 1][1] + 1 >= sample_id
+        merge_right = idx < len(self._seen_ranges) and self._seen_ranges[idx][0] - 1 <= sample_id
+        if merge_left and merge_right:
+            self._seen_ranges[idx - 1][1] = max(
+                self._seen_ranges[idx - 1][1], self._seen_ranges[idx][1]
+            )
+            del self._seen_ranges[idx]
+        elif merge_left:
+            if sample_id > self._seen_ranges[idx - 1][1]:
+                self._seen_ranges[idx - 1][1] = sample_id
+        elif merge_right:
+            if sample_id < self._seen_ranges[idx][0]:
+                self._seen_ranges[idx][0] = sample_id
+        else:
+            self._seen_ranges.insert(idx, [sample_id, sample_id])
 
     @property
     def state(self) -> ControlState:
@@ -225,7 +278,7 @@ class ControlStateMachine:
         if self._state is ControlState.FAULT:
             return
 
-        if sample_id in self._seen_sample_ids:
+        if self._has_seen_sample_id(sample_id):
             return
 
         if (
@@ -236,18 +289,18 @@ class ControlStateMachine:
                 ControlState.SETTLING,
                 ControlState.BLOCKED,
             )
-            and self._seen_sample_ids
-            and sample_id < max(self._seen_sample_ids)
+            and self._high_water_sample_id is not None
+            and sample_id < self._high_water_sample_id
         ):
             self._state = ControlState.FAULT
             self._active_stage = None
             self._last_reason = (
                 f"sample_id regression: {sample_id} below high-water mark "
-                f"{max(self._seen_sample_ids)}"
+                f"{self._high_water_sample_id}"
             )
             return
 
-        self._seen_sample_ids.add(sample_id)
+        self._record_seen_sample_id(sample_id)
 
         if not valid:
             self._consecutive_settled = 0
@@ -348,7 +401,8 @@ class ControlStateMachine:
         self._last_valid = False
         self._last_reason = None
         self._blocked_released = False
-        self._seen_sample_ids.clear()
+        self._seen_ranges.clear()
+        self._high_water_sample_id = None
 
     def block(self, reason: str) -> None:
         """Non-throwing entry point to latch the machine as ``BLOCKED``.

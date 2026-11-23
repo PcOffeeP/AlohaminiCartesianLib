@@ -30,6 +30,7 @@ from typing import Any
 
 import numpy as np
 
+from ..adapter.protocol import RobotClient
 from .commands import (
     ArmCommand,
     BaseCommand,
@@ -52,16 +53,82 @@ DEFAULT_PRECHECK_STEP_M = 0.001
 
 # Maximum joint-space displacement between two consecutive feedback samples that
 # is treated as "no motion" when deriving the standstill signal from measured
-# kinematic state.  The 0.1° value is intentionally tight: it lets the test
-# suite's zero-motion poses read as settled while treating any deliberate joint
-# motion as moving.  On a real robot it must be re-tuned to sit just above the
-# observed sensor/control-rate jitter rather than any fixed noise-floor claim.
+# kinematic state.  Configurable per session via ``settled_max_joint_delta_deg``.
 _SETTLED_MAX_JOINT_DELTA_DEG = 0.1
 
+# Maximum lift-axis height change (mm) between consecutive samples treated as
+# standstill when priming Stage.BASE_LIFT without an arm kinematic adapter.
+_SETTLED_MAX_LIFT_DELTA_MM = 0.5
+_SETTLED_MAX_BASE_VEL = 1e-3
+
+# Maximum recursive bisection depth when subdividing a waypoint segment whose
+# joint delta exceeds ``max_joint_step_deg``.
+_MAX_BISECT_DEPTH = 6
+
 # Consecutive controller ticks that report an adapter hard error before the
-# move loop aborts with a reason-carrying MotionBlocked (D015) instead of
-# timing out silently (B8.c).
+# move loop aborts with a reason-carrying MotionBlocked instead of timing out.
 _MAX_CONSECUTIVE_ADAPTER_FAILURES = 3
+
+
+def _read_state_observation(client: Any) -> Mapping[str, Any]:
+    """Read a state observation, requesting ``include_cameras=False`` when supported."""
+    try:
+        return client.get_observation(include_cameras=False)
+    except TypeError:
+        return client.get_observation()
+
+
+def _validate_orientation(orientation: Any) -> np.ndarray:
+    """Validate an explicit 3x3 rotation matrix target."""
+    rot = np.asarray(orientation, dtype=float)
+    if rot.shape != (3, 3) or not np.all(np.isfinite(rot)):
+        raise ValueError(f"orientation must be a finite (3, 3) matrix, got shape {rot.shape}")
+    return rot.copy()
+
+
+def _rotation_axis_angle(r_start: np.ndarray, r_end: np.ndarray) -> tuple[np.ndarray, float]:
+    """Return unit axis and angle (rad) mapping ``r_start`` to ``r_end`` on SO(3)."""
+    r_rel = r_start.T @ r_end
+    cos_theta = float(np.clip((float(np.trace(r_rel)) - 1.0) / 2.0, -1.0, 1.0))
+    theta = float(math.acos(cos_theta))
+    if theta < 1e-9:
+        return np.array([1.0, 0.0, 0.0], dtype=float), 0.0
+    if math.pi - theta < 1e-6:
+        # Near 180 deg: pick the largest-norm column of (R_rel + I) as rotation axis.
+        mat = r_rel + np.eye(3, dtype=float)
+        norms = np.linalg.norm(mat, axis=0)
+        axis = mat[:, int(np.argmax(norms))]
+        norm = float(np.linalg.norm(axis))
+        if norm < 1e-9:
+            return np.array([1.0, 0.0, 0.0], dtype=float), theta
+        return axis / norm, theta
+    skew = (r_rel - r_rel.T) / (2.0 * math.sin(theta))
+    axis = np.array([skew[2, 1], skew[0, 2], skew[1, 0]], dtype=float)
+    norm = float(np.linalg.norm(axis))
+    if norm < 1e-9:
+        return np.array([1.0, 0.0, 0.0], dtype=float), 0.0
+    return axis / norm, theta
+
+
+def _interpolate_rotation(r_start: np.ndarray, r_end: np.ndarray, t: float) -> np.ndarray:
+    """Interpolate on SO(3) from ``r_start`` to ``r_end`` at fraction ``t`` in [0, 1]."""
+    if t <= 0.0:
+        return r_start.copy()
+    if t >= 1.0:
+        return r_end.copy()
+    axis, theta = _rotation_axis_angle(r_start, r_end)
+    if theta < 1e-9:
+        return r_start.copy()
+    angle = t * theta
+    kx, ky, kz = float(axis[0]), float(axis[1]), float(axis[2])
+    k_mat = np.array(
+        [[0.0, -kz, ky], [kz, 0.0, -kx], [-ky, kx, 0.0]],
+        dtype=float,
+    )
+    r_step = (
+        np.eye(3, dtype=float) + math.sin(angle) * k_mat + (1.0 - math.cos(angle)) * (k_mat @ k_mat)
+    )
+    return r_start @ r_step
 
 
 class _ReasonCarryingError(Exception):  # noqa: N818
@@ -122,7 +189,7 @@ class GripperHandle:
         side_enum = Side.LEFT if self.side == "left" else Side.RIGHT
         # Validate the command before any priming host I/O (B5).
         command = GripperCommand(side=side_enum, action=GripperAction.SET, position=float(position))
-        session._prime_state_machine()
+        session._prime_state_machine(stage=Stage.ARM)
         session.state.handle(command)
         if not session.dry_run:
             session.client.send_action({f"arm_{self.side}_gripper.pos": float(position)})
@@ -164,42 +231,99 @@ def _precheck_straight_path(
     metadata: Mapping[str, Any],
     precheck_step_m: float,
     orientation_weight: float,
-) -> None:
-    """Lazy whole-path precheck: sample the straight line and verify IK.
+    max_joint_step_deg: float = 2.0,
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Plan and precheck waypoints along the straight line + SO(3) path.
 
-    Samples ``i/n`` (endpoint included, start excluded) along the straight
-    line from the current FK position to the target position, with
-    ``n = max(1, ceil(distance / precheck_step_m))``.  Each waypoint is
-    submitted to ``arm_ik.solve`` with the adapter's joint limits.  The first
-    unreachable or limit-violating waypoint raises :class:`OutOfRange`
-    carrying ``target_pose``.
+    Samples ``i/n`` (endpoint included, start excluded) with linear position
+    interpolation and SO(3) rotation interpolation from the current FK pose to
+    ``target_pose``, solving IK with chained joint seeds.  When an adjacent
+    segment exceeds ``max_joint_step_deg``, it is recursively bisected up to
+    ``_MAX_BISECT_DEPTH`` levels so every consecutive step stays within the
+    controller's joint-step budget.
+
+    Returns:
+        Non-empty list of ``(waypoint_pose, waypoint_q_deg)`` pairs ending at
+        ``target_pose``.
     """
     current_pose = arm_ik.fk(q_current_deg)
-    start = np.asarray(current_pose[:3, 3], dtype=float)
-    end = np.asarray(target_pose[:3, 3], dtype=float)
-    delta = end - start
+    start_pos = np.asarray(current_pose[:3, 3], dtype=float)
+    start_rot = np.asarray(current_pose[:3, :3], dtype=float)
+    end_pos = np.asarray(target_pose[:3, 3], dtype=float)
+    end_rot = np.asarray(target_pose[:3, :3], dtype=float)
+    delta = end_pos - start_pos
     distance = float(np.linalg.norm(delta))
-    n = max(1, int(math.ceil(distance / precheck_step_m)))
+
+    _, rot_rad = _rotation_axis_angle(start_rot, end_rot)
+    rot_deg = math.degrees(rot_rad)
+    n_pos = int(math.ceil(distance / precheck_step_m)) if distance > 0.0 else 0
+    n_rot = int(math.ceil(rot_deg / max(max_joint_step_deg, 1e-6))) if rot_deg > 1e-6 else 0
+    n = max(1, n_pos, n_rot)
 
     joint_limits_deg = adapter.effective_limits_deg(side, metadata)
 
-    for i in range(1, n + 1):
-        t = i / n
+    def _pose_at(t: float) -> np.ndarray:
         waypoint = np.eye(4, dtype=float)
-        waypoint[:3, :3] = target_pose[:3, :3]
-        waypoint[:3, 3] = start + t * delta
+        waypoint[:3, :3] = _interpolate_rotation(start_rot, end_rot, t)
+        waypoint[:3, 3] = start_pos + t * delta
+        return waypoint
 
+    def _solve_segment(
+        t_a: float,
+        q_a: np.ndarray,
+        t_b: float,
+        depth: int,
+    ) -> tuple[list[tuple[np.ndarray, np.ndarray]], np.ndarray]:
+        pose_b = _pose_at(t_b)
         result = arm_ik.solve(
-            q_current_deg=q_current_deg,
-            target_pose=waypoint,
+            q_current_deg=q_a,
+            target_pose=pose_b,
             joint_limits_deg=joint_limits_deg,
             orientation_weight=orientation_weight,
         )
         if not result.ok:
             raise OutOfRange(
-                f"precheck failed at waypoint {i}/{n}: {result.reason}",
+                f"precheck failed at t={t_b:.4f}: {result.reason}",
                 target=target_pose,
             )
+        q_b = np.asarray(result.q_deg, dtype=float)
+        joint_step = float(np.max(np.abs(q_b - q_a)))
+        if (
+            joint_step > max_joint_step_deg
+            and depth < _MAX_BISECT_DEPTH
+            and (t_b - t_a) > 1e-5
+            and not np.allclose(q_b, q_a)
+        ):
+            t_mid = 0.5 * (t_a + t_b)
+            pose_mid = _pose_at(t_mid)
+            mid_result = arm_ik.solve(
+                q_current_deg=q_a,
+                target_pose=pose_mid,
+                joint_limits_deg=joint_limits_deg,
+                orientation_weight=orientation_weight,
+            )
+            if not mid_result.ok:
+                raise OutOfRange(
+                    f"precheck failed at t={t_mid:.4f}: {mid_result.reason}",
+                    target=target_pose,
+                )
+            q_mid = np.asarray(mid_result.q_deg, dtype=float)
+            # Guard against scripted/constant mock solvers that ignore pose changes.
+            if not np.allclose(q_mid, q_b, atol=1e-9):
+                left_wps, q_after_left = _solve_segment(t_a, q_a, t_mid, depth + 1)
+                right_wps, q_after_right = _solve_segment(t_mid, q_after_left, t_b, depth + 1)
+                return left_wps + right_wps, q_after_right
+        return [(pose_b, q_b)], q_b
+
+    waypoints: list[tuple[np.ndarray, np.ndarray]] = []
+    q_prev = np.asarray(q_current_deg, dtype=float)
+    t_prev = 0.0
+    for i in range(1, n + 1):
+        t_curr = i / n
+        seg_wps, q_prev = _solve_segment(t_prev, q_prev, t_curr, depth=0)
+        waypoints.extend(seg_wps)
+        t_prev = t_curr
+    return waypoints
 
 
 class ArmHandle:
@@ -211,50 +335,23 @@ class ArmHandle:
         self.gripper = GripperHandle(side, session=session)
         self._session = session
 
-    def move_to(self, x: float, y: float, z: float, timeout_s: float | None = None) -> MoveReport:
+    def move_to(
+        self,
+        x: float,
+        y: float,
+        z: float,
+        timeout_s: float | None = None,
+        *,
+        orientation: np.ndarray | None = None,
+    ) -> MoveReport:
         """Blocking Cartesian move to ``(x, y, z)`` in meters.
 
-        Runs a 30 Hz loop (paced by ``session._sleeper``) that drives the
-        real ``CartesianController`` until the measured FK position residual
-        is within ``arrival_tolerance_m`` and the latest feedback sample
-        reports ``settled=True``.  In dry-run mode no action is sent and a
-        per-step diagnostic report is returned instead.
-
-        Before the first action is dispatched the straight line from the
-        current FK pose to the target is lazily pre-checked: every sampled
-        waypoint must be IK-reachable and inside the joint limits.
-
-        Raises:
-            MotionNotEnabled: The handle is not attached to a session, or the
-                session holds no controller for this side.
-            MotionTimeout: No arrival within ``timeout_s``; the exception's
-                ``moved`` field carries the measured distance so far.
-            FeedbackLost: No new feedback sample arrived within
-                ``session._feedback_timeout_s``.
-            OutOfRange: The lazy whole-path precheck found a waypoint that is
-                IK-unreachable or outside the joint limits; the rejected target
-                travels on the exception's ``target`` field.
-            MotionBlocked: The session state machine reported BLOCKED or FAULT,
-                or the adapter failed on three consecutive controller ticks.
-            ValueError: The injected adapter reports illegal joint limits.  The
-                ``ValueError`` raised by ``ArmIK.solve`` during its entry
-                validation propagates out of ``move_to`` unchanged from the
-                whole-path precheck that runs before the first dispatch: an
-                illegal limit is a configuration error, not an unreachable
-                path, so this library deliberately does not translate it into
-                :class:`OutOfRange` or ``MotionBlocked``.  When ``q_current`` is
-                ``None`` that precheck is skipped, and the same configuration
-                error surfaces as :class:`MotionTimeout` instead, because
-                ``controller._tick_arm_pose`` wraps ``solve()`` in a
-                ``try/except Exception`` and turns it into a
-                ``CycleOutcome(error_code=IK_FAILED)``.
-            RuntimeError: The injected adapter's limits pass the entry validation
-                but make the QP infeasible, for example endpoints far beyond the
-                magnitude ``float`` can represent.  The placo ``QPError`` is not
-                wrapped and propagates out of ``move_to`` unchanged:
-                ``_precheck_straight_path`` has no ``try/except`` around
-                ``solve()``, so limits like ``(2**63, 2**64)`` reach the caller
-                as ``RuntimeError: QPError: Problem: Infeasible QP``.
+        Runs a paced loop that drives :class:`CartesianController` along
+        prechecked straight-line + SO(3) waypoints until the measured FK
+        position residual is within ``arrival_tolerance_m`` and the latest
+        feedback sample reports ``settled=True``.  When ``orientation`` is
+        omitted (``None``), the arm holds its initial measured FK orientation
+        instead of rotating toward world identity.
         """
         session = self._session
         if session is None:
@@ -264,10 +361,18 @@ class ArmHandle:
         if controller is None:
             raise MotionNotEnabled(f"no controller available for {self.side}")
 
-        target = np.eye(4, dtype=float)
-        target[0, 3] = float(x)
-        target[1, 3] = float(y)
-        target[2, 3] = float(z)
+        explicit_rot = _validate_orientation(orientation) if orientation is not None else None
+        target: np.ndarray | None = None
+        if explicit_rot is not None:
+            target = np.eye(4, dtype=float)
+            target[:3, :3] = explicit_rot
+            target[0, 3] = float(x)
+            target[1, 3] = float(y)
+            target[2, 3] = float(z)
+        fallback_target = np.eye(4, dtype=float)
+        fallback_target[0, 3] = float(x)
+        fallback_target[1, 3] = float(y)
+        fallback_target[2, 3] = float(z)
 
         timeout = session._move_timeout_s if timeout_s is None else float(timeout_s)
         deadline = session._clock() + timeout
@@ -277,7 +382,10 @@ class ArmHandle:
         steps: list[StepDiagnostic] = []
         last_residual = float("inf")
         prechecked = False
+        waypoints: list[tuple[np.ndarray, np.ndarray]] = []
+        wp_idx = 0
         last_action: Mapping[str, float] | None = None
+        saw_follow_timeout = False
 
         last_sample_id: int | None = None
         last_feedback_time = session._clock()
@@ -296,8 +404,9 @@ class ArmHandle:
             now = session._clock()
             if now >= deadline:
                 moved = _compute_moved(session, controller, self.side, initial_q)
+                suffix = " (FOLLOW_TIMEOUT)" if saw_follow_timeout else ""
                 raise MotionTimeout(
-                    f"move_to timed out after {timeout}s",
+                    f"move_to timed out after {timeout}s{suffix}",
                     moved=moved,
                 )
 
@@ -310,11 +419,11 @@ class ArmHandle:
                 controller._send(last_action)
 
             try:
-                feedback = session.client.get_observation()
+                feedback = _read_state_observation(session.client)
             except Exception:
                 feedback = {}
 
-            resolved = session._resolve_feedback(feedback)
+            resolved = session._resolve_feedback(feedback, stage=Stage.ARM)
             sample_id = resolved.sample_id
             if sample_id != last_sample_id:
                 last_sample_id = sample_id
@@ -331,8 +440,8 @@ class ArmHandle:
             )
 
             # Extract the current kinematic configuration early: it seeds the
-            # controller, feeds the arrival residual, and is required for the
-            # lazy whole-path precheck before the first send.
+            # controller, locks the held orientation (when orientation=None),
+            # feeds the arrival residual, and enables whole-path precheck.
             q_current: np.ndarray | None = None
             if metadata is not None and session._adapter is not None:
                 try:
@@ -344,24 +453,31 @@ class ArmHandle:
                 except Exception:
                     q_current = None
 
+            if target is None and q_current is not None:
+                start_pose = controller._arm_ik.fk(q_current)
+                target = np.eye(4, dtype=float)
+                target[:3, :3] = np.asarray(start_pose[:3, :3], dtype=float)
+                target[0, 3] = float(x)
+                target[1, 3] = float(y)
+                target[2, 3] = float(z)
+
             # Prime the shared state machine until the arm path is active.
             if session.state.state is ControlState.STANDBY:
                 session.state.resume()
             if session.state.state is ControlState.READY:
                 session.state.handle(ArmCommand(side=side_enum, dx=0.0, dy=0.0, dz=0.0))
 
-            # Lazy whole-path precheck: run once the arm path becomes ACTIVE,
-            # immediately before the controller is asked to solve/send the first
-            # step.  This keeps the entry path free of eager IK solves required
-            # by B2/B4 and guarantees zero on-wire actions for unreachable paths.
+            # Lazy whole-path precheck & waypoint planning: runs once the arm
+            # path becomes ACTIVE, immediately before the first solve/send.
             if (
                 session.state.state is ControlState.ACTIVE
                 and session.state.active_stage is Stage.ARM
                 and not prechecked
                 and q_current is not None
+                and target is not None
                 and session._adapter is not None
             ):
-                _precheck_straight_path(
+                waypoints = _precheck_straight_path(
                     controller._arm_ik,
                     session._adapter,
                     self.side,
@@ -370,10 +486,19 @@ class ArmHandle:
                     metadata,
                     session._precheck_step_m,
                     controller._orientation_weight,
+                    max_joint_step_deg=controller._max_joint_step_deg,
                 )
+                wp_idx = 0
                 prechecked = True
 
-            outcome = controller.tick(feedback, target, resolved=resolved)
+            if waypoints:
+                tick_target = waypoints[wp_idx][0]
+            elif target is not None:
+                tick_target = target
+            else:
+                tick_target = fallback_target
+
+            outcome = controller.tick(feedback, tick_target, resolved=resolved)
 
             # Fast-fail again in case the controller ingested a fault this tick.
             if session.state.state is ControlState.BLOCKED:
@@ -383,6 +508,9 @@ class ArmHandle:
                 reason = session.state.last_reason or "machine fault"
                 session.last_reason = reason
                 raise _MotionBlocked(reason)
+
+            if outcome.error_code is ControlError.FOLLOW_TIMEOUT:
+                saw_follow_timeout = True
 
             if outcome.error_code is ControlError.ADAPTER_FAILED:
                 consecutive_adapter_failures += 1
@@ -396,8 +524,23 @@ class ArmHandle:
                 steps.append(StepDiagnostic(action=dict(outcome.action)))
                 last_action = outcome.action
 
+            if (
+                waypoints
+                and wp_idx < len(waypoints) - 1
+                and outcome.error_code is None
+                and outcome.action is not None
+            ):
+                if session.dry_run:
+                    wp_idx += 1
+                elif (
+                    q_current is not None
+                    and float(np.max(np.abs(q_current - waypoints[wp_idx][1])))
+                    <= session._waypoint_lead_deg
+                ):
+                    wp_idx += 1
+
             residual = float("inf")
-            if q_current is not None:
+            if q_current is not None and target is not None:
                 try:
                     current_pose = controller._arm_ik.fk(q_current)
                     residual = float(np.linalg.norm(current_pose[:3, 3] - target[:3, 3]))
@@ -408,24 +551,20 @@ class ArmHandle:
             if (
                 session.state.state is ControlState.ACTIVE
                 and session.state.active_stage is Stage.ARM
+                and target is not None
                 and residual <= session._arrival_tolerance_m
                 and resolved.settled
                 and resolved.valid
             ):
-                # Release the ARM stage so the next motion category (lift/base)
-                # can activate without a cross-stage conflict.  Feed feedback
-                # until the machine settles back to READY or the move deadline
-                # expires; returning while still SETTLING is accepted as a
-                # best-effort timeout so the caller can still use the report.
                 session.state.handle(ReleaseCommand())
                 while session.state.state in (ControlState.ACTIVE, ControlState.SETTLING):
                     if session._clock() >= deadline:
                         break
                     try:
-                        release_feedback = session.client.get_observation()
+                        release_feedback = _read_state_observation(session.client)
                     except Exception:
                         release_feedback = {}
-                    release_resolved = session._resolve_feedback(release_feedback)
+                    release_resolved = session._resolve_feedback(release_feedback, stage=Stage.ARM)
                     if release_resolved.sample_id is not None:
                         session.state.on_feedback(
                             release_resolved.sample_id,
@@ -438,7 +577,13 @@ class ArmHandle:
             session._sleeper(session._control_period_s)
 
     def move_by(
-        self, dx: float = 0.0, dy: float = 0.0, dz: float = 0.0, timeout_s: float | None = None
+        self,
+        dx: float = 0.0,
+        dy: float = 0.0,
+        dz: float = 0.0,
+        timeout_s: float | None = None,
+        *,
+        orientation: np.ndarray | None = None,
     ) -> MoveReport:
         """Blocking Cartesian move by ``(dx, dy, dz)`` in meters.
 
@@ -454,7 +599,7 @@ class ArmHandle:
             raise MotionNotEnabled(f"no controller available for {self.side}")
 
         try:
-            feedback = session.client.get_observation()
+            feedback = _read_state_observation(session.client)
             metadata = feedback.get("_robot_metadata") or getattr(
                 session.client, "latest_robot_metadata", None
             )
@@ -474,7 +619,11 @@ class ArmHandle:
 
         target = current_trans + delta
         return self.move_to(
-            float(target[0]), float(target[1]), float(target[2]), timeout_s=timeout_s
+            float(target[0]),
+            float(target[1]),
+            float(target[2]),
+            timeout_s=timeout_s,
+            orientation=orientation,
         )
 
 
@@ -491,7 +640,7 @@ class LiftHandle:
         if session is None:
             raise MotionNotEnabled("LiftHandle is not attached to a session")
         try:
-            feedback = session.client.get_observation()
+            feedback = _read_state_observation(session.client)
         except Exception as exc:
             raise FeedbackLost(f"failed to read lift height: {exc}") from exc
         key = "lift_axis.height_mm"
@@ -510,7 +659,7 @@ class LiftHandle:
             raise MotionNotEnabled("LiftHandle is not attached to a session")
         if not math.isfinite(mm):
             raise ValueError("lift target mm must be finite")
-        session._prime_state_machine()
+        session._prime_state_machine(stage=Stage.BASE_LIFT)
         command = LiftCommand(delta_mm=0.0)
         try:
             session.state.handle(command)
@@ -553,7 +702,7 @@ class BaseHandle:
             turn=float(turn),
             seconds=float(seconds),
         )
-        session._prime_state_machine()
+        session._prime_state_machine(stage=Stage.BASE_LIFT)
         try:
             session.state.handle(command)
         except _MotionBlocked:
@@ -589,14 +738,13 @@ class BaseHandle:
 class AlohaMiniControl:
     """Session object returned by :func:`connect`.
 
-    Holds the host client, exposes per-subsystem handles, and manages the
-    control lifecycle.  This is intentionally a skeleton for P5 cycle 1:
-    motion methods will be added in later cycles.
+    Holds the host client, exposes per-subsystem handles (left/right arm,
+    lift, base, grippers), and coordinates the supervision state machine.
     """
 
     def __init__(
         self,
-        client: Any,
+        client: RobotClient | Any,
         *,
         dry_run: bool,
         clock: Callable[[], float] | None = None,
@@ -610,6 +758,11 @@ class AlohaMiniControl:
         feedback_timeout_s: float = 1.0,
         keepalive_interval_s: float | None = None,
         r_body_to_arm: Mapping[str, np.ndarray] | None = None,
+        max_joint_step_deg: float = 2.0,
+        follow_error_tolerance_deg: float = 1.0,
+        follow_error_timeout_s: float = 1.0,
+        settled_max_joint_delta_deg: float = _SETTLED_MAX_JOINT_DELTA_DEG,
+        waypoint_lead_deg: float | None = None,
     ) -> None:
         """Bind the host client and build the per-subsystem handles."""
         self.client = client
@@ -624,10 +777,11 @@ class AlohaMiniControl:
         self._base_activity = False
 
         # Derived-feedback state: last resolved host session, the last
-        # measured kinematic configuration used to compute standstill, and the
-        # last accepted sample id so repeated/frozen frames do not fake arrival.
+        # measured kinematic configuration / lift height used to compute
+        # standstill, and the last accepted sample id.
         self._last_resolved_session_id: str | None = None
         self._last_resolved_q: dict[str, np.ndarray] | None = None
+        self._last_resolved_lift_mm: float | None = None
         self._last_resolved_sample_id: int | None = None
 
         self._clock = clock
@@ -640,6 +794,12 @@ class AlohaMiniControl:
         self._precheck_step_m = float(precheck_step_m)
         self._feedback_timeout_s = float(feedback_timeout_s)
         self._keepalive_interval_s = keepalive_interval_s
+        self._settled_max_joint_delta_deg = float(settled_max_joint_delta_deg)
+        self._waypoint_lead_deg = (
+            max(2.0 * float(max_joint_step_deg), float(follow_error_tolerance_deg))
+            if waypoint_lead_deg is None
+            else float(waypoint_lead_deg)
+        )
 
         self._r_body_to_arm: dict[str, np.ndarray] = {}
         for side in ("left", "right"):
@@ -665,43 +825,23 @@ class AlohaMiniControl:
                     clock=clock,
                     sender=client.send_action,
                     dry_run=dry_run,
+                    max_joint_step_deg=float(max_joint_step_deg),
                     max_joint_lead_deg=30.0,
-                    follow_error_tolerance_deg=1.0,
-                    follow_error_timeout_s=1.0,
+                    follow_error_tolerance_deg=float(follow_error_tolerance_deg),
+                    follow_error_timeout_s=float(follow_error_timeout_s),
                     keepalive_interval_s=self._keepalive_interval_s,
                 )
 
         if not dry_run:
             self._send_initial_hold()
 
-    def _resolve_feedback(self, feedback: Mapping[str, Any]) -> ResolvedControlStatus:
-        """Resolve a fail-closed control status from the production observation form.
-
-        Priority (U1):
-
-        1. ``_control_status`` / ``_robot_metadata`` inside the observation dict.
-        2. The client's committed side-channel attributes
-           (``latest_control_status`` / ``latest_robot_metadata`` /
-           ``observation_sequence`` / ``_host_session_id``).
-
-        ``settled`` and ``valid`` are derived from the measured kinematic
-        evidence when the side channel does not supply them:
-
-        * ``valid`` -- the frame provides finite joint positions for every
-          configured arm side.
-        * ``settled`` -- the joint positions did not change by more than
-          ``_SETTLED_MAX_JOINT_DELTA_DEG`` from the previous sample of the
-          same host session.
-
-        A host-session change discards the cached kinematic baseline and
-        resets the shared state machine so restarted sample sequences can
-        re-qualify (B6).
-        """
-        # Side-channel priority (U1): observation-dict fields are authoritative
-        # when present.  When the observation dict carries no ``_control_status``
-        # at all (production ``AlohaMiniClient`` form), missing ``settled``/
-        # ``valid`` are derived from measured kinematics; otherwise missing
-        # fields are fail-closed ``False``.
+    def _resolve_feedback(
+        self,
+        feedback: Mapping[str, Any],
+        *,
+        stage: Stage | None = None,
+    ) -> ResolvedControlStatus:
+        """Resolve a fail-closed control status from the observation and client side channels."""
         control_status_from_obs = feedback.get("_control_status")
         if control_status_from_obs is None:
             control_status = getattr(self.client, "latest_control_status", None) or {}
@@ -726,31 +866,27 @@ class AlohaMiniControl:
         explicit_valid = control_status.get("valid")
 
         # Host restart: discard stale evidence so the new session can qualify.
-        # This must run before the freshness gate so a restarted sample-id
-        # sequence is not rejected as stale (c3-f4-2 guard).
         if host_session_id is not None and host_session_id != self._last_resolved_session_id:
             self._last_resolved_session_id = host_session_id
             self._last_resolved_q = None
+            self._last_resolved_lift_mm = None
             self._last_resolved_sample_id = None
             self.state.reset()
             for controller in self._controllers.values():
                 controller.reset_feedback_baseline()
 
-        # Freshness gate (B9): only a forward sample_id is new motion evidence.
-        # A repeated/frozen sample must not be treated as a fresh standstill.
+        # Freshness gate: only a forward sample_id is new motion evidence.
         fresh = True
         if sample_id is not None and self._last_resolved_sample_id is not None:
             fresh = sample_id > self._last_resolved_sample_id
 
-        # Derive evidence quality from measured kinematic state.
+        # Derive evidence quality from measured state.
         q_by_side: dict[str, np.ndarray] | None = None
         derived_valid = False
         derived_settled = False
         if fresh and metadata is not None and self._adapter is not None:
             q_by_side = {}
             derived_valid = True
-            # Adapters may expose their configured sides via ``_signs``
-            # (JointKinematicAdapter); fall back to the controller set otherwise.
             if hasattr(self._adapter, "_signs"):
                 sides = list(self._adapter._signs)
             else:
@@ -772,16 +908,56 @@ class AlohaMiniControl:
                             float(np.max(np.abs(q_by_side[s] - self._last_resolved_q[s])))
                             for s in shared
                         )
-                        derived_settled = max_delta <= _SETTLED_MAX_JOINT_DELTA_DEG
+                        derived_settled = max_delta <= self._settled_max_joint_delta_deg
+            if derived_valid and q_by_side is not None:
+                self._last_resolved_q = {side: np.copy(q) for side, q in q_by_side.items()}
+                if sample_id is not None:
+                    self._last_resolved_sample_id = sample_id
+        elif fresh and self._adapter is None and stage is Stage.BASE_LIFT:
+            # Stage.BASE_LIFT without an arm kinematic adapter: derive validity
+            # and standstill from lift height and base velocity keys when present.
+            raw_lift = feedback.get("lift_axis.height_mm")
+            base_vel_keys = ("x.vel", "y.vel", "theta.vel")
+            present_vel_keys = [k for k in base_vel_keys if k in feedback]
+            lift_val: float | None = None
+            if raw_lift is not None and not isinstance(raw_lift, bool):
+                try:
+                    candidate = float(raw_lift)
+                    if math.isfinite(candidate):
+                        lift_val = candidate
+                except (TypeError, ValueError):
+                    lift_val = None
+            vels_finite = True
+            vels_still = True
+            for k in present_vel_keys:
+                raw_v = feedback[k]
+                if isinstance(raw_v, bool):
+                    vels_finite = False
+                    break
+                try:
+                    fv = float(raw_v)
+                except (TypeError, ValueError):
+                    vels_finite = False
+                    break
+                if not math.isfinite(fv):
+                    vels_finite = False
+                    break
+                if abs(fv) > _SETTLED_MAX_BASE_VEL:
+                    vels_still = False
 
-        if fresh and derived_valid and q_by_side is not None:
-            self._last_resolved_q = {side: np.copy(q) for side, q in q_by_side.items()}
-            if sample_id is not None:
-                self._last_resolved_sample_id = sample_id
+            if lift_val is not None and vels_finite:
+                derived_valid = True
+                lift_still = (
+                    self._last_resolved_lift_mm is not None
+                    and abs(lift_val - self._last_resolved_lift_mm) <= _SETTLED_MAX_LIFT_DELTA_MM
+                )
+                derived_settled = lift_still and vels_still
+                self._last_resolved_lift_mm = lift_val
+                if sample_id is not None:
+                    self._last_resolved_sample_id = sample_id
 
         # Fail-closed: explicit claims are invalidated by non-finite/missing
-        # evidence (U2 / U5).  A stale/repeated sample is never fresh standstill
-        # evidence, even if the host side-channel claims settled (B9).
+        # evidence, and a stale/repeated sample is never fresh standstill.
         if derive_missing:
             settled = explicit_settled if explicit_settled is not None else derived_settled
             valid = explicit_valid if explicit_valid is not None else derived_valid
@@ -803,28 +979,14 @@ class AlohaMiniControl:
         )
 
     def _has_explicit_settled_valid(self, feedback: Mapping[str, Any]) -> bool:
-        """Return True when the feedback channel carries explicit settled/valid claims.
-
-        Mirrors the side-channel priority in ``_resolve_feedback``: an
-        observation-dict ``_control_status`` is authoritative when present,
-        otherwise the client's committed side-channel attribute is consulted.
-        """
+        """Return True when the feedback channel carries explicit settled/valid claims."""
         control_status = feedback.get("_control_status")
         if control_status is None:
             control_status = getattr(self.client, "latest_control_status", None) or {}
         return "settled" in control_status and "valid" in control_status
 
-    def _prime_state_machine(self) -> None:
-        """Prime the shared state machine from STANDBY to READY.
-
-        Polls feedback, feeds the state machine via ``on_feedback``, and calls
-        ``resume()`` until the 3-settled-sample gate opens.  Bounded by
-        ``_move_timeout_s`` and ``_feedback_timeout_s``.  Dry-run safe: no
-        actions are dispatched during priming.
-
-        Raises:
-            MotionNotEnabled: when no clock/sleeper is available (B7).
-        """
+    def _prime_state_machine(self, *, stage: Stage = Stage.ARM) -> None:
+        """Prime the shared state machine from STANDBY to READY."""
         if self.state.state is not ControlState.STANDBY:
             return
         if self._clock is None or self._sleeper is None:
@@ -842,27 +1004,20 @@ class AlohaMiniControl:
                 )
 
             try:
-                feedback = self.client.get_observation()
+                feedback = _read_state_observation(self.client)
             except Exception:
                 feedback = {}
 
-            # C4b: without a kinematic adapter ``_resolve_feedback`` fail-closes
-            # settled/valid to False, so the motion gate can never open.  When the
-            # feedback carries no explicit settled/valid claim, fail fast with a
-            # reason that names the missing adapter instead of spinning to a
-            # confusing MotionTimeout.  An adapter-less session that *does* carry an
-            # explicit settled/valid claim skips this guard, but ``_resolve_feedback``
-            # still overwrites settled/valid to False unconditionally (``derived_valid``
-            # requires an adapter), so that session likewise ends in MotionTimeout --
-            # without the adapter-naming message.  Whether such an explicit-claim
-            # adapter-less path should be supported is an open contract question;
-            # today it is not.
-            if self._adapter is None and not self._has_explicit_settled_valid(feedback):
+            if (
+                stage is Stage.ARM
+                and self._adapter is None
+                and not self._has_explicit_settled_valid(feedback)
+            ):
                 raise MotionNotEnabled(
                     "motion requires a kinematic adapter; connect() was called without one"
                 )
 
-            resolved = self._resolve_feedback(feedback)
+            resolved = self._resolve_feedback(feedback, stage=stage)
             sample_id = resolved.sample_id
 
             if sample_id != last_sample_id:
@@ -881,11 +1036,11 @@ class AlohaMiniControl:
             self._sleeper(self._control_period_s)
 
     def _send_initial_hold(self) -> None:
-        """Hold the current measured pose without solving IK (B4 / D005)."""
+        """Hold the current measured pose without solving IK."""
         if self._adapter is None:
             return
         try:
-            feedback = self.client.get_observation()
+            feedback = _read_state_observation(self.client)
         except Exception:
             feedback = {}
         metadata = feedback.get("_robot_metadata")
@@ -934,7 +1089,7 @@ def _compute_moved(
     if initial_q is None or session._adapter is None:
         return 0.0
     try:
-        feedback = session.client.get_observation()
+        feedback = _read_state_observation(session.client)
         metadata = feedback.get("_robot_metadata") or getattr(
             session.client, "latest_robot_metadata", None
         )
@@ -982,39 +1137,17 @@ def connect(
     feedback_timeout_s: float = 1.0,
     keepalive_interval_s: float | None = None,
     r_body_to_arm: Mapping[str, np.ndarray] | None = None,
+    max_joint_step_deg: float = 2.0,
+    follow_error_tolerance_deg: float = 1.0,
+    follow_error_timeout_s: float = 1.0,
+    settled_max_joint_delta_deg: float = _SETTLED_MAX_JOINT_DELTA_DEG,
+    waypoint_lead_deg: float | None = None,
     **kwargs: Any,
 ) -> AlohaMiniControl:
     """Open a control session to an AlohaMini host.
 
     The ``enable_motion`` gate is evaluated before any host I/O so that
     accidental non-dry-run connections fail closed.
-
-    Args:
-        host: Host address passed to ``client_factory``.
-        dry_run: When ``True``, no real motion is commanded.
-        enable_motion: Must be ``True`` for non-dry-run connections.
-        client_factory: Injectable factory callable ``(host, **kwargs) -> client``.
-            When omitted, the session fails closed with ``RuntimeUnavailable``:
-            this library does not bundle the lerobot runtime.
-        clock: Injectable monotonic clock callable; required for paced motion.
-        sleeper: Injectable sleep callable; required for paced motion.
-        ik_factory: Injectable factory ``(side) -> arm_ik`` used by the solver.
-        adapter: Injected kinematics adapter used to convert feedback/actions.
-        control_period_s: Loop period in seconds for the paced motion loops.
-        arrival_tolerance_m: Cartesian arrival tolerance in meters.
-        move_timeout_s: Overall timeout in seconds for one blocking move.
-        feedback_timeout_s: Seconds without a new feedback sample before abort.
-        keepalive_interval_s: Optional keepalive period in seconds, or ``None``.
-        r_body_to_arm: Optional per-side body-to-arm rotation matrices.
-        **kwargs: Forwarded to ``client_factory``.
-
-    Returns:
-        An :class:`AlohaMiniControl` session.
-
-    Raises:
-        MotionNotEnabled: If ``dry_run=False`` and ``enable_motion=False``.
-        RuntimeUnavailable: 未注入 ``client_factory`` 时；本库不含 lerobot 运行时，
-            默认工厂恒不可用。
     """
     if not dry_run and not enable_motion:
         raise MotionNotEnabled("dry_run=False connections require enable_motion=True")
@@ -1035,4 +1168,9 @@ def connect(
         feedback_timeout_s=feedback_timeout_s,
         keepalive_interval_s=keepalive_interval_s,
         r_body_to_arm=r_body_to_arm,
+        max_joint_step_deg=max_joint_step_deg,
+        follow_error_tolerance_deg=follow_error_tolerance_deg,
+        follow_error_timeout_s=follow_error_timeout_s,
+        settled_max_joint_delta_deg=settled_max_joint_delta_deg,
+        waypoint_lead_deg=waypoint_lead_deg,
     )

@@ -2,8 +2,9 @@
 
 适配层之外的任何模块都禁止 import ``lerobot`` 的深层模块（如
 ``lerobot.motors``、``lerobot.robots.alohamini``）；需要机器人状态或动作时，
-只依赖这里定义的 :class:`RobotTransport` 与 :class:`RobotSpec` 协议。这样
-产品逻辑可以在不引入 lerobot 依赖的环境里被导入、测试与静态检查。
+只依赖这里定义的 :class:`RobotTransport`、:class:`RobotClient` 与
+:class:`RobotSpec` 协议。这样产品逻辑可以在不引入 lerobot 依赖的环境里被导入、
+测试与静态检查。
 """
 
 from __future__ import annotations
@@ -17,7 +18,10 @@ class RobotTransport(Protocol):
     """机器人运行时的最小传输面：读观测、下发动作、预热观测请求窗口。"""
 
     def get_observation(self) -> Mapping[str, Any]:
-        """返回一帧观测，键为关节名（如 ``"left_waist.pos"``）与相机名。"""
+        """返回一帧观测，键为关节名（如 ``"left_waist.pos"``）与相机名。
+
+        实现方可选支持 ``include_cameras: bool`` 关键字参数以在状态轮询时跳过相机帧。
+        """
         ...
 
     def send_action(self, action: Mapping[str, float]) -> Mapping[str, Any]:
@@ -26,6 +30,19 @@ class RobotTransport(Protocol):
 
     def prime_observation_request_window(self, *, include_cameras: bool) -> None:
         """预热观测请求窗口，避免首帧因相机请求而超时。"""
+        ...
+
+
+@runtime_checkable
+class RobotClient(RobotTransport, Protocol):
+    """具备连接生命周期管理（``connect`` / ``disconnect``）的机器人客户端协议。"""
+
+    def connect(self) -> None:
+        """建立与主机/硬件的连接。"""
+        ...
+
+    def disconnect(self) -> None:
+        """断开与主机/硬件的连接。"""
         ...
 
 

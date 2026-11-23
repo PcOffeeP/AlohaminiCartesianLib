@@ -4124,3 +4124,348 @@ def test_default_client_factory_without_runtime_raises_runtime_unavailable() -> 
     assert "client_factory" in str(excinfo.value), (
         f"the refusal must point at injecting client_factory: {str(excinfo.value)!r}"
     )
+
+
+# ===========================================================================
+# ADR D24 — 姿态默认保持 + SO(3)/直线航点二分步进 + 真机跟随参数 + BASE_LIFT 解耦
+# ===========================================================================
+def test_d24_real_arm_ik_move_by_9cm_completes_without_step_limit_deadlock() -> None:
+    """真实 ArmIK 沿 +Z 移动 9 cm：默认保持起始姿态并沿航点步进，不撞 2° step gate 死锁。"""
+    pytest.importorskip("placo")
+    from pathlib import Path
+
+    from alohamini_cartesian.control.api import connect
+    from alohamini_cartesian.control.arm_ik import ArmIK, ArmKinematicProfile
+    from alohamini_cartesian.kinematics.joint_adapter import (
+        JOINT_ORDER,
+        URDF_JOINT_NAMES,
+        JointKinematicAdapter,
+    )
+
+    urdf = str(
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "alohamini_cartesian"
+        / "kinematics"
+        / "assets"
+        / "am_arm200"
+        / "kinematics.urdf"
+    )
+    profile = ArmKinematicProfile(
+        urdf_path=urdf,
+        target_frame="left_Fixed_Jaw",
+        joint_names=tuple(URDF_JOINT_NAMES[j] for j in JOINT_ORDER),
+    )
+    ik = ArmIK(profile)
+    signs = {side: dict.fromkeys(JOINT_ORDER, 1.0) for side in ("left", "right")}
+    zeros = {side: dict.fromkeys(JOINT_ORDER, 0.0) for side in ("left", "right")}
+    urdf_limits = {
+        side: {j: ik._urdf_limits_deg[URDF_JOINT_NAMES[j]] for j in JOINT_ORDER}
+        for side in ("left", "right")
+    }
+    adapter = JointKinematicAdapter(signs=signs, zeros=zeros, urdf_limits=urdf_limits)
+
+    start_q = np.array([10.0, -20.0, 30.0, -40.0, 20.0, -10.0], dtype=float)
+    start_pose = ik.fk(start_q)
+
+    class _SimArmClient:
+        def __init__(self) -> None:
+            self.q = start_q.copy()
+            self.seq = 0
+            self.sends: list[dict[str, float]] = []
+            self.obs_kwargs: list[dict[str, Any]] = []
+            self._host_session_id = "sim-d24"
+            self.latest_robot_metadata = {
+                "schema_version": 2,
+                "robot_model": "alohamini2pro",
+                "motors": {
+                    f"arm_{s}_{j}": {
+                        "id": idx + 1,
+                        "model": "sts3215",
+                        "normalization": "degrees",
+                        "drive_mode": 0,
+                        "range_min": 0,
+                        "range_max": 4095,
+                        "homing_offset": 0,
+                        "resolution": 4096,
+                    }
+                    for s in ("left", "right")
+                    for idx, j in enumerate(JOINT_ORDER)
+                },
+            }
+
+        @property
+        def observation_sequence(self) -> int:
+            return self.seq
+
+        def connect(self) -> None:
+            pass
+
+        def disconnect(self) -> None:
+            pass
+
+        def prime_observation_request_window(self, *, include_cameras: bool) -> None:
+            pass
+
+        def get_observation(self, **kwargs: Any) -> dict[str, Any]:
+            self.obs_kwargs.append(dict(kwargs))
+            self.seq += 1
+            obs: dict[str, Any] = {}
+            for s in ("left", "right"):
+                for idx, j in enumerate(JOINT_ORDER):
+                    obs[f"arm_{s}_{j}.pos"] = float(self.q[idx])
+            return obs
+
+        def send_action(self, action: Any) -> dict[str, Any]:
+            self.sends.append(dict(action))
+            for idx, j in enumerate(JOINT_ORDER):
+                key = f"arm_left_{j}.pos"
+                if key in action:
+                    self.q[idx] = float(action[key])
+            return self.get_observation(include_cameras=False)
+
+    client = _SimArmClient()
+    clock = _C2FakeClock()
+    sleeper = _C2RecordingSleeper(clock, max_ticks=2000)
+
+    session = connect(
+        "sim-host",
+        dry_run=False,
+        enable_motion=True,
+        client_factory=lambda host, **kwargs: client,
+        clock=clock,
+        sleeper=sleeper,
+        ik_factory=lambda _side: ik,
+        adapter=adapter,
+        move_timeout_s=15.0,
+    )
+    report = session.left.move_by(dz=0.09)
+    final_pose = ik.fk(client.q)
+
+    # Position moved +9 cm along +Z within arrival tolerance, and wrist_roll did
+    # NOT violently twist toward world identity (~153 deg).
+    assert report.residual_m <= 0.005
+    assert np.allclose(final_pose[:3, 3], start_pose[:3, 3] + np.array([0.0, 0.0, 0.09]), atol=5e-3)
+    assert abs(float(client.q[5]) - float(start_q[5])) < 20.0
+    assert len(client.sends) > 5
+    assert all(kw == {"include_cameras": False} for kw in client.obs_kwargs)
+    session.disconnect()
+
+
+def test_d24_move_to_accepts_positional_timeout_and_explicit_slerp_orientation() -> None:
+    """位置参数 timeout_s 保持向后兼容，显式传 orientation 触发 SO(3) 插值且正常到位。"""
+    pytest.importorskip("placo")
+    from pathlib import Path
+
+    from alohamini_cartesian.control.api import connect
+    from alohamini_cartesian.control.arm_ik import ArmIK, ArmKinematicProfile
+    from alohamini_cartesian.kinematics.joint_adapter import (
+        JOINT_ORDER,
+        URDF_JOINT_NAMES,
+        JointKinematicAdapter,
+    )
+
+    urdf = str(
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "alohamini_cartesian"
+        / "kinematics"
+        / "assets"
+        / "am_arm200"
+        / "kinematics.urdf"
+    )
+    profile = ArmKinematicProfile(
+        urdf_path=urdf,
+        target_frame="left_Fixed_Jaw",
+        joint_names=tuple(URDF_JOINT_NAMES[j] for j in JOINT_ORDER),
+    )
+    ik = ArmIK(profile)
+    signs = {side: dict.fromkeys(JOINT_ORDER, 1.0) for side in ("left", "right")}
+    zeros = {side: dict.fromkeys(JOINT_ORDER, 0.0) for side in ("left", "right")}
+    urdf_limits = {
+        side: {j: ik._urdf_limits_deg[URDF_JOINT_NAMES[j]] for j in JOINT_ORDER}
+        for side in ("left", "right")
+    }
+    adapter = JointKinematicAdapter(signs=signs, zeros=zeros, urdf_limits=urdf_limits)
+
+    start_q = np.array([10.0, -20.0, 30.0, -40.0, 20.0, -10.0], dtype=float)
+    goal_q = start_q + np.array([0.0, 0.0, 0.0, 0.0, 0.0, 12.0])
+    goal_pose = ik.fk(goal_q)
+
+    class _SimRotClient:
+        def __init__(self) -> None:
+            self.q = start_q.copy()
+            self.seq = 0
+            self._host_session_id = "sim-rot"
+            self.latest_robot_metadata = {
+                "schema_version": 2,
+                "robot_model": "alohamini2pro",
+                "motors": {
+                    f"arm_{s}_{j}": {
+                        "id": idx + 1,
+                        "model": "sts3215",
+                        "normalization": "degrees",
+                        "drive_mode": 0,
+                        "range_min": 0,
+                        "range_max": 4095,
+                        "homing_offset": 0,
+                        "resolution": 4096,
+                    }
+                    for s in ("left", "right")
+                    for idx, j in enumerate(JOINT_ORDER)
+                },
+            }
+
+        @property
+        def observation_sequence(self) -> int:
+            return self.seq
+
+        def connect(self) -> None:
+            pass
+
+        def disconnect(self) -> None:
+            pass
+
+        def prime_observation_request_window(self, *, include_cameras: bool) -> None:
+            pass
+
+        def get_observation(self, **kwargs: Any) -> dict[str, Any]:
+            self.seq += 1
+            return {
+                f"arm_{s}_{j}.pos": float(self.q[idx])
+                for s in ("left", "right")
+                for idx, j in enumerate(JOINT_ORDER)
+            }
+
+        def send_action(self, action: Any) -> dict[str, Any]:
+            for idx, j in enumerate(JOINT_ORDER):
+                key = f"arm_left_{j}.pos"
+                if key in action:
+                    self.q[idx] = float(action[key])
+            return self.get_observation(include_cameras=False)
+
+    client = _SimRotClient()
+    clock = _C2FakeClock()
+    sleeper = _C2RecordingSleeper(clock, max_ticks=2000)
+
+    session = connect(
+        "sim-rot",
+        dry_run=False,
+        enable_motion=True,
+        client_factory=lambda host, **kwargs: client,
+        clock=clock,
+        sleeper=sleeper,
+        ik_factory=lambda _side: ik,
+        adapter=adapter,
+    )
+    # Positional timeout_s (4th arg) + keyword-only orientation.
+    report = session.left.move_to(
+        float(goal_pose[0, 3]),
+        float(goal_pose[1, 3]),
+        float(goal_pose[2, 3]),
+        10.0,
+        orientation=goal_pose[:3, :3],
+    )
+    assert report.residual_m <= 0.005
+    session.disconnect()
+
+
+def test_d24_configurable_follow_error_tolerance_avoids_d20_shoulder_false_timeout() -> None:
+    """connect() 暴露 follow_error_tolerance_deg，2.5° 容差下 1.1° 静差不误报 FOLLOW_TIMEOUT。"""
+    control = importlib.import_module(_CONTROL_PACKAGE)
+    ik = _C2ScriptedIK(solve_fn=_c2_step_solver)
+    clock = _C2FakeClock()
+    sleeper = _C2RecordingSleeper(clock, max_ticks=500)
+    # Lag behind target by 1.1 deg (> default 1.0 deg, < 2.5 deg) then arrive.
+    q_lagged = _C2_Q0 + np.array([1.1, 0.0, 0.0, 0.0, 0.0, 0.0])
+    call_count = {"n": 0}
+
+    def observer(_c: Any) -> dict[str, Any]:
+        call_count["n"] += 1
+        if call_count["n"] <= 5:
+            return _c2_obs(_C2_Q0, settled=True)
+        if call_count["n"] <= 45:
+            return _c2_obs(q_lagged, settled=False)
+        return _c2_obs(_C2_Q_ARRIVED, settled=True)
+
+    client = _C2FakeClient(observer=observer)
+    session = control.connect(
+        "host-d24-follow",
+        dry_run=False,
+        enable_motion=True,
+        client_factory=lambda host, **kwargs: client,
+        clock=clock,
+        sleeper=sleeper,
+        ik_factory=lambda _side: ik,
+        adapter=_c2_adapter(),
+        control_period_s=_C2_PERIOD,
+        move_timeout_s=5.0,
+        follow_error_tolerance_deg=2.5,
+        follow_error_timeout_s=1.0,
+    )
+    report = session.left.move_to(*_C2_TARGET_XYZ)
+    assert report.residual_m <= _C2_TOL
+    session.disconnect()
+
+
+def test_d24_lift_and_base_prime_without_arm_adapter_while_gripper_still_requires_adapter() -> None:
+    """Stage.BASE_LIFT 无手臂 adapter 仍可 priming 与运行，Stage.ARM 夹爪仍拒绝。"""
+    control = importlib.import_module(_CONTROL_PACKAGE)
+
+    class _BaseLiftClient:
+        def __init__(self) -> None:
+            self.seq = 0
+            self.sends: list[dict[str, float]] = []
+            self._host_session_id = "bl-session"
+
+        @property
+        def observation_sequence(self) -> int:
+            return self.seq
+
+        def connect(self) -> None:
+            pass
+
+        def disconnect(self) -> None:
+            pass
+
+        def prime_observation_request_window(self, *, include_cameras: bool) -> None:
+            pass
+
+        def get_observation(self, *, include_cameras: bool = True) -> dict[str, Any]:
+            assert include_cameras is False
+            self.seq += 1
+            return {
+                "lift_axis.height_mm": 120.0,
+                "x.vel": 0.0,
+                "y.vel": 0.0,
+                "theta.vel": 0.0,
+            }
+
+        def send_action(self, action: Any) -> dict[str, Any]:
+            self.sends.append(dict(action))
+            return {}
+
+    client = _BaseLiftClient()
+    clock = _C2FakeClock()
+    sleeper = _C2RecordingSleeper(clock, max_ticks=200)
+    session = control.connect(
+        "host-bl",
+        dry_run=True,
+        client_factory=lambda host, **kwargs: client,
+        clock=clock,
+        sleeper=sleeper,
+        adapter=None,
+        control_period_s=_C2_PERIOD,
+        move_timeout_s=2.0,
+    )
+
+    # Gripper belongs to Stage.ARM and must still fail closed without adapter.
+    with pytest.raises(control.MotionNotEnabled, match="adapter"):
+        session.left.gripper.open()
+
+    # Lift and Base belong to Stage.BASE_LIFT and succeed without arm adapter.
+    session.lift.move_by(5.0)
+    session.stop()
+    session.base.drive(0.1, 0.0, 0.0, 0.05)
+    assert client.sends == []
+    session.disconnect()
