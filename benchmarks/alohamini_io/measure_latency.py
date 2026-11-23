@@ -458,9 +458,13 @@ from typing import Any
 _BENCH_DIR = str(Path(__file__).resolve().parent)
 if _BENCH_DIR not in sys.path:
     sys.path.insert(0, _BENCH_DIR)
+_REPO_SRC = str(Path(__file__).resolve().parents[2] / "src")
+if Path(_REPO_SRC).is_dir() and _REPO_SRC not in sys.path:
+    sys.path.insert(0, _REPO_SRC)
 
 from _ml_impl.cli import parse_args as _parse_args_impl  # noqa: E402
 from _ml_impl.common import (  # noqa: E402, F401
+    _QUOTED_VALUE_MAX_CHARS,
     ANCHOR_CHOICES,
     ANCHOR_COMMAND,
     ANCHOR_PRESENT,

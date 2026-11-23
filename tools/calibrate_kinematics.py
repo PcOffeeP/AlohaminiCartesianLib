@@ -268,7 +268,12 @@ def main(
             print("观测文件顶层必须是 JSON 对象", file=sys.stderr)
             return EXIT_USAGE
         observation = doc.get("observation", doc)
-        metadata = doc.get("metadata") or doc.get("_robot_metadata") or doc.get("robot_metadata")
+        metadata = (
+            doc.get("metadata")
+            or doc.get("_robot_metadata")
+            or doc.get("robot_metadata")
+            or (observation.get("_robot_metadata") if isinstance(observation, Mapping) else None)
+        )
         if not isinstance(observation, Mapping) or not isinstance(metadata, Mapping):
             print("观测文件缺少有效的 observation 或 metadata", file=sys.stderr)
             return EXIT_MISSING_CALIB

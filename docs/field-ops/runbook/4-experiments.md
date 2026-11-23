@@ -812,7 +812,7 @@ ModuleNotFoundError: No module named 'placo'
 - **三档模式**：`--dry-run`（纯离线，零网络零发送）、`--limits-only`（只读限位窗口，零发送）、默认真机运动档（必须显式传 `--enable-motion` 且提供真实 `--signs-json` / `--zeros-json`）。
 - **真机跟随参数**：脚本默认注入 `follow_error_tolerance_deg=2.5`、`settled_max_joint_delta_deg=0.2`（对齐 `docs/ADR.md` D20 肩轴残余口径），支持按需通过 `--follow-error-tolerance-deg` / `--settled-max-joint-delta-deg` / `--max-joint-step-deg` / `--waypoint-lead-deg` 显式覆盖。
 - **不造假标定**：缺 `--signs-json` / `--zeros-json` 或任一关节字段时以退出码 `15` 拒绝（见 `AGENTS.md` 第 3 节证据纪律）。
-- **退出码**：`0` 成功；`2` 参数错误；`10` 预检/IK 拒绝；`11` `move_to` 超时；`12` 反馈失联；`13` 运动被阻断；`14` 未启用运动或缺 `lerobot`；`15` 前置标定文件缺失。
+- **退出码**：`0` 成功；`2` 参数/配置错误（含缺失 `--enable-motion`）；`10` 预检/IK 拒绝；`11` `move_to` 超时；`12` 反馈失联；`13` 运动被阻断；`14` 未启用运动、缺少 `lerobot`/`placo` 运行时或连接失败；`15` 前置标定文件缺失。
 
 脚本用到的库入口：`connect`（`src/alohamini_cartesian/control/api.py:969`）、`ArmHandle.move_to`（`src/alohamini_cartesian/control/api.py:214`）、`ArmHandle.move_by`（`src/alohamini_cartesian/control/api.py:440`）、`ArmIK.solve`（`src/alohamini_cartesian/control/arm_ik.py:280`）、`JointKinematicAdapter`（`src/alohamini_cartesian/kinematics/joint_adapter.py:127`）。
 
@@ -908,13 +908,13 @@ run 10.7-path env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:/Users/pcoffeep/pi
 | 码 | 含义 | 对应异常 / 来源 | 是否可能已下发 |
 | --- | --- | --- | --- |
 | `0` | 到位（离线档为判据全过） | — | 离线档为零发送 |
-| `2` | 参数解析失败 | argparse 自身，或本脚本对 `--points` / `--dz` / `--timeout-s` 的入参校验（`_EXIT_USAGE`），同 [§10](../reference/gates.md#exit-codes) 既有口径 | 否 |
-| `10` | 预检 / IK 拒绝 | `OutOfRange`（`src/alohamini_cartesian/control/api.py:199-201`） | 否 |
-| `11` | `move_to` 超时 | `MotionTimeout`（`src/alohamini_cartesian/control/api.py:299-302`） | 可能（视 step gate 是否放行过某些周期） |
-| `12` | 反馈失联 | `FeedbackLost`（`src/alohamini_cartesian/control/api.py:324-327`） | 可能 |
-| `13` | 运动被阻断 | `MotionBlocked`，含 adapter 连续 3 次失败（`src/alohamini_cartesian/control/api.py:387-391`） | 可能 |
-| `14` | 运动未启用，或缺 `lerobot` | `MotionNotEnabled`（`src/alohamini_cartesian/control/api.py:1019-1020`）、`ImportError`（vendor 环境无 `lerobot`） | 否 |
-| `15` | 前置缺失（`--signs-json` / `--zeros-json` 未给或缺关节） | 脚本自身（`_load_side_json` → `_prereq_error`） | 否 |
+| `2` | 参数或配置错误（含缺 `--enable-motion`） | argparse 自身，或本脚本对 `--points` / `--dx..dz` / `--timeout-s` / 跟随容差参数的校验（`EXIT_USAGE`），同 [§10](../reference/gates.md#exit-codes) 既有口径 | 否 |
+| `10` | 预检 / IK 拒绝 | `OutOfRange`（`src/alohamini_cartesian/control/api.py`） | 否 |
+| `11` | `move_to` 超时 | `MotionTimeout`（`src/alohamini_cartesian/control/api.py`） | 可能（视 step gate 是否放行过某些周期） |
+| `12` | 反馈失联 | `FeedbackLost`（`src/alohamini_cartesian/control/api.py`） | 可能 |
+| `13` | 运动被阻断 | `MotionBlocked`，含 adapter 连续 3 次失败（`src/alohamini_cartesian/control/api.py`） | 可能 |
+| `14` | 运动未启用、缺运行时或连接失败 | `MotionNotEnabled` / `ImportError` / `RuntimeError`（缺 `lerobot` 或 `placo`，或连接失败） | 否 |
+| `15` | 前置缺失（`--signs-json` / `--zeros-json` 未给或缺关节） | 脚本自身（`_load_flat_joint_json` → `EXIT_MISSING_CALIB`） | 否 |
 
 两条**不在本表**的逃逸形态（脚本没写 `try/except`，按 Python 默认行为）：
 
@@ -967,7 +967,7 @@ Gate A–F 是 `measure_latency.py` 里的运行时门禁（[§7.1](#exp-e3) 的
 真跑前逐条勾选，勾不全不开跑。本节只列 `move_to` 额外的几条，其余与 [§7.1](#exp-e3) 的开跑勾选单并行使用：
 
 - [ ] 现场运动授权到手，写明「哪一侧臂、沿 +Z 9 cm、谁在旁、断电开关在谁手上」，落进 [§3.9](1-prepare.md#sec-3) 的 `scope-*`
-- [ ] **手臂低位或有承托**：`move_to` 的姿态目标是单位矩阵（不是保持当前姿态），末端姿态会朝 identity 大幅转
+- [ ] **手臂低位或有承托**：默认按 ADR D24 保持起始实测 FK 姿态（`orientation=None`）并按航点二分步进；仅在显式加 `--identity-orientation` 对照测试时才会转向单位姿态，仍须保持低位或有承托
 - [ ] 有能按断电开关的人站在机器人旁；远程无人在场时**不跑** ② 与 ③
 - [ ] 空场、无负载、另一臂不参与
 - [ ] 先跑 ①a（只读）与 ①b（离线 dry-run），两者都过再谈真跑
@@ -983,20 +983,20 @@ Gate A–F 是 `measure_latency.py` 里的运行时门禁（[§7.1](#exp-e3) 的
 | 方向与幅度 | 沿 `+Z` 位移 `0.09 m` 等分 7 点（每点 `0.012857 m`） |
 | `+Z` 的方向语义 | `move_by` 的增量先按 `session._r_body_to_arm[side]` 旋转再加到实测位姿；该矩阵默认是单位矩阵（`src/alohamini_cartesian/control/api.py:644-650`），所以默认就是「基座系 +Z」。`site.yaml` 里没有任何坐标系或工作区字段，机身实际朝向与基座系是否同向只能现场确认 |
 | 离线核算用的起点 | 假设 seed 关节角 `(10, -20, 30, -40, 20, -10)°`（`tests/test_arm_ik.py:682` 的 `SOLVE_UNREACHABLE_SEED_Q`，经 `tests/test_arm_ik.py:918` 的 `SOLVE_SEED_Q` 引用），FK 末端 `(-0.054681, -0.184418, 0.285184) m`，距基座原点 `0.343991 m`。**这是假设，不是真机位姿** |
-| 姿态 | `move_to` 构造的目标是 `np.eye(4)` 再只写平移分量（`src/alohamini_cartesian/control/api.py:267-270`）→ 下发 **identity 姿态**，不是「保持当前姿态」 |
+| 姿态 | 按 ADR D24：`move_to` 在 `orientation=None` 时默认**锁定起始实测 FK 姿态**（保持当前姿态）；只有显式传入 `--identity-orientation`（`orientation=np.eye(3)`）时才执行 SO(3) 插值转向世界单位姿态 |
 
 轴的选择理由：`+Z` 与「基座原点 → seed 末端」方向的夹角是六个基座系轴里最小的（34.0°），且 URDF 已剥掉 collision mesh、`placo` 无自碰撞与桌面约束，向上位移在物理上最不容易撞桌。**这是选择理由，不是安全证明。**
 
 ### 预期值表（两种形态）
 
-`move_to` 实际用 identity 形态，**现场预期看 identity 那一组**；姿态保持那组只作对照，说明「换成保持姿态会好很多」。本节的脚本只产出 identity 那组（目标姿态写死单位矩阵）。
+自 ADR D24 起，`move_to` 与 `tools/run_cartesian_move.py` 默认采用**姿态保持形态**（`orientation=None`，每步关节跳变经航点二分收敛至 `<= max_joint_step_deg`）；下表同时保留 `--identity-orientation` 对照数据用于历史比较与大跨度姿态回归排查。
 
 单点（`+Z` 9 cm）：
 
 | 形态 | `ok` | 残差 (m) | 姿态误差 | 最小限位裕度 | 最紧关节 | 六关节角（度） |
 | --- | --- | --- | --- | --- | --- | --- |
-| 姿态保持（对照，非 `move_to` 形态） | True | 0.000692 | 0.0° | 115.54° | `elbow_flex` | `[10.0001, -34.1125, 64.3720, -19.7404, 19.9999, -9.9999]` |
-| **identity（`move_to` 实际形态）** | True | **0.000913** | 0.02° | **16.23°** | **`wrist_roll`** | `[16.3162, -48.7143, 61.4876, -77.2437, -0.0134, -163.6820]` |
+| **姿态保持（D24 默认形态）** | True | **0.000692** | 0.0° | **115.54°** | `elbow_flex` | `[10.0001, -34.1125, 64.3720, -19.7404, 19.9999, -9.9999]` |
+| identity（需显式 `--identity-orientation`） | True | 0.000913 | 0.02° | 16.23° | `wrist_roll` | `[16.3162, -48.7143, 61.4876, -77.2437, -0.0134, -163.6820]` |
 
 其它轴向 9 cm（identity 形态）：
 
@@ -1027,7 +1027,7 @@ Gate A–F 是 `measure_latency.py` 里的运行时门禁（[§7.1](#exp-e3) 的
 
 占位与假设要标清：seed 位姿是**假设**；URDF 的 `±179.9087°` 是**乐观上界**；真机窗口只能由 ①a 取。
 
-**现场最可能的形态（离线可推、未实测）**：identity 形态下第一个点就要把 `wrist_roll` 从 seed 的 `-10°` 跨到 `-163.6°`，跨 `153.6°`；而 step gate 上限是 `2.0°` / 周期（`src/alohamini_cartesian/control/controller.py:133`、`src/alohamini_cartesian/control/controller.py:535-543`）。若真机位姿接近这个假设 seed，②③ 会在第一个周期就被 step gate 拒发、逐周期重复，最后走满 `--timeout-s` 抛 `MotionTimeout`（`src/alohamini_cartesian/control/api.py:300`），JSON 里 `moves` 没有成功行——**这是预期形态，不是故障**。反过来，若真机位姿与假设差很远（例如 `wrist_roll` 本来就在 `-163°` 附近），第一次真跑可能真的动起来。两种结果都要按本节留痕，并按「现场确认项」第 8 条判。
+**现场预期形态（D24 升级后）**：默认姿态保持 + 链式航点二分下，每段航点的关节跳变均被控制在 `<= max_joint_step_deg`（默认 `2.0°`），不再出现 D24 之前「单拍跳 153.6° 撞 step gate 死锁超时」的旧形态；若真机实际出现 `MotionTimeout`（exit `11`），优先查消息末尾是否带 `(FOLLOW_TIMEOUT)` 与真机有效限位窗口（①a）。仅在显式加 `--identity-orientation` 时，才需要重点核对 `wrist_roll ≈ -163.7°` 是否落在真机标定窗口内。
 
 ### 现场确认项（[§10.7](#exp-e7)）
 

@@ -63,8 +63,8 @@ DOCUMENT_DIRECTORY = "docs"
 ROOT_DOCUMENTS = ("README.md", "TODO.md", "AGENTS.md")
 
 # 过渡期文档：仍在扫描范围内、上面的引用照旧逐条判定，但引用条数不计入
-# ``MIN_ANCHOR_REFERENCES``。作用是让「按计划删掉过渡表」不用动下限常量。
-# 键是仓库相对的归一化 posix 路径（与 ``repository_documents`` 的键同形）。
+# ``MIN_ANCHOR_REFERENCES``。``mapping.md`` 已按 ADR D25 删除，此处保留配置用于
+# 单元守卫机制（未来如有新的过渡期文档可复用该集合）。
 TRANSITIONAL_DOCUMENTS = frozenset({"docs/field-ops/reference/mapping.md"})
 
 # 重组方案的对外跳转目标：这些 id 必须在扫描范围内被定义。定义在哪个文件由文档作者决定，

@@ -79,10 +79,15 @@ def _read_state_observation(client: Any) -> Mapping[str, Any]:
 
 
 def _validate_orientation(orientation: Any) -> np.ndarray:
-    """Validate an explicit 3x3 rotation matrix target."""
+    """Validate an explicit 3x3 proper SO(3) rotation matrix target."""
     rot = np.asarray(orientation, dtype=float)
     if rot.shape != (3, 3) or not np.all(np.isfinite(rot)):
         raise ValueError(f"orientation must be a finite (3, 3) matrix, got shape {rot.shape}")
+    if not np.allclose(rot.T @ rot, np.eye(3, dtype=float), atol=1e-4):
+        raise ValueError("orientation must be an orthogonal SO(3) rotation matrix")
+    det = float(np.linalg.det(rot))
+    if not math.isclose(det, 1.0, abs_tol=1e-4):
+        raise ValueError(f"orientation must have det=+1 (proper rotation), got det={det:.6f}")
     return rot.copy()
 
 
@@ -361,18 +366,18 @@ class ArmHandle:
         if controller is None:
             raise MotionNotEnabled(f"no controller available for {self.side}")
 
+        fx, fy, fz = float(x), float(y), float(z)
+        if not (math.isfinite(fx) and math.isfinite(fy) and math.isfinite(fz)):
+            raise ValueError(f"target coordinates must be finite, got ({x!r}, {y!r}, {z!r})")
+
         explicit_rot = _validate_orientation(orientation) if orientation is not None else None
         target: np.ndarray | None = None
         if explicit_rot is not None:
             target = np.eye(4, dtype=float)
             target[:3, :3] = explicit_rot
-            target[0, 3] = float(x)
-            target[1, 3] = float(y)
-            target[2, 3] = float(z)
-        fallback_target = np.eye(4, dtype=float)
-        fallback_target[0, 3] = float(x)
-        fallback_target[1, 3] = float(y)
-        fallback_target[2, 3] = float(z)
+            target[0, 3] = fx
+            target[1, 3] = fy
+            target[2, 3] = fz
 
         timeout = session._move_timeout_s if timeout_s is None else float(timeout_s)
         deadline = session._clock() + timeout
@@ -435,31 +440,39 @@ class ArmHandle:
                         f"(sample_id={sample_id})"
                     )
 
-            metadata = feedback.get("_robot_metadata") or getattr(
-                session.client, "latest_robot_metadata", None
-            )
+            metadata = feedback.get("_robot_metadata")
+            if metadata is None:
+                metadata = getattr(session.client, "latest_robot_metadata", None)
 
             # Extract the current kinematic configuration early: it seeds the
             # controller, locks the held orientation (when orientation=None),
             # feeds the arrival residual, and enables whole-path precheck.
             q_current: np.ndarray | None = None
-            if metadata is not None and session._adapter is not None:
+            adapter_error_detail: str | None = None
+            if metadata is None:
+                adapter_error_detail = "feedback is missing _robot_metadata"
+            elif session._adapter is not None:
                 try:
-                    q_current = session._adapter.observation_to_kinematic_deg(
+                    q_candidate = session._adapter.observation_to_kinematic_deg(
                         self.side, feedback, metadata
                     )
-                    if initial_q is None:
-                        initial_q = np.copy(q_current)
-                except Exception:
+                    if np.all(np.isfinite(q_candidate)):
+                        q_current = q_candidate
+                        if initial_q is None:
+                            initial_q = np.copy(q_current)
+                    else:
+                        adapter_error_detail = "non-finite kinematic observation"
+                except Exception as exc:  # noqa: BLE001
                     q_current = None
+                    adapter_error_detail = str(exc)
 
             if target is None and q_current is not None:
                 start_pose = controller._arm_ik.fk(q_current)
                 target = np.eye(4, dtype=float)
                 target[:3, :3] = np.asarray(start_pose[:3, :3], dtype=float)
-                target[0, 3] = float(x)
-                target[1, 3] = float(y)
-                target[2, 3] = float(z)
+                target[0, 3] = fx
+                target[1, 3] = fy
+                target[2, 3] = fz
 
             # Prime the shared state machine until the arm path is active.
             if session.state.state is ControlState.STANDBY:
@@ -491,12 +504,17 @@ class ArmHandle:
                 wp_idx = 0
                 prechecked = True
 
+            # Record whether this tick actually targets the final waypoint
+            # before ``wp_idx`` is advanced, so arrival never triggers early.
+            ticked_final_waypoint = (not waypoints) or (wp_idx == len(waypoints) - 1)
             if waypoints:
-                tick_target = waypoints[wp_idx][0]
+                tick_target: Any = waypoints[wp_idx][0]
             elif target is not None:
                 tick_target = target
             else:
-                tick_target = fallback_target
+                # Fail-closed: never fabricate an identity orientation target
+                # before the initial measured orientation has been locked.
+                tick_target = None
 
             outcome = controller.tick(feedback, tick_target, resolved=resolved)
 
@@ -512,11 +530,19 @@ class ArmHandle:
             if outcome.error_code is ControlError.FOLLOW_TIMEOUT:
                 saw_follow_timeout = True
 
-            if outcome.error_code is ControlError.ADAPTER_FAILED:
+            is_adapter_failure = outcome.error_code is ControlError.ADAPTER_FAILED or (
+                tick_target is None
+                and session.state.state is ControlState.ACTIVE
+                and session.state.active_stage is Stage.ARM
+                and adapter_error_detail is not None
+            )
+            if is_adapter_failure:
                 consecutive_adapter_failures += 1
                 if consecutive_adapter_failures >= _MAX_CONSECUTIVE_ADAPTER_FAILURES:
-                    detail = outcome.detail or "no detail"
-                    raise _MotionBlocked(f"adapter failed ({outcome.error_code.value}): {detail}")
+                    detail = outcome.detail or adapter_error_detail or "no detail"
+                    raise _MotionBlocked(
+                        f"adapter failed ({ControlError.ADAPTER_FAILED.value}): {detail}"
+                    )
             else:
                 consecutive_adapter_failures = 0
 
@@ -540,19 +566,41 @@ class ArmHandle:
                     wp_idx += 1
 
             residual = float("inf")
+            current_pose: np.ndarray | None = None
             if q_current is not None and target is not None:
                 try:
                     current_pose = controller._arm_ik.fk(q_current)
                     residual = float(np.linalg.norm(current_pose[:3, 3] - target[:3, 3]))
                     last_residual = residual
                 except Exception:
-                    pass
+                    current_pose = None
+
+            orientation_ok = True
+            if explicit_rot is not None and target is not None:
+                if current_pose is None:
+                    orientation_ok = False
+                else:
+                    _, rot_err_rad = _rotation_axis_angle(
+                        np.asarray(current_pose[:3, :3], dtype=float),
+                        target[:3, :3],
+                    )
+                    rot_tol_rad = math.radians(max(2.0, controller._follow_error_tolerance_deg))
+                    at_final_q = (
+                        bool(waypoints)
+                        and q_current is not None
+                        and float(np.max(np.abs(q_current - waypoints[-1][1])))
+                        <= max(controller._follow_error_tolerance_deg, 1.0)
+                    )
+                    orientation_ok = (rot_err_rad <= rot_tol_rad) or at_final_q
 
             if (
                 session.state.state is ControlState.ACTIVE
                 and session.state.active_stage is Stage.ARM
                 and target is not None
+                and ticked_final_waypoint
+                and (not waypoints or outcome.error_code is None)
                 and residual <= session._arrival_tolerance_m
+                and orientation_ok
                 and resolved.settled
                 and resolved.valid
             ):
@@ -1051,6 +1099,8 @@ class AlohaMiniControl:
         for side in ("left", "right"):
             try:
                 q_deg = self._adapter.observation_to_kinematic_deg(side, feedback, metadata)
+                if not np.all(np.isfinite(q_deg)):
+                    continue
                 action = self._adapter.kinematic_deg_to_action(side, q_deg, metadata)
                 self.client.send_action(action)
             except Exception:

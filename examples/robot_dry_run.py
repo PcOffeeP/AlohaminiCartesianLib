@@ -288,16 +288,11 @@ def _print_observation(
 def _run_dry_run_lift_command(session: AlohaMiniControl) -> None:
     """对升降轴下一条 dry-run 命令：读高度、``move_by``、再读高度。
 
-    本会话没有注入 ``JointKinematicAdapter``：``LiftHandle.move_by`` 走到
-    ``session._prime_state_machine()`` 就会抛 ``MotionNotEnabled``
-    （``src/alohamini_cartesian/control/api.py:860-862``），命令进不了状态机，也到不了下发
-    门禁。命令被控制层拒绝时只打印原因、不打印 Traceback：拒绝本身也是「零发送」的一种结果，
-    不该让读数消失。
-
-    归因按异常类型分开：只有 ``MotionNotEnabled`` 才是 priming 阶段的 adapter 门禁拒绝。
-    ``height_before = session.lift.height()`` 在命令之前执行，首帧未到时抛 ``FeedbackLost``
-    （``observation missing 'lift_axis.height_mm'``）——那时命令还没下发，说成「门禁拒绝」是
-    错的（远程窗口首发帧丢包很常见）。其余三类只报类型与消息、不做归因。
+    按 ADR D24，``Stage.BASE_LIFT`` 的 priming 解耦了 6 轴手臂 ``JointKinematicAdapter``：
+    在未注入手臂 adapter 的干跑会话中，``LiftHandle.move_by`` 仍可基于
+    ``lift_axis.height_mm`` 走完状态机闭环，同时在 ``dry_run=True`` 下严格保持零发送。
+    若在读高度或执行过程中遇到控制层异常（如首帧缺失抛出 ``FeedbackLost``、或显式门禁
+    抛出 ``MotionNotEnabled``），只打印原因、不打印 Traceback，确保读数与零发送计数可见。
 
     Args:
         session: ``connect(dry_run=True)`` 打开的会话。
@@ -324,10 +319,10 @@ def _run_dry_run_lift_command(session: AlohaMiniControl) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """真机 dry-run 主流程：注入厂商 client、读一次观测、下一条零发送命令、断开。
+    """真机 dry-run 主流程：注入厂商 client、读一次观测、下一条零发送升降命令、断开。
 
-    命令在 priming 阶段的 adapter 门禁（``src/alohamini_cartesian/control/api.py:860-862``）
-    就被拒，不进入状态机，所以本会话不会下发任何动作。
+    会话以 ``dry_run=True`` 打开：升降命令可走通 ``Stage.BASE_LIFT`` 逻辑（ADR D24），
+    但发送闸门全程保持零发送（``send_action`` 调用次数恒为 0）。
 
     Args:
         argv: 命令行参数；``None`` 时取 ``sys.argv[1:]``。

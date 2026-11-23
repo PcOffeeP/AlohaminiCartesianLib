@@ -40,6 +40,26 @@ def test_offline_dry_run_9cm_succeeds_with_zero_sends_and_bounded_joint_hops(
     assert payload["final_residual_m"] <= 0.005
 
 
+def test_architecture_doc_dry_run_command_with_points_and_out_file(
+    tmp_path: Path, capsys: Any
+) -> None:
+    """文档示例命令 ``--dry-run --points 7 --out <path>`` 离线直通并写 7 段 JSON 产物。"""
+    pytest.importorskip("placo")
+    tool = _load_tool()
+    out_file = tmp_path / "move-dryrun.json"
+    code = tool.main(["--dry-run", "--points", "7", "--out", str(out_file)])
+    assert code == 0
+    stdout = capsys.readouterr().out
+    assert "[dry-run] ok=True points=7" in stdout
+    assert f"[产物] {out_file}" in stdout
+    payload = json.loads(out_file.read_text(encoding="utf-8"))
+    assert payload["ok"] is True
+    assert payload["points"] == 7
+    assert len(payload["segments"]) == 7
+    assert payload["send_action_calls"] == 0
+    assert payload["max_joint_hop_deg"] <= 2.0 + 1e-6
+
+
 def test_limits_only_without_signs_or_zeros_exits_15() -> None:
     """缺 --signs-json / --zeros-json 时必须按退出码 15 拒绝，绝不伪造标定。"""
     tool = _load_tool()
@@ -58,8 +78,27 @@ def test_motion_without_enable_motion_flag_exits_2(tmp_path: Path) -> None:
     assert code == tool.EXIT_USAGE
 
 
-def test_limits_only_reads_injected_client_with_zero_sends(tmp_path: Path, capsys: Any) -> None:
-    """--limits-only 通过注入 client 读取有效限位窗口，严格零发送。"""
+@pytest.mark.parametrize(
+    "bad_argv",
+    [
+        ["--dry-run", "--points", "0"],
+        ["--dry-run", "--settled-max-joint-delta-deg", "nan"],
+        ["--dry-run", "--settled-delta-deg", "-0.5"],
+        ["--dry-run", "--waypoint-lead-deg", "0"],
+        ["--dry-run", "--waypoint-lead-deg", "inf"],
+        ["--dry-run", "--follow-error-tolerance-deg", "0"],
+    ],
+)
+def test_invalid_numeric_flags_exit_usage(bad_argv: list[str]) -> None:
+    """非有限或非正参数以及 --points < 1 必须按退出码 2 拒绝。"""
+    tool = _load_tool()
+    assert tool.main(bad_argv) == tool.EXIT_USAGE
+
+
+def test_limits_only_primes_window_intersects_urdf_and_never_sends(
+    tmp_path: Path, capsys: Any
+) -> None:
+    """--limits-only 先 prime(include_cameras=False)、与 URDF 限位求交、严格零发送。"""
     tool = _load_tool()
     signs_path = tmp_path / "signs.json"
     zeros_path = tmp_path / "zeros.json"
@@ -69,6 +108,8 @@ def test_limits_only_reads_injected_client_with_zero_sends(tmp_path: Path, capsy
     class _FakeClient:
         def __init__(self) -> None:
             self.send_calls = 0
+            self.prime_calls: list[bool] = []
+            # Wide calibration range (~350 deg) so URDF limits actively intersect it.
             self.latest_robot_metadata = {
                 "schema_version": 2,
                 "robot_model": "alohamini2pro",
@@ -78,8 +119,8 @@ def test_limits_only_reads_injected_client_with_zero_sends(tmp_path: Path, capsy
                         "model": "sts3215",
                         "normalization": "range_m100_100",
                         "drive_mode": 0,
-                        "range_min": 500,
-                        "range_max": 3500,
+                        "range_min": 50,
+                        "range_max": 4045,
                         "homing_offset": 0,
                         "resolution": 4096,
                     }
@@ -94,7 +135,7 @@ def test_limits_only_reads_injected_client_with_zero_sends(tmp_path: Path, capsy
             pass
 
         def prime_observation_request_window(self, *, include_cameras: bool) -> None:
-            pass
+            self.prime_calls.append(include_cameras)
 
         def get_observation(self, *, include_cameras: bool = True) -> dict[str, Any]:
             assert include_cameras is False
@@ -116,15 +157,18 @@ def test_limits_only_reads_injected_client_with_zero_sends(tmp_path: Path, capsy
             str(zeros_path),
             "--site",
             str(REPO_ROOT / "configs" / "site.yaml"),
+            "--json",
         ],
         client_factory=lambda _host, **_kw: fake,
     )
     assert code == 0
     assert fake.send_calls == 0
+    assert fake.prime_calls == [False]
     payload = json.loads(capsys.readouterr().out)
     assert payload["robot_model"] == "alohamini2pro"
     assert len(payload["effective_limits_deg"]) == 6
-    assert all(
-        np.isfinite(lo) and np.isfinite(hi) and lo < hi
-        for lo, hi in payload["effective_limits_deg"].values()
-    )
+    urdf_limits = tool._read_urdf_limits_deg(tool.DEFAULT_URDF_PATH)
+    for urdf_joint, (lo, hi) in payload["effective_limits_deg"].items():
+        assert np.isfinite(lo) and np.isfinite(hi) and lo < hi
+        u_lo, u_hi = urdf_limits[urdf_joint]
+        assert lo >= u_lo - 1e-6 and hi <= u_hi + 1e-6
