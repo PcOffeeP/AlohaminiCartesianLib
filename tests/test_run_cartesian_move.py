@@ -73,7 +73,9 @@ def test_motion_without_enable_motion_flag_exits_2(tmp_path: Path) -> None:
     signs_path = tmp_path / "signs.json"
     zeros_path = tmp_path / "zeros.json"
     signs_path.write_text(json.dumps(dict.fromkeys(JOINT_ORDER, 1.0)), encoding="utf-8")
-    zeros_path.write_text(json.dumps(dict.fromkeys(JOINT_ORDER, 0.0)), encoding="utf-8")
+    # Non-zero offset (+50 deg) pushes calibration upper bound (~225.6 deg) above
+    # URDF upper bound (+179.9087 deg) so URDF ∩ calibration truncation is truly exercised.
+    zeros_path.write_text(json.dumps(dict.fromkeys(JOINT_ORDER, 50.0)), encoding="utf-8")
     code = tool.main(["--signs-json", str(signs_path), "--zeros-json", str(zeros_path)])
     assert code == tool.EXIT_USAGE
 
@@ -103,7 +105,9 @@ def test_limits_only_primes_window_intersects_urdf_and_never_sends(
     signs_path = tmp_path / "signs.json"
     zeros_path = tmp_path / "zeros.json"
     signs_path.write_text(json.dumps(dict.fromkeys(JOINT_ORDER, 1.0)), encoding="utf-8")
-    zeros_path.write_text(json.dumps(dict.fromkeys(JOINT_ORDER, 0.0)), encoding="utf-8")
+    # Non-zero offset (+50 deg) pushes calibration upper bound (~225.6 deg) above
+    # URDF upper bound (+179.9087 deg) so URDF ∩ calibration truncation is truly exercised.
+    zeros_path.write_text(json.dumps(dict.fromkeys(JOINT_ORDER, 50.0)), encoding="utf-8")
 
     class _FakeClient:
         def __init__(self) -> None:
@@ -168,7 +172,11 @@ def test_limits_only_primes_window_intersects_urdf_and_never_sends(
     assert payload["robot_model"] == "alohamini2pro"
     assert len(payload["effective_limits_deg"]) == 6
     urdf_limits = tool._read_urdf_limits_deg(tool.DEFAULT_URDF_PATH)
-    for urdf_joint, (lo, hi) in payload["effective_limits_deg"].items():
+    assert set(urdf_limits) == set(JOINT_ORDER)
+    for joint in JOINT_ORDER:
+        urdf_joint = tool.URDF_JOINT_NAMES[joint]
+        lo, hi = payload["effective_limits_deg"][urdf_joint]
+        u_lo, u_hi = urdf_limits[joint]
         assert np.isfinite(lo) and np.isfinite(hi) and lo < hi
-        u_lo, u_hi = urdf_limits[urdf_joint]
-        assert lo >= u_lo - 1e-6 and hi <= u_hi + 1e-6
+        assert lo > u_lo + 1.0
+        assert hi == pytest.approx(u_hi, abs=1e-6)

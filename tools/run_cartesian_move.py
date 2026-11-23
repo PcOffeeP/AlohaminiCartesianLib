@@ -112,7 +112,7 @@ def _read_urdf_limits_deg(urdf_path: Path) -> dict[str, tuple[float, float]]:
         urdf_name = URDF_JOINT_NAMES[joint]
         if urdf_name not in by_urdf:
             raise ValueError(f"URDF {urdf_path} 缺少关节 {urdf_name!r} 的 <limit>")
-        limits[urdf_name] = by_urdf[urdf_name]
+        limits[joint] = by_urdf[urdf_name]
     return limits
 
 
