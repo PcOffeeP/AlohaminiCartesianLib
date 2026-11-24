@@ -3,10 +3,9 @@
 「包络」= 一台电机的实测行程该落在什么范围里，人话：这份标定像不像一台整机的真标定。
 
 **阈值只有一处**，就是本模块的四个常量。改阈值只改这里；
-:func:`alohamini_cartesian.calibration.identity.describe_plausibility` /
-:func:`alohamini_cartesian.calibration.identity.validate_plausibility` 是本模块的薄封装，
-不再自带任何数字。依赖方向是 ``identity ← envelope``：本模块用 ``identity`` 的刻度换算与
-``calib_id``，``identity`` 只在函数体内延迟 import 本模块（避免模块级双向 import 成环）。
+依赖方向单向保持为 ``identity ← envelope``：本模块用 ``identity`` 的刻度换算与
+``calib_id``，调用方直接从本模块导入 :func:`describe_thresholds` /
+:func:`plausibility_warnings` / :func:`classify_motors`。
 
 四态（:class:`EnvelopeVerdict`）：
 
@@ -391,7 +390,6 @@ def plausibility_warnings(motors: Mapping[str, Any]) -> list[str]:
     """合理性告警清单：只报告、不阻断，**永不抛异常**。
 
     条目取不合格电机的 ``detail`` 并补上电机名；数据集形状不对时把那条说明也列上。
-    这是 ``identity.validate_plausibility`` 的实体，identity 侧只做转发。
     """
     report = classify_motors(motors)
     warnings = [f"电机 {item.motor}: {item.detail}" for item in report.implausible]

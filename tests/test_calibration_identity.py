@@ -42,7 +42,6 @@ from alohamini_cartesian.calibration.identity import (
     classify_change,
     extract_motors,
     file_sha256,
-    validate_plausibility,
     validate_structure,
 )
 
@@ -290,14 +289,6 @@ def test_a_bool_or_a_string_is_never_a_tick_value(field: str, value: Any) -> Non
     assert any("arm_left_elbow_flex" in message for message in problems)
     with pytest.raises(CalibrationStructureError):
         calib_id(motors)
-
-
-def test_validate_plausibility_reports_without_blocking() -> None:
-    """合理性校验是经验区间告警：真实原件返回 ``list[str]``，且不抛异常、不阻断。"""
-    warnings = validate_plausibility(_old_motors())
-
-    assert isinstance(warnings, list)
-    assert all(isinstance(item, str) for item in warnings)
 
 
 def test_canonicalize_motors_keeps_only_the_five_canonical_fields() -> None:

@@ -185,6 +185,16 @@ class ArmIK:
         except RuntimeError as exc:
             raise ValueError(f"URDF missing target frame: {profile.target_frame}") from exc
 
+        # Cache read-only URDF joint limits and dedicated in-memory RobotWrapper
+        # instances so fk() and solve() avoid re-parsing the URDF XML from disk
+        # on every call while keeping FK and IK state isolated.
+        self._urdf_limits_deg: dict[str, tuple[float, float]] = {
+            name: tuple(np.rad2deg(robot.get_joint_limits(name)).tolist())
+            for name in profile.joint_names
+        }
+        self._fk_robot = robot
+        self._solve_robot = placo.RobotWrapper(self._urdf_path)
+
     def fk(self, q_deg: np.ndarray) -> np.ndarray:
         """Compute the forward-kinematics pose of the target frame.
 
@@ -195,19 +205,18 @@ class ArmIK:
             4x4 homogeneous transform of the target frame in world coordinates.
         """
         _require_placo()
-        import placo  # noqa: F811
 
         q_deg = np.asarray(q_deg, dtype=float)
         if q_deg.shape != (6,):
             raise ValueError(f"q_deg must have shape (6,), got {q_deg.shape}")
 
         q_rad = np.deg2rad(q_deg)
-        robot = placo.RobotWrapper(self._urdf_path)
+        robot = self._fk_robot
         for name, value in zip(self.profile.joint_names, q_rad, strict=True):
             robot.set_joint(name, float(value))
         robot.update_kinematics()
 
-        return robot.get_T_world_frame(self.profile.target_frame)
+        return np.array(robot.get_T_world_frame(self.profile.target_frame), dtype=float, copy=True)
 
     def _solve_once(
         self,
@@ -219,10 +228,7 @@ class ArmIK:
         """Run one IK attempt with the given limits and return raw solve data."""
         import placo  # noqa: F811
 
-        robot = placo.RobotWrapper(self._urdf_path)
-        solver = placo.KinematicsSolver(robot)
-        solver.mask_fbase(True)
-
+        robot = self._solve_robot
         for name in self.profile.joint_names:
             lo_deg, hi_deg = limits_deg[name]
             # T-IK-18.15: normalise both endpoints to ``float`` before ``np.deg2rad``.  An
@@ -240,6 +246,10 @@ class ArmIK:
             robot.set_joint(name, float(value))
         robot.update_kinematics()
 
+        # Construct a fresh solver per attempt on the cached robot model so any
+        # QPError / infeasible solve leaves zero residual solver state.
+        solver = placo.KinematicsSolver(robot)
+        solver.mask_fbase(True)
         tip = solver.add_frame_task(self.profile.target_frame, np.eye(4))
         tip.T_world_frame = target_pose
         tip.configure(self.profile.target_frame, "soft", 1.0, orientation_weight)
@@ -274,7 +284,7 @@ class ArmIK:
             orientation_error_deg,
             iterations,
             solve_time_s,
-            reached_pose,
+            np.array(reached_pose, dtype=float, copy=True),
         )
 
     def solve(
@@ -298,7 +308,6 @@ class ArmIK:
             An :class:`IKResult` describing the solution attempt.
         """
         _require_placo()
-        import placo  # noqa: F811
 
         q_current_deg = np.asarray(q_current_deg, dtype=float)
         if q_current_deg.shape != (6,):
@@ -400,16 +409,9 @@ class ArmIK:
                     f"joint_limits_deg[{name!r}] must satisfy lo < hi, got lo={lo!r}, hi={hi!r}"
                 )
 
-        # T-IK-4 classification: first solve with the URDF limits to establish
-        # whether the target is physically reachable at all.  If the best
-        # achievable residual is above the threshold, the target is genuinely
-        # unreachable -> RESIDUAL.  This avoids misclassifying physically
-        # unreachable targets whose solution happens to sit on a limit boundary.
-        robot = placo.RobotWrapper(self._urdf_path)
-        urdf_limits_deg = {
-            name: tuple(np.rad2deg(robot.get_joint_limits(name)).tolist())
-            for name in self.profile.joint_names
-        }
+        # T-IK-4 classification: first solve with the cached URDF limits to
+        # establish whether the target is physically reachable at all.
+        urdf_limits_deg = dict(self._urdf_limits_deg)
         (
             q_urdf,
             position_error_urdf_m,

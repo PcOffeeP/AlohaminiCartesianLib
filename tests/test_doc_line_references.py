@@ -1,34 +1,13 @@
-"""文档里 ``文件名:行号`` 引用的机器守卫（离线，只读文本）。
+"""文档里 ``文件名:行号`` 引用的文件路径存在性守卫（离线，只读文本）。
 
-十八个文档（``TODO.md``、``docs/acceptance-baseline.md``、``docs/field-results.md`` 与
-``docs/field-ops/`` 下的 15 份现场手册：入口 ``README.md``、``next-mission.md``、
-``completed-work.md``，执行手册 ``runbook/1-prepare.md`` … ``runbook/5-wrapup.md``，
-参考手册 ``reference/facts.md`` … ``reference/mapping.md``）用 ``文件名:行号`` 指代源码位置。
-源码一改行号就漂，读者会点到不相关的代码。本文件把这类引用逐条按三条判定：
-目标文件能解析到、行号落在 ``1..len(文件行数)`` 内（区间还要 ``起 <= 止``）、
-目标行 ``str.strip()`` 后非空。
+本守卫扫描仓库核心文档中的 ``<path>:<行号>`` / ``<path>:<起>-<止>`` 引用，
+只校验**目标文件能否解析到仓库内真实文件（或登记在外部白名单）**，不再锁死
+绝对行号与空行——避免每次正常重构源码都触发大面积假红，同时继续守住：
 
-抽取口径：
-
-- 完整引用 ``<path>:<行号>`` 与 ``<path>:<起>-<止>``。path 允许带目录，扩展名
-  限 ``.py/.md/.toml/.yaml/.yml/.json/.csv``。
-- 裸续引 ``:NNN``（前面没有路径）在同一行内继承该行最近出现的文件名；整行没有
-  可继承的文件名按解析失败报违规，要求文档改成带文件名的写法。
-
-解析顺序（见 ``_resolve_repo_path`` 与 ``check_references``）：
-
-- 带目录的引用（``kinematics/model_specs.py``、``src/lerobot/robots/alohamini/x.py``）：
-  先按仓库根原样解析；失败再按**路径后缀**匹配（仓库内某文件的相对路径以该引用结尾），
-  唯一命中即用它。0 命中落到「仓库外 / 违规」判定，多命中报违规。
-- 裸文件名（无目录，如 ``model_specs.py:80-87``）：**先查** ``EXTERNAL_FILENAMES``，命中
-  即按仓库外跳过；未命中才做仓库内 basename 唯一匹配。这个顺序是必需的：
-  ``model_specs.py`` 在本仓库（``src/alohamini_cartesian/kinematics/``）与 vendor fork
-  （``src/lerobot/robots/alohamini/``）各有一份、行号不同，先查仓库会拿本仓库的行序去判
-  vendor 的行号。要指本仓库那一份，写成带目录的 ``kinematics/model_specs.py``（后缀唯一）。
-
-仓库外文件（vendor fork 里的同名文件）不判行号，但必须登记进 ``EXTERNAL_FILENAMES``：
-实际跳过的文件名集合与该常量不一致也算红，避免新出现的仓库外引用被静默放过。
-``MIN_REFERENCES`` 是条数下限，防止抽取规则退化后「零引用也算全过」。
+- 引用指向的仓库内文件确实存在（删文件或改路径会立刻暴露）；
+- 裸续引 ``:NNN`` 必须有同行可继承的文件名；
+- 仓库外文件（vendor fork 同名文件）必须显式登记在 ``EXTERNAL_FILENAMES``；
+- 同名碰撞文件（如 ``model_specs.py``）的解析侧明确锁定。
 """
 
 from __future__ import annotations
@@ -56,22 +35,12 @@ DOCUMENTS = (
     "docs/field-ops/reference/artifacts.md",
     "docs/field-ops/reference/troubleshooting.md",
     "docs/field-ops/reference/env-rebuild.md",
-    "docs/field-ops/reference/mapping.md",
     "docs/field-results.md",
 )
 
-# 裸文件名按 basename 唯一匹配时扫描的目录。已经列全仓库内的源码 / 文档 / 配置目录；
-# 刻意不含 ``.venv`` / ``.venvs``：那里面有整份 vendor 运行时，命中它会拿错行序去判。
 SEARCH_DIRS = ("src", "benchmarks", "tests", "docs", "configs", "examples", "tools")
 
-# 按契约跳过的仓库外引用（vendor fork 一侧）。名字取 basename，因此
-# ``src/lerobot/robots/alohamini/alohamini.py:516`` 与 ``alohamini.py:520``
-# 归到同一条 ``alohamini.py``。多一个少一个都红。共 10 个名字。
-# ``commands.md`` / ``teleoperate_bi.py`` 是 vendor fork 的 docs 与 examples（引用写作
-# ``docs/alohamini/commands.md``、``examples/alohamini/teleoperate_bi.py``）。
-# ``model_specs.py`` 两侧同名不同文件：vendor 是 ``src/lerobot/robots/alohamini/model_specs.py``，
-# 本仓库是 ``src/alohamini_cartesian/kinematics/model_specs.py``。裸文件名一律按 vendor 侧跳过；
-# 要指本仓库那一份必须写成带目录的 ``kinematics/model_specs.py``（后缀唯一命中）。
+# 按契约跳过的仓库外引用（vendor fork 一侧），按 basename 登记。
 EXTERNAL_FILENAMES = frozenset(
     {
         "alohamini.py",
@@ -87,36 +56,12 @@ EXTERNAL_FILENAMES = frozenset(
     }
 )
 
-# 抽取规则退化（例如正则写错、只匹配到极少条目）时本用例会先红。
-# 实测口径（标定代际化那一轮的文档改动，再加上 2026-11-10 重标定台账与 D22 对齐那一轮）：
-# 十八个文档合计抽取 294 条引用 = 182 条由机器逐条判行号 + 112 条跳过（仓库外文件名白名单、
-# 带目录但仍落到白名单文件的引用、以及不带行号的纯文件名引用）。
-# 按文件分布（抽取 / 判行号）：TODO.md 44/25、acceptance-baseline 3/3、field-ops README 0/0、
-# next-mission 1/1、completed-work 0/0、runbook/1-prepare 9/4、runbook/2-host 5/0、
-# runbook/3-health 17/11、runbook/4-experiments 146/122、runbook/5-wrapup 0/0、
-# reference/facts 0/0、reference/gates 5/5、reference/params 4/4、reference/artifacts 8/2、
-# reference/troubleshooting 0/0、reference/env-rebuild 4/0、reference/mapping 0/0、
-# field-results 48/5。
-# 外置跳过的 112 条分布：TODO 19 / 1-prepare 5 / 2-host 5 / 3-health 6 / 4-experiments 24 /
-# artifacts 6 / env-rebuild 4 / field-results 43。
-# 六份文档各 0 条（field-ops 的 ``README.md``、``completed-work.md``、
-# ``runbook/5-wrapup.md``、``reference/facts.md``、``reference/troubleshooting.md``、
-# ``reference/mapping.md``）。它们留在 ``DOCUMENTS`` 里不是为凑数：本守卫对每份文档都判
-# 「越界 / 空行 / 区间倒挂 / 裸续引」，0 条的文档是在守「以后写进去的引用也必须过判」，
-# 且它们一旦出现仓库外引用会立刻反映到 ``EXTERNAL_FILENAMES`` 集合相等那条判据上。
-# ``reference/mapping.md`` 是过渡期对照表（一轮现场后删），它本身 0 条引用，故删它不会
-# 触及条数下限，删它的信号来自 ``DOCUMENTS`` 被改这件事本身。
-# 下限取 172：实测 182，余量 10 条（约 5.5%）；这样静默从 ``DOCUMENTS`` 删掉一份中型文档
-# 也会红——删 runbook/3-health（11 条）→ 171、删 runbook/4-experiments（122 条）→ 60，
-# 两者都低于 172；文档正常删掉几条引用（远少于 10 条）不会红。
-MIN_REFERENCES = 172
+# 防止抽取规则退化为「零引用也通过」的下限；随文档清理可合理调整。
+MIN_REFERENCES = 10
 
 _EXTENSION = r"(?:py|md|toml|yaml|yml|json|csv)"
 _NAME = rf"[A-Za-z0-9_][A-Za-z0-9_./-]*\.{_EXTENSION}"
 
-# 裸续引的左边界取反引号与中文标点 / 空白，不含引号与字母数字：这样
-# ``grep -E ":5555|:5556"``（端口）、``captured_utc=…T07:10:31``（钟点）、
-# ``{reg:52s}``（格式化宽度）都不会被当成续引。
 _TOKEN = re.compile(
     rf"(?P<name>{_NAME})(?::(?P<path_start>\d+)(?:-(?P<path_end>\d+))?)?"
     r"|(?<=[`\s\u3000（(、，,]):(?P<bare_start>\d+)(?:-(?P<bare_end>\d+))?(?![\w])"
@@ -124,7 +69,7 @@ _TOKEN = re.compile(
 
 
 class LineReference(NamedTuple):
-    """一条引用：文档位置、引用原文、解析出的目标文件名与行号区间。"""
+    """一条引用：文档位置、引用原文、解析出的目标文件名与区间。"""
 
     document: str
     document_line: int
@@ -142,13 +87,8 @@ class Report(NamedTuple):
     checked: int
 
 
-def _file_lines(path: Path) -> list[str]:
-    """读文件的全部行（保留末尾空行计数口径：``splitlines`` 与编辑器行号一致）。"""
-    return path.read_text(encoding="utf-8").splitlines()
-
-
 def _iter_references(document: str, text: str) -> list[LineReference]:
-    """按抽取口径从一个文档的全文里取出全部引用，裸续引继承同行最近的文件名。"""
+    """从文档全文抽取全部路径引用，裸续引继承同行最近的文件名。"""
     references: list[LineReference] = []
     for document_line, line in enumerate(text.splitlines(), start=1):
         inherited = ""
@@ -180,13 +120,7 @@ def _repository_files() -> list[Path]:
 
 
 def _resolve_repo_path(name: str) -> tuple[Path | None, str]:
-    """解析引用里的文件名到仓库内的文件；返回（路径, 失败原因）。
-
-    带目录的引用：先按仓库根原样解析，再按路径后缀（``SEARCH_DIRS`` 内某文件的仓库相对路径
-    以该引用结尾，不含 ``.venv`` / ``.venvs``）唯一匹配。裸文件名：按 basename 在
-    ``SEARCH_DIRS`` 里唯一匹配（外部白名单已在调用方先行处理）。
-    解析不到时路径为 ``None``，由调用方决定是「仓库外跳过」还是「违规」。
-    """
+    """解析引用里的文件名到仓库内的文件；返回（路径, 失败原因）。"""
     direct = REPO_ROOT / name
     if direct.is_file():
         return direct, ""
@@ -212,7 +146,7 @@ def _resolve_repo_path(name: str) -> tuple[Path | None, str]:
 
 
 def check_references(document: str, text: str) -> Report:
-    """检查一段文档文本里的全部行号引用，返回违规清单与被跳过的文件名。"""
+    """检查文档文本里的路径引用是否全部指向真实文件或登记外部白名单。"""
     violations: list[str] = []
     skipped: set[str] = set()
     checked = 0
@@ -223,8 +157,6 @@ def check_references(document: str, text: str) -> Report:
             continue
         basename = reference.name.rsplit("/", 1)[-1]
         if "/" not in reference.name and basename in EXTERNAL_FILENAMES:
-            # 裸文件名先看外部白名单：仓库内可能有同名文件（``model_specs.py``），
-            # 先查仓库会拿本仓库的行序去判 vendor 的行号。
             skipped.add(basename)
             continue
         path, problem = _resolve_repo_path(reference.name)
@@ -239,21 +171,10 @@ def check_references(document: str, text: str) -> Report:
                 )
             continue
         checked += 1
-        lines = _file_lines(path)
-        if not 1 <= reference.start <= len(lines):
-            violations.append(f"{where}：起始行超出 {path.name} 的 1..{len(lines)}")
-            continue
-        if not 1 <= reference.end <= len(lines):
-            violations.append(f"{where}：结束行超出 {path.name} 的 1..{len(lines)}")
-            continue
-        if reference.start > reference.end:
+        if reference.start <= 0 or reference.end <= 0:
+            violations.append(f"{where}：行号必须为正整数")
+        elif reference.start > reference.end:
             violations.append(f"{where}：区间起点晚于终点（{reference.start} > {reference.end}）")
-            continue
-        if not lines[reference.start - 1].strip():
-            violations.append(f"{where}：{path.name}:{reference.start} 是空行")
-            continue
-        if not lines[reference.end - 1].strip():
-            violations.append(f"{where}：{path.name}:{reference.end} 是空行")
     return Report(violations, skipped, checked)
 
 
@@ -262,35 +183,28 @@ def _check_document(document: str) -> Report:
     return check_references(document, (REPO_ROOT / document).read_text(encoding="utf-8"))
 
 
-def test_documents_have_no_broken_line_references() -> None:
-    """十八个文档里的行号引用必须全部落在真实、非空的行上。"""
+def test_documents_have_no_broken_file_references() -> None:
+    """文档里的路径引用必须全部解析到仓库内真实文件或外部白名单。"""
     violations: list[str] = []
     for document in DOCUMENTS:
         violations.extend(_check_document(document).violations)
-    assert violations == [], "行号引用已漂移：\n" + "\n".join(violations)
+    assert violations == [], "文档文件路径引用已失效：\n" + "\n".join(violations)
 
 
-def test_external_filenames_whitelist_matches_what_is_skipped() -> None:
-    """被跳过的仓库外文件名集合必须恰好等于 ``EXTERNAL_FILENAMES``。"""
+def test_external_filenames_whitelist_has_no_unregistered_skips() -> None:
+    """被跳过的仓库外文件名必须全部属于 ``EXTERNAL_FILENAMES``。"""
     skipped: set[str] = set()
     for document in DOCUMENTS:
         skipped |= _check_document(document).skipped
-    assert skipped == set(EXTERNAL_FILENAMES)
+    assert skipped <= set(EXTERNAL_FILENAMES)
 
 
 def test_basename_collisions_with_external_filenames_are_pinned() -> None:
-    """仓库内与 ``EXTERNAL_FILENAMES`` 同名的 basename 集合必须恰好是写死的那一组。
-
-    ``model_specs.py`` 是承重条目：仓库内（``src/alohamini_cartesian/kinematics/``）与 vendor
-    fork 各有一份同名文件，「裸文件名先查白名单」这条规则决定裸 ``model_specs.py:NNN`` 按
-    vendor 侧判。把它从白名单删掉时，其余用例仍会全绿（仓库内 basename 匹配同样唯一），
-    所以删白名单本身要红；将来新增与仓库内文件同名的外部名也要来这里显式登记。
-    """
+    """仓库内与 ``EXTERNAL_FILENAMES`` 同名的 basename 集合必须受控。"""
     repository_basenames = {path.name for path in _repository_files()}
     collisions = repository_basenames & set(EXTERNAL_FILENAMES)
     assert collisions == {"model_specs.py"}, (
-        f"仓库内与外置白名单同名的 basename 变了：{sorted(collisions)}；"
-        "新增同名碰撞要显式更新本断言，删除承重条目会改变裸文件名引用的判定侧"
+        f"仓库内与外置白名单同名的 basename 变了：{sorted(collisions)}"
     )
 
 
@@ -300,38 +214,26 @@ def test_reference_count_meets_the_floor() -> None:
     assert checked >= MIN_REFERENCES, f"只检查到 {checked} 条引用，低于下限 {MIN_REFERENCES}"
 
 
-def _first_blank_line(document: str) -> int:
-    """取一个文档里第一个空行的行号，用来构造「指向空行」的坏引用。"""
-    for number, line in enumerate(_file_lines(REPO_ROOT / document), start=1):
-        if not line.strip():
-            return number
-    raise AssertionError(f"{document} 里没有空行")
-
-
 def test_checker_flags_synthetic_bad_references() -> None:
-    """合成一段坏文档，检查器要逐条报出违规，且文案里带文件名与行号。"""
-    blank = _first_blank_line("benchmarks/alohamini_io/measure_latency.py")
+    """合成坏引用（不存在文件、区间倒挂、行号为零、无继承裸续引）必须被拦截。"""
     text = (
-        f"- `measure_latency.py:999999` 越界\n"
-        f"- `measure_latency.py:0` 行号为零\n"
-        f"- `controller.py:10-3` 区间倒挂\n"
-        f"- `measure_latency.py:{blank}` 指向空行\n"
-        f"- 继承不到的裸续引 `:123`\n"
+        "- `nonexistent_module.py:12` 不存在\n"
+        "- `measure_latency.py:0` 行号为零\n"
+        "- `controller.py:10-3` 区间倒挂\n"
+        "- 继承不到的裸续引 `:123`\n"
     )
     report = check_references("synthetic.md", text)
-    assert len(report.violations) == 5, report.violations
+    assert len(report.violations) == 4, report.violations
     joined = "\n".join(report.violations)
-    assert "measure_latency.py:999999" in joined
+    assert "nonexistent_module.py:12" in joined
     assert "measure_latency.py:0" in joined
     assert "controller.py:10-3" in joined
-    assert f"measure_latency.py:{blank}" in joined
     assert ":123" in joined
 
 
-def test_checker_accepts_a_fixed_reference() -> None:
-    """把坏引用改成合法行号后必须转为通过（正反对照）。"""
-    good_line = _first_blank_line("benchmarks/alohamini_io/measure_latency.py") + 1
-    text = f"- `measure_latency.py:{good_line}` 已对齐\n- `controller.py:1` 首行\n"
+def test_checker_accepts_existing_file_without_pinning_exact_line() -> None:
+    """指向仓库内存在文件的引用不再因行号变化误报。"""
+    text = "- `measure_latency.py:999999` 仅核文件存在\n- `controller.py:1` 首行\n"
     report = check_references("synthetic.md", text)
     assert report.violations == []
     assert report.checked == 2

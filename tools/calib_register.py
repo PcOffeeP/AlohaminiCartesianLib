@@ -42,6 +42,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from alohamini_cartesian.calibration.envelope import (
+    describe_thresholds,
+    plausibility_warnings,
+)
 from alohamini_cartesian.calibration.identity import (
     CANONICAL_FIELDS,
     EXPECTED_MOTOR_COUNT,
@@ -49,10 +53,8 @@ from alohamini_cartesian.calibration.identity import (
     calib_id,
     canonicalize_motors,
     classify_change,
-    describe_plausibility,
     extract_motors,
     file_sha256,
-    validate_plausibility,
     validate_structure,
 )
 from alohamini_cartesian.calibration.registry import (
@@ -130,9 +132,9 @@ def _print_structure(motors: dict[str, Any]) -> bool:
 def _print_plausibility(motors: dict[str, Any]) -> None:
     """打印合理性告警；阈值随结论一起打印，方便现场核对判定口径。"""
     print("PLAUSIBILITY: 以下判定用经验区间，只告警、不阻断登记")
-    for line in describe_plausibility():
+    for line in describe_thresholds():
         print(f"  阈值 {line}")
-    warnings = validate_plausibility(motors)
+    warnings = plausibility_warnings(motors)
     if not warnings:
         print("  结果 无告警")
         return

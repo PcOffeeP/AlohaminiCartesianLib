@@ -32,14 +32,7 @@ from typing import Any
 import numpy as np
 
 from ..kinematics.joint_adapter import JOINT_ORDER
-from .commands import (
-    ArmCommand,
-    BaseCommand,
-    ControlState,
-    GripperCommand,
-    LiftCommand,
-    Stage,
-)
+from .commands import ControlState, Stage
 
 
 class ControlError(Enum):
@@ -244,11 +237,10 @@ class CartesianController:
             self._machine.on_feedback(sample_id, settled, valid=valid)
             return False
 
-        if self._host_session_id is not None and session_id != self._host_session_id:
-            self._machine.reset()
-            self._last_accepted_q = None
-            self._follow_error_start_time = None
-            self._next_deadline = None
+        if resolved is None:
+            if self._host_session_id is not None and session_id != self._host_session_id:
+                self._machine.reset()
+                self.reset_feedback_baseline()
         self._host_session_id = session_id
 
         self._machine.on_feedback(sample_id, settled, valid=valid)
@@ -260,14 +252,16 @@ class CartesianController:
         target: Any,
         resolved: ResolvedControlStatus | None = None,
     ) -> CycleOutcome:
-        """Run one control cycle.
+        """Run one single-arm Cartesian control cycle.
 
         Args:
             feedback: Observation mapping including the arm motor keys,
                 ``_robot_metadata`` and ``_control_status``.
-            target: Target motion request.  May be a base/lift command, an
-                arm/gripper command (interlock only), ``None`` (base gap),
-                or a 4x4 homogeneous pose for the arm Cartesian path.
+            target: 4x4 homogeneous target pose (``numpy.ndarray``) for this arm.
+                Any other target type is rejected fail-closed with
+                ``ControlError.UNSUPPORTED_TARGET`` and zero send; cross-stage
+                interlocking and base/lift/gripper routing are owned by
+                ``ControlStateMachine`` and ``AlohaMiniControl``.
             resolved: Optional pre-computed, fail-closed control status from
                 ``AlohaMiniControl._resolve_feedback``.
 
@@ -279,18 +273,6 @@ class CartesianController:
         if not self._ingest_feedback(feedback, resolved=resolved):
             return CycleOutcome(sent=False, action=None, error_code=None, detail=None)
 
-        # Dispatch by the frozen seam: BaseCommand drives the base path, None is
-        # a base gap, ArmCommand is interlock-only, and 4x4 poses use the arm path.
-        if isinstance(target, BaseCommand):
-            return self._tick_base_command(feedback, target)
-        if target is None:
-            return self._tick_base_gap(feedback)
-        if isinstance(target, ArmCommand):
-            return self._tick_arm_command(feedback, target)
-        if isinstance(target, GripperCommand):
-            return self._tick_gripper_command(feedback, target)
-        if isinstance(target, LiftCommand):
-            return self._tick_lift_command(feedback, target)
         if isinstance(target, np.ndarray):
             return self._tick_arm_pose(
                 feedback, target, metadata=getattr(resolved, "metadata", None)
@@ -300,103 +282,6 @@ class CartesianController:
             sent=False,
             action=None,
             error_code=ControlError.UNSUPPORTED_TARGET,
-            detail=None,
-        )
-
-    def _base_action(self, target: Any) -> dict[str, float]:
-        """Return the alohamini base velocity action dict for a base target."""
-        if target is None:
-            return {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
-        return {
-            "x.vel": float(target.x),
-            "y.vel": float(target.y),
-            "theta.vel": float(target.turn),
-        }
-
-    def _tick_base_command(self, feedback: Mapping, target: Any) -> CycleOutcome:
-        """Base-category command path.
-
-        When already ACTIVE, the command is submitted to the state machine so
-        a cross-stage conflict latches BLOCKED and raises ``MotionBlocked``.
-        The requested velocity is sent only while ACTIVE(BASE_LIFT); every
-        non-ACTIVE state receives an explicit zero-velocity safety command.
-        """
-        if self._machine.state is ControlState.ACTIVE:
-            self._machine.handle(target)
-
-        if (
-            self._machine.state is ControlState.ACTIVE
-            and self._machine.active_stage is Stage.BASE_LIFT
-        ):
-            action = self._base_action(target)
-        else:
-            action = self._base_action(None)
-
-        self._send(action)
-
-        return CycleOutcome(
-            sent=not self._dry_run,
-            action=action,
-            error_code=None,
-            detail=None,
-        )
-
-    def _tick_base_gap(self, feedback: Mapping) -> CycleOutcome:
-        """Base gap path: explicit zero velocity unless ACTIVE(ARM).
-
-        A ``None`` target during arm motion is a NOT_ACTIVE gap; during base
-        motion or any non-ACTIVE state it is a safety stop.
-        """
-        if self._machine.state is ControlState.ACTIVE and self._machine.active_stage is Stage.ARM:
-            return CycleOutcome(
-                sent=False,
-                action=None,
-                error_code=ControlError.NOT_ACTIVE,
-                detail="state machine is ACTIVE(ARM)",
-            )
-
-        action = self._base_action(None)
-        self._send(action)
-
-        return CycleOutcome(
-            sent=not self._dry_run,
-            action=action,
-            error_code=None,
-            detail=None,
-        )
-
-    def _tick_arm_command(self, feedback: Mapping, target: Any) -> CycleOutcome:
-        """Arm-category command path: state-machine interlock only.
-
-        The command is handed to the state machine; a cross-stage conflict
-        raises ``MotionBlocked`` and zero is sent.  Same-stage commands are a
-        no-op because the actual motion target is a subsequent 4x4 pose.
-        """
-        self._machine.handle(target)
-        return CycleOutcome(
-            sent=False,
-            action=None,
-            error_code=None,
-            detail=None,
-        )
-
-    def _tick_gripper_command(self, feedback: Mapping, target: Any) -> CycleOutcome:
-        """Gripper command path: ARM-category interlock only."""
-        self._machine.handle(target)
-        return CycleOutcome(
-            sent=False,
-            action=None,
-            error_code=None,
-            detail=None,
-        )
-
-    def _tick_lift_command(self, feedback: Mapping, target: Any) -> CycleOutcome:
-        """Lift command path: BASE_LIFT-category interlock only."""
-        self._machine.handle(target)
-        return CycleOutcome(
-            sent=False,
-            action=None,
-            error_code=None,
             detail=None,
         )
 

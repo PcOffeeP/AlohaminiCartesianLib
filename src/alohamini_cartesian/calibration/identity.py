@@ -9,13 +9,14 @@
   所以同一份数据无论以「标定文件形状」还是「指纹形状」输入，算出的 id 相同；
 * 任一标定字段动一位，id 就变（变化分类见 :func:`classify_change`）。
 
-校验分两级，互不替代：
+校验边界（互不替代）：
 
 * :func:`validate_structure` 判「这份标定是否自洽」——电机数、字段齐备、取值类型、
   ``range_min < range_max``、``drive_mode ∈ {0, 1}``。返回问题清单（空清单 = 通过），
   **不抛异常**。真损坏（缺字段、``None``、区间反向）由调用方决定是否算阻断。
-* :func:`validate_plausibility` 判「这份标定像不像真的」——按经验区间给告警，
-  永远不阻断。阈值是经验值、非厂商规定，唯一来源是 ``calibration/envelope.py``。
+* 合理性包络告警与经验阈值位于 :mod:`~alohamini_cartesian.calibration.envelope`
+  （:func:`~alohamini_cartesian.calibration.envelope.plausibility_warnings` /
+  :func:`~alohamini_cartesian.calibration.envelope.describe_thresholds`），调用方直接从该模块导入。
 
 单位口径：``range_min`` / ``range_max`` / ``homing_offset`` 都是与标定文件同一刻度系的
 tick（每圈 :data:`TICK_RESOLUTION` 个刻度），换算见 :data:`DEG_PER_TICK`。
@@ -50,29 +51,9 @@ CALIB_ID_LENGTH = 12
 # drive_mode 的合法取值：0 与 1 对应两种方向约定。
 ALLOWED_DRIVE_MODES = (0, 1)
 
-# ---- 判定阈值已移出本模块：唯一来源是 :mod:`calibration/envelope.py` ----
-# 夹爪／肩／腕的经验宽度区间、`(0, 4095)` 满圈占位，这几个数现在只在
-# ``calibration/envelope.py`` 里作为可执行常量存在（沿用原常量名）。
-# 此处刻意不保留第二套判定阈值：两份常量迟早会漂，漂了以后「谁说了算」就没有答案。
-#
-# 本模块剩下的两件合理性活都是薄封装，函数体只做转发（延迟 import，见各函数注释）：
-#
-# * :func:`describe_plausibility` → ``envelope.describe_thresholds()``：把阈值渲染成
-#   可打印的行；
-# * :func:`validate_plausibility` → ``envelope.plausibility_warnings()``：返回告警清单。
-#
-# 依赖方向是 ``identity ← envelope``：``envelope`` 用本模块的刻度换算（``DEG_PER_TICK``）
-# 与身份（``calib_id``），本模块不在模块级 import ``envelope``——那样会成环。
-# 想加新的判定（例如给 ``*_elbow_flex`` 也设宽度包络）时改 ``envelope`` 并在那里补测试；
-# 不要在本模块加常量再让 ``envelope`` 反过来读——那会把依赖方向倒过来、又变成两处阈值。
-#
-# 阈值是什么、为什么是经验值、怎么判，全部读 ``calibration/envelope.py`` 的模块 docstring。
-# 本模块只回答「这份标定的身份是什么、结构有没有硬伤、两代之间差在哪」。
-# 相应地，本模块也不转发 ``envelope`` 的类型（``AcceptedListError`` / ``EnvelopeVerdict``
-# 等）：它们不是本模块的概念，别在这里开第二道门，调用方直接从 ``envelope`` 拿。
-# 判定流程与四态口径同样只在 ``envelope`` 里写一遍，本模块不复述。
-# 保留这一整段注释（而不是一删了之）是为了伸手就能找到新位置：搜索 ``GRIPPER_WIDTH``
-# 之类旧常量名时，先落到这里再跳到 ``envelope``，不会以为阈值被删掉了。
+# ---- 经验区间判定全部归口 :mod:`calibration/envelope.py` ----
+# 依赖方向单向保持为 ``identity ← envelope``：本模块只负责「身份、结构校验与两代差异」，
+# 不再转发或持有任何合理性包络函数/阈值。
 
 # 文档级键名：出现在顶层就说明这份 JSON 不是「顶层即电机映射」的标定文件。
 _DOCUMENT_KEYS = frozenset(
@@ -280,32 +261,6 @@ def validate_structure(motors: Mapping[str, Any]) -> list[str]:
         if is_tick_value(low) and is_tick_value(high) and low >= high:
             problems.append(f"电机 {name} 的 range_min={low} >= range_max={high}（区间反向或退化）")
     return problems
-
-
-def describe_plausibility() -> tuple[str, ...]:
-    """把合理性判定用的经验阈值渲染成可打印的行（供 ``tools/calib_register.py`` 展示）。
-
-    薄封装：数字全部来自 :mod:`~alohamini_cartesian.calibration.envelope`，
-    本模块不再自带阈值。
-    """
-    # 延迟 import：依赖方向是 identity ← envelope（envelope 用本模块的 ``DEG_PER_TICK``
-    # 与 ``calib_id``），在模块级 import envelope 会成环。
-    from .envelope import describe_thresholds
-
-    return describe_thresholds()
-
-
-def validate_plausibility(motors: Mapping[str, Any]) -> list[str]:
-    """合理性校验：返回告警清单，**永不阻断**。
-
-    薄封装：判定（三族的经验宽度区间、``(0, 4095)`` 满圈占位放行）全部
-    委托 :func:`~alohamini_cartesian.calibration.envelope.plausibility_warnings`，
-    本模块不持有第二套阈值。永不抛异常：遥操臂那种残缺表也只报告、不阻断。
-    """
-    # 延迟 import 的原因同 describe_plausibility：避免模块级双向 import。
-    from .envelope import plausibility_warnings
-
-    return plausibility_warnings(motors)
 
 
 def _field_diff(

@@ -1,6 +1,6 @@
 # S4 现场执行手册（`docs/field-ops/`）
 
-历史曾用名：原为单文件 `docs/s4-field-smoke.md`，拆分后节号与内容未改。本轮起按读者旅程重组：`runbook/`（按现场顺序的五份执行手册）+ `reference/`（查表查数）；旧文件名对照见 `reference/mapping.md`。
+历史曾用名：原为单文件 `docs/s4-field-smoke.md`，现按读者旅程分为 `runbook/`（按现场顺序的五份执行手册）+ `reference/`（查表查数）。
 
 ## 一页现状
 
@@ -49,7 +49,6 @@
 | [artifacts.md](reference/artifacts.md) | 产物与归档、主 CSV 与 sidecar 列义、证据根按场次分目录 |
 | [troubleshooting.md](reference/troubleshooting.md) | 失败与中止处置、§9 已发现问题里除门禁两行之外各行 |
 | [env-rebuild.md](reference/env-rebuild.md) | 隔离环境与 `PYTHONPATH` 重建 8 步 |
-| [mapping.md](reference/mapping.md) | 旧文件名 / 原节号 → 新路径对照（过渡期临时表，一轮现场后删） |
 
 ### 口径出处（原 §2.1 设计参考）
 
@@ -57,7 +56,7 @@
 
 | 文件 | 管什么 |
 | --- | --- |
-| `docs/ADR.md` | 决策记录 D1–D23：设计取舍与已定口径（如 D14 左夹爪本轮不重标定、D18 sidecar 单独成表、D20 残余支分级、D21 URDF 零实测） |
+| `docs/ADR.md` | 决策记录 D1–D25：设计取舍与已定口径（如 D14 左夹爪、D18 sidecar、D20 残余分级、D21 URDF 零实测、D24 航点步进、D25 代码与文档收敛） |
 | `docs/acceptance-baseline.md` | 验收基线 V01–V13：一条判据一行，含实机证据列 |
 | `docs/library-guide.md` | 接口细节：配置覆盖、能力探测与单位换算、控制层、公开 API、约束与机器守卫 |
 | `docs/background.md` | 目标、已实现能力与实机现状 |

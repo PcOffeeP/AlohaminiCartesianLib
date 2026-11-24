@@ -3009,5 +3009,33 @@ def test_t_c12_non_active_fault_is_latched_and_not_self_healing(state_name: str)
     assert machine.active_stage is None
 
 
+def test_seen_sample_ids_fold_into_single_interval_for_long_monotonic_stream() -> None:
+    """长跑单调序列折叠为单个闭区间（O(1) 内存），且精确区分旧 ID 重放与未见倒退。"""
+    commands = load_commands()
+    machine = commands.ControlStateMachine(settled_samples=2)
+    for sample_id in range(1, 10_001):
+        machine.on_feedback(sample_id, settled=True, valid=True)
+    assert len(machine._seen_ranges) == 1
+    assert machine._seen_ranges[0] == [1, 10_000]
+    assert machine._high_water_sample_id == 10_000
+
+    machine.resume()
+    assert machine.state is commands.ControlState.READY
+
+    # Replay of a long-ago seen ID must be ignored without faulting.
+    machine.on_feedback(1, settled=True, valid=True)
+    assert machine.state is commands.ControlState.READY
+
+    # Advance with a gap, then inject an unseen ID inside the gap -> must FAULT.
+    machine.on_feedback(10_010, settled=True, valid=True)
+    assert len(machine._seen_ranges) == 2
+    machine.on_feedback(10_005, settled=True, valid=True)
+    assert machine.state is commands.ControlState.FAULT
+
+    machine.reset()
+    assert machine._seen_ranges == []
+    assert machine._high_water_sample_id is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

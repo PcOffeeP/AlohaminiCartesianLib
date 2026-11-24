@@ -83,8 +83,8 @@ def test_register_is_idempotent_for_the_same_calib_id(tmp_path: Path) -> None:
     registry = CalibrationRegistry.load(tmp_path / "calib-registry.yaml")
     record = _record(_old_motors(), first_seen="2026-10-22T01:00:00Z", source="mac-snapshot")
 
-    first = registry.register(record)
-    second = registry.register(replace(record, note="重复登记"))
+    first = registry.append_if_absent(record)
+    second = registry.append_if_absent(replace(record, note="重复登记"))
 
     stored = registry.find(record.calib_id)
 
@@ -100,7 +100,7 @@ def test_find_returns_the_registered_generation_and_none_for_an_unknown_id(
     """``find`` 命中的是登记进去的那条记录；未登记的 id 返回 ``None``。"""
     registry = CalibrationRegistry.load(tmp_path / "calib-registry.yaml")
     record = _record(_old_motors(), first_seen="2026-10-22T01:00:00Z", source="mac-snapshot")
-    registry.register(record)
+    registry.append_if_absent(record)
 
     found = registry.find(record.calib_id)
 
@@ -115,8 +115,8 @@ def test_latest_returns_the_last_registered_generation(tmp_path: Path) -> None:
     registry = CalibrationRegistry.load(tmp_path / "calib-registry.yaml")
     old = _record(_old_motors(), first_seen="2026-10-22T01:00:00Z", source="mac-snapshot")
     new = _record(_shifted_motors(-7), first_seen="2026-11-10T02:00:00Z", source="pi-live")
-    registry.register(old)
-    registry.register(new)
+    registry.append_if_absent(old)
+    registry.append_if_absent(new)
 
     latest = registry.latest()
 
@@ -152,7 +152,7 @@ def test_save_and_load_round_trip_keeps_the_motors_and_provenance(tmp_path: Path
         source="pi-live",
         note="2026-11-10 整机重标定",
     )
-    assert registry.register(record) is True
+    assert registry.append_if_absent(record) is True
 
     registry.save()
     reloaded = CalibrationRegistry.load(path)
@@ -173,7 +173,7 @@ def test_the_registry_file_is_yaml(tmp_path: Path) -> None:
     """登记表落盘是 YAML：``yaml.safe_load`` 读得回一份非空文档。"""
     path = tmp_path / "calib-registry.yaml"
     registry = CalibrationRegistry.load(path)
-    registry.register(
+    registry.append_if_absent(
         _record(_old_motors(), first_seen="2026-10-22T01:00:00Z", source="mac-snapshot")
     )
 

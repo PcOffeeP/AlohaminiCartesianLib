@@ -121,7 +121,7 @@ def _registry_with(tmp_path: Path, fixture: Path) -> Path:
     path = tmp_path / "calib-registry.yaml"
     motors = extract_motors(json.loads(fixture.read_text(encoding="utf-8")))
     registry = CalibrationRegistry.load(path)
-    registry.register(
+    registry.append_if_absent(
         GenerationRecord(
             calib_id=calib_id(motors),
             first_seen="2026-10-22T01:00:00Z",
