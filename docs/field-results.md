@@ -192,7 +192,7 @@
 | `base_back_wheel` 一次 `Moving=1` 瞬时扰动 | 成因未验证。左组日志里 `base_back_wheel` 读到 `Moving=1`、`Present_Velocity=-50`，同一轮其余电机 `Moving=0`；后段 `pass2` 复读全为 `Moving=0`。未重测、未定位 |
 | `arm_right_wrist_yaw` 温度 `29 ℃`（其余 17 只 20–23 ℃） | 成因未验证。单点读数，未复测，未查该轴负载与驱动配置 |
 | 第一次起 Host 的本地 ssh 挂 600 s | 根因未定位。会话 1（`06:32:51Z` 起）本地 ssh 调用 600 s 未返回，而远端 Host 已就绪；上层中止后 `06:43:31Z` 执行 `kill 2340`（`kill_exit=0`），复查无 LISTEN、无残留。会话 2 改用「本地 ssh 后台 + 轮询端口 + 杀本地 ssh」，`06:44:41Z` 一次起通（python PID `2517`） |
-| Gate C 的真机专属证据 | 不可达。真机链路上厂商客户端先降级观测 schema，本库 Gate B 先拒；Gate C 文案只在离线测试里成立（见 `docs/field-ops/runbook/4-experiments.md#exp-e4` §7.1b）。V10 的 Gate C 专属实机子项是否接受 Gate B 替代，待裁决 |
+| Gate C 的真机专属证据 | 不可达。真机链路上厂商客户端先降级观测 schema，本库 Gate B 先拒；Gate C 文案只在离线测试里成立（见 `docs/field-ops/runbook/4-experiments.md#exp-e4` §7.1b）。V10 的 Gate C 专属实机子项已由 `docs/ADR.md` D26 裁决按现有两条真机拒绝记录 + 离线单测收口 |
 | 会话 1 的 Host 日志原件 | 未取回证据目录。`/tmp/site-host-20261106T063251Z.log` 的 `2658.5 mA` 与 `Lift axis homed to 0mm.` 两行只经 `stdout/scope-20261106T062506Z.md` 转述 |
 
 ## 2026-11-05（远程会话）· S4 现场窗口（第 2 次）

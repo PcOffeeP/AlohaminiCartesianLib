@@ -64,7 +64,7 @@ git log --oneline -3                    # 最近提交
 | 想知道什么 | 去哪里看 |
 | --- | --- |
 | 新人 15 分钟架构总览、分层图与术语消歧 | `docs/ARCHITECTURE.md` |
-| 决策记录（D1–D25） | `docs/ADR.md` |
+| 决策记录（D1–D26） | `docs/ADR.md` |
 | 版本变化与逐版测试记录 | `docs/changelog.md` |
 | 当前测试数 | 跑 `uv run --no-sync python -m pytest tests -o addopts=""` 的汇总行；不要引用本文件的旧数字 |
 | 模块与已实现能力、目标与实机现状 | `docs/background.md`（「已实现能力」小节列出模块与各自提供的接口） |
