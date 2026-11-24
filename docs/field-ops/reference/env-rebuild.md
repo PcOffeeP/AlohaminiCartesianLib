@@ -46,7 +46,27 @@ git -C /tmp/lerobot-vendor-6aee1f81 rev-parse HEAD
 
 第二条应等于 Pi 运行时的 HEAD `6aee1f81`（本次实测输出 `6aee1f81d503be98972d605ed32189221a674607`）。
 
-> **避坑（macOS `/tmp` 自动清理，2026-11-24 实测）**：macOS 会定期清理 `/tmp` 下闲置数天的文件，可能只留下 `/tmp/lerobot-vendor-6aee1f81` 空壳目录而删掉 `src/lerobot/robots/alohamini/alohamini_client.py`。一旦文件缺失，Python 会静默退回 `site-packages` 里的旧版 `ec65318f` wheel，导致 `test_char_2` 失败或现场 `rtt` 报 exit `9`。每次跑差分测试或现场命令前，务必先确认 `git -C /tmp/lerobot-vendor-6aee1f81 rev-parse HEAD` 为 `6aee1f81...` 且 `test -f /tmp/lerobot-vendor-6aee1f81/src/lerobot/robots/alohamini/alohamini_client.py` 成立，不成立就重跑上面的 `git clone`。
+> **避坑（macOS `/tmp` 自动清理，2026-11-24 实测）**：macOS 会定期清理 `/tmp` 下闲置数天的文件，可能只留下含 `.git/objects` 与 `src/` 的非空残缺目录而删掉 `alohamini_client.py`。一旦文件缺失，Python 会静默退回 `site-packages` 里的旧版 `ec65318f` wheel，导致 `test_char_2` 失败或现场 `rtt` 报 exit `9`；且对非空残缺目录直接向同一路径重跑 `git clone` 会被 Git 拒绝。
+>
+> 每次跑差分测试或现场命令前，按下面两步检查与安全重建（任一项核对失败立即停止现场步骤；`$PY` 按实际环境取 `.venvs/s4-move-to/bin/python` 或 `.venvs/alohamini-lerobot/bin/python`）：
+> ```bash
+> # 1. 若校验失败（HEAD 不是 6aee1f81... 或缺少 alohamini_client.py），先克隆到全新空目录再核验替换
+> SNAP=/tmp/lerobot-vendor-6aee1f81
+> PY="${PY:-.venvs/s4-move-to/bin/python}"
+> [ -x "$PY" ] || PY=".venvs/alohamini-lerobot/bin/python"
+> if [ "$(git -C "$SNAP" rev-parse HEAD 2>/dev/null || true)" != "6aee1f81d503be98972d605ed32189221a674607" ] \
+>    || [ ! -f "$SNAP/src/lerobot/robots/alohamini/alohamini_client.py" ]; then
+>   NEW_SNAP="$(mktemp -d /tmp/lerobot-vendor-6aee1f81.XXXXXX)"
+>   rmdir "$NEW_SNAP"
+>   git clone --branch p1a-merged --quiet /Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini "$NEW_SNAP"
+>   [ "$(git -C "$NEW_SNAP" rev-parse HEAD)" = "6aee1f81d503be98972d605ed32189221a674607" ]
+>   test -f "$NEW_SNAP/src/lerobot/robots/alohamini/alohamini_client.py"
+>   env PYTHONPATH="$NEW_SNAP/src" "$PY" -c "import os, lerobot.robots.alohamini.alohamini_client as m; assert os.path.realpath(m.__file__).startswith(os.path.realpath('$NEW_SNAP/src') + os.sep), m.__file__"
+>   rm -rf "$SNAP" && mv "$NEW_SNAP" "$SNAP"
+> fi
+> # 2. 最终确认实际导入路径命中 $SNAP/src/
+> env PYTHONPATH="$SNAP/src" "$PY" -c "import os, lerobot.robots.alohamini.alohamini_client as m; assert os.path.realpath(m.__file__).startswith(os.path.realpath('$SNAP/src') + os.sep), m.__file__; print('OK:', m.__file__)"
+> ```
 
 环境事实：
 

@@ -756,26 +756,23 @@ grep -rn "baseline feedback" tests/ --include=*.py
 
 本节接 [§10.6](#exp-e6)：ik 通路只有库 API 这一条路，所以这里给的是「怎么把库 API 跑起来」的完整跑法，而不是某个现成脚本的参数表。
 
-**硬前置（先满足再动手）：本节 ①a / ② / ③ 三条命令的前置当前不满足。** 这三条都强制 `--signs-json` / `--zeros-json`，而 `signs`（六关节 ±1）/ `zeros`（六关节零点，度）的**产出流程见 [§10.8](#exp-e8)（预写，未真机执行）；未标定前 ①a / ② / ③ 不可执行**。仓库侧现状照旧：`tools/` 只有 `verify_unit_consistency.py`（离线核对指纹与标定的单位口径），`benchmarks/` 下两个脚本不产出它们，仓库内的 `.py` 文件对 `signs-json` / `zeros-json` 零命中（`grep -rn "signs-json\|zeros-json" --include=*.py .` 无输出，只有本手册提到这两个选项名）；`examples/robot_dry_run.py:46` 自述「`JointKinematicAdapter` 需要每侧六关节完整的 `signs`/`zeros`，现场没有标定值」。因此：
+**硬前置（先满足再动手）：本节 ①a / ② / ③ 三条真机档命令的前置当前不满足。** 这三条都强制 `--signs-json` / `--zeros-json`，而 `signs`（六关节 ±1）/ `zeros`（六关节零点，度）的**产出流程见 [§10.8](#exp-e8)（正式 CLI 已沉淀为 `tools/calibrate_kinematics.py`，但尚未执行真机标定）；未标定前 ①a / ② / ③ 不可执行**。因此：
 
 | 档 | 可执行性 | 依据 |
 | --- | --- | --- |
-| ①b（纯离线 `--dry-run`） | **可执行**：只用 URDF 与 seed，不读 `signs` / `zeros` | `_run_dry` 只调 `_build_ik` / `_urdf_limits_deg`，不建 adapter、不建 client |
-| ①a / ② / ③ | **暂不可执行**：缺 `signs` / `zeros` 就直接按 `15` 退出 | `_load_side_json` 的 `path is None` 分支 |
+| ①b（纯离线 `--dry-run`） | **可执行**：只用 URDF 与 seed，不读 `signs` / `zeros` | `tools/run_cartesian_move.py` 的 `--dry-run` 分支只调 `ArmIK` / URDF 限位，不建 adapter、不建 client |
+| ①a / ② / ③ | **暂不可执行**：缺 `signs` / `zeros` 就直接按 `15` 退出 | `tools/run_cartesian_move.py` 的 `_load_flat_joint_json` 前置拒绝（`EXIT_MISSING_CALIB = 15`） |
 
-`signs` / `zeros` 的产出流程已在 [§10.8](#exp-e8) 预写、待现场执行并回写；在这之前这三条记为「**暂不可执行**」，且**不得为了让命令跑起来去手写或猜 `signs` / `zeros`**（那是伪标定，违反 `AGENTS.md` 第 3 节的证据纪律）。本节其余内容（判据表、预期值表、安全前置、现场确认项）仍按预写保留，等 [§10.8](#exp-e8) 现场执行并回写后照原样执行。
+`signs` / `zeros` 的产出流程已在 [§10.8](#exp-e8) 预写并沉淀为 `tools/calibrate_kinematics.py`，待现场执行并回写；在这之前 ①a / ② / ③ 记为「**暂不可执行**」，且**不得为了让命令跑起来去手写或猜 `signs` / `zeros`**（那是伪标定，违反 `AGENTS.md` 第 3 节的证据纪律）。本节其余内容（判据表、预期值表、安全前置、现场确认项）仍按预写保留，等 [§10.8](#exp-e8) 现场执行并回写后照原样执行。
 
-### 调用途径判定：仓库里没有现成入口
+### 调用入口判定：使用仓库正式 CLI
 
 | 候选入口 | 有什么 | 能不能下发 `move_to` |
 | --- | --- | --- |
 | `benchmarks/alohamini_io/measure_latency.py` | `--mode rtt` / `--mode tracking` | 不能：两个模式都不碰 IK（[§10.6](#exp-e6)） |
-| `tools/` | 只有 `verify_unit_consistency.py`（离线核对指纹与标定的单位口径，只读两个 JSON） | 不能 |
 | `examples/minimal_dry_run.py` | 内存假 transport 演示 `move_by` 全链路 | 不能：不连设备 |
-| `examples/robot_dry_run.py` | 真 client 注入 + 零发送 dry-run | 不能：不注入 adapter 与 IK 工厂，命令在状态机之前就被拒 |
-| `connect(...)` + `ArmHandle.move_to` | 唯一真下发路径 | 能，但仓库里没有调用方脚本 |
-
-结论：最小改动路径 = 本节内嵌的 Python 驱动脚本，落 `/tmp`（照 [§4.2](3-health.md#sec-4-2)「脚本副本落 `$S4DIR/stdout/`」的同一套纪律，不新建仓库文件）。写法照 `examples/robot_dry_run.py` 的姿势：厂商客户端由 `client_factory` 注入，`lerobot` 的 import 只发生在最内层工厂函数体内。「`src/` 不许 import `lerobot`」那条边界只约束 `src/`；驱动脚本作为手册内嵌代码，按 `examples/` 的既有写法注入。
+| `examples/robot_dry_run.py` | 真 client 注入 + 零发送 dry-run | 不能：不注入手臂 adapter 与 IK 工厂 |
+| `tools/run_cartesian_move.py`（封装 `connect(...)` + `ArmHandle.move_to` / `move_by`） | 正式真机与离线三档 CLI，按 `examples/` 姿势在工厂函数体内惰性 import `lerobot`（不违反 `src/` 零 `lerobot` 边界） | **能**（需先完成 [§10.8](#exp-e8) 真实 `signs` / `zeros` 标定） |
 
 ### 环境前置：两个 venv 都不够用（本轮实测）
 
@@ -801,9 +798,20 @@ ModuleNotFoundError: No module named 'placo'
 | 路 | 命令 | 风险与判据 |
 | --- | --- | --- |
 | A（不推荐，会改 numpy） | `uv pip install --python .venvs/alohamini-lerobot/bin/python "placo==0.10.1"` | 2026-11-24 实测：安装 `placo==0.10.1` 会把环境内 `numpy` 从 `2.2.6` 升至 `2.3.5`，污染原本冻结的 44 包基线，故改走路线 B |
-| B（首选、已落地） | `cp -a .venvs/alohamini-lerobot .venvs/s4-move-to` 后在副本里装 `placo==0.10.1`、`pytest>=8.0` 并 `uv pip install --no-deps -e .` | 原 `.venvs/alohamini-lerobot` 保持 44 包 / 881 M / `numpy 2.2.6` 零改动；副本 `.venvs/s4-move-to`（1.2 G，已被 `.gitignore` 忽略，内含 `lerobot 0.6.1`、`placo 0.10.1`、`pytest 9.2.0`、`numpy 2.3.5` 与可编辑安装的 `alohamini-cartesian 0.7.0`）已在 `6aee1f81` 快照下实测跑通两份 `lerobot` 差分测试（61/61）与 `tools/run_cartesian_move.py --dry-run`（exit `0`）。**真实 `connect()` 与运动仍待现场窗口验证** |
+| B（首选、已落地） | 见下方显式 `--python` 完整命令（**严禁**在副本里 `source bin/activate` 或直接跑 `bin/pip`，因 `cp -a` 后两者的路径仍硬编码指向 `.venvs/alohamini-lerobot`） | 原 `.venvs/alohamini-lerobot` 保持 44 包 / 881 M / `numpy 2.2.6` 零改动；副本 `.venvs/s4-move-to`（1.2 G，已被 `.gitignore` 忽略，内含 `lerobot 0.6.1`、`placo 0.10.1`、`pytest 9.2.0`、`numpy 2.3.5` 与可编辑安装的 `alohamini-cartesian 0.7.0`）已在 `6aee1f81` 快照下实测跑通两份 `lerobot` 差分测试（61/61）与 `tools/run_cartesian_move.py --dry-run`（exit `0`）。**真实 `connect()` 与运动仍待现场窗口验证** |
 
-两条都不改仓库文件，也不改 Pi 上的部署。现场执行本节 ①a / ② / ③ 时，解释器直接指向 `.venvs/s4-move-to/bin/python`，并在执行前按 [§5.3](../reference/env-rebuild.md#sec-5-3) 核对 `/tmp/lerobot-vendor-6aee1f81` 快照未遭 macOS 自动清理。
+路线 B 完整重建与核验命令（每条安装命令均显式指定 `--python .venvs/s4-move-to/bin/python`，绝不依赖 `activate` / `VIRTUAL_ENV`）：
+
+```bash
+cp -a .venvs/alohamini-lerobot .venvs/s4-move-to
+.venvs/s4-move-to/bin/python -c "import sys; assert sys.prefix.endswith('.venvs/s4-move-to'), sys.prefix"
+uv pip install --python .venvs/s4-move-to/bin/python "placo==0.10.1" "pytest>=8.0"
+uv pip install --python .venvs/s4-move-to/bin/python --no-deps -e .
+.venvs/s4-move-to/bin/python -c "import sys, numpy, lerobot, placo, pytest, alohamini_cartesian; assert sys.prefix.endswith('.venvs/s4-move-to'); print(sys.prefix, numpy.__version__, lerobot.__version__, placo.__file__, alohamini_cartesian.__file__)"
+.venvs/alohamini-lerobot/bin/python -m pip freeze | wc -l  # 核验原环境保持 44 包未动
+```
+
+两条都不改仓库文件，也不改 Pi 上的部署。现场执行本节 ①a / ② / ③ 时，解释器直接指向 `.venvs/s4-move-to/bin/python`（不激活 `bin/activate`），并在执行前按 [§5.3](../reference/env-rebuild.md#sec-5-3) 核对 `/tmp/lerobot-vendor-6aee1f81` 快照完整且实际导入路径命中该快照。
 
 ### 正式驱动脚本（`tools/run_cartesian_move.py`）
 
