@@ -304,7 +304,7 @@ run 7.1b-gatec-reverse env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pc
 
 机理：厂商客户端解每一帧观测时拿 metadata 的 `robot_model` 与自己的配置比对，不一致就打一条 ERROR 并退回上一帧观测（`serving last observation`），此时状态 schema 里已没有关节键；本库的键存在性检查（Gate B）按 `--joint` 找不到键，直接以 `6` 退出，Gate C 的模型名比对根本没走到。**这是厂商行为，不改 vendor，也不为凑 Gate C 去改本库代码。** Gate B 同样是有效的「零命令」证据。
 
-原文此处曾写「两侧关节键名集合相同，所以 Gate B（键在不在）不会先拒」——2026-11-06 实测推翻：厂商先在客户端侧把 schema 降级，键集合随之改变，Gate B 反而先拒。V10 的 Gate C 专属实机子项在真机上不可达，是否接受 Gate B 替代由上层裁决（已登记进 `TODO.md`）。
+原文此处曾写「两侧关节键名集合相同，所以 Gate B（键在不在）不会先拒」——2026-11-06 实测推翻：厂商先在客户端侧把 schema 降级，键集合随之改变，Gate B 反而先拒。V10 的 Gate C 专属实机子项在真机上不可达，已由 `docs/ADR.md` D26 正式裁决按现有 v1 Gate F 拒绝 + 2026-11-06 Gate B 拒绝与离线单测收口。
 
 Gate C 本身的零命令拒绝由离线测试锁住（现场拿不到就以它们为据）：`tests/benchmarks/test_measure_latency.py::test_main_should_refuse_tracking_when_the_host_reports_another_robot_model`（退出码 `6`、`sent_actions == []`、不写 CSV）、`::test_main_should_refuse_tracking_when_the_host_cannot_name_its_model[empty_metadata|no_robot_model|null_robot_model]`（宿主报不出型号时 fail closed）。
 
@@ -800,10 +800,10 @@ ModuleNotFoundError: No module named 'placo'
 
 | 路 | 命令 | 风险与判据 |
 | --- | --- | --- |
-| A（首选） | `uv pip install --python .venvs/alohamini-lerobot/bin/python "placo==0.10.1"` | 可能挪 `numpy`（该环境现为 `2.2.6`，主 `.venv` 是 `2.3.5`）。装前装后各存一份 `uv pip list`；判据：`import lerobot` 与 `import placo` 同时成功且差异只在预期内，否则回退 |
-| B（隔离） | `cp -a .venvs/alohamini-lerobot .venvs/s4-move-to` 后在副本里装 `placo` | vendor 环境零改动；代价是多一份同量级副本（[§5.3](../reference/env-rebuild.md#sec-5-3) 记录过 875 M 这一量级） |
+| A（不推荐，会改 numpy） | `uv pip install --python .venvs/alohamini-lerobot/bin/python "placo==0.10.1"` | 2026-11-24 实测：安装 `placo==0.10.1` 会把环境内 `numpy` 从 `2.2.6` 升至 `2.3.5`，污染原本冻结的 44 包基线，故改走路线 B |
+| B（首选、已落地） | `cp -a .venvs/alohamini-lerobot .venvs/s4-move-to` 后在副本里装 `placo==0.10.1`、`pytest>=8.0` 并 `uv pip install --no-deps -e .` | 原 `.venvs/alohamini-lerobot` 保持 44 包 / 881 M / `numpy 2.2.6` 零改动；副本 `.venvs/s4-move-to`（1.2 G，已被 `.gitignore` 忽略，内含 `lerobot 0.6.1`、`placo 0.10.1`、`pytest 9.2.0`、`numpy 2.3.5` 与可编辑安装的 `alohamini-cartesian 0.7.0`）已在 `6aee1f81` 快照下实测跑通两份 `lerobot` 差分测试（61/61）与 `tools/run_cartesian_move.py --dry-run`（exit `0`）。**真实 `connect()` 与运动仍待现场窗口验证** |
 
-两条都不改仓库文件，也不改 Pi 上的部署。
+两条都不改仓库文件，也不改 Pi 上的部署。现场执行本节 ①a / ② / ③ 时，解释器直接指向 `.venvs/s4-move-to/bin/python`，并在执行前按 [§5.3](../reference/env-rebuild.md#sec-5-3) 核对 `/tmp/lerobot-vendor-6aee1f81` 快照未遭 macOS 自动清理。
 
 ### 正式驱动脚本（`tools/run_cartesian_move.py`）
 
@@ -822,7 +822,7 @@ Host 起法见 [§6.1](2-host.md#host-start)（本节不重启 Host：只要它�
 
 产物与输入都落 `$S4DIR/stdout/`（`scope-*` 同目录；[§11](../reference/artifacts.md#sec-11) 的五个子目录不变，本节不新增目录）。`signs` / `zeros` 两份 JSON 是**输入**，不是本节产物：它们是六关节的 sign（±1）与 zero（度）映射，只能来自真实标定，**产出流程见 [§10.8](#exp-e8)（正式 CLI 已落地 `tools/calibrate_kinematics.py`，待现场执行）**，来源见本节「现场确认项」第 6 条；缺文件时脚本按 `15` 退出、不跑、不造假值。
 
-三条真机档命令的 `PYTHONPATH` 比 [§10.5](#exp-e5) 多一截 `:…/src`：本库没装进 vendor 环境（本轮实测 `find_spec('alohamini_cartesian')` 在该环境返回 `None`），而这三档都要 import `alohamini_cartesian`；`measure_latency.py` 只用标准库，所以 [§7.1](#exp-e3) / [§10.5](#exp-e5) 的那些命令不需要这一截。
+三条真机档命令统一使用已落地的合一隔离环境 `.venvs/s4-move-to/bin/python`（含 `lerobot 0.6.1`、`placo 0.10.1` 与可编辑安装的 `alohamini-cartesian`）；`PYTHONPATH` 仍显式写 `/tmp/lerobot-vendor-6aee1f81/src:src`，同时钉住 `6aee1f81` 厂商快照与当前工作区 `src/`（兼容独立 worktree）。
 
 **①a 只读：真机限位窗口（零发送）**
 
@@ -830,7 +830,7 @@ Host 起法见 [§6.1](2-host.md#host-start)（本节不重启 Host：只要它�
 为什么先做：`move_to` 的限位门用的是**标定窗口**，不是 URDF 的 `±179.9087°`（URDF 只是乐观上界），离线推不出真机窗口。
 
 ```bash
-run 10.7-limits env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:/Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python tools/run_cartesian_move.py --site configs/site.yaml --host "$PI_HOST" --limits-only --signs-json "$S4DIR/stdout/10.7-signs-$STAMP.json" --zeros-json "$S4DIR/stdout/10.7-zeros-$STAMP.json" --out "$S4DIR/stdout/10.7-limits-$STAMP.json"
+run 10.7-limits env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:src .venvs/s4-move-to/bin/python tools/run_cartesian_move.py --site configs/site.yaml --host "$PI_HOST" --limits-only --signs-json "$S4DIR/stdout/10.7-signs-$STAMP.json" --zeros-json "$S4DIR/stdout/10.7-zeros-$STAMP.json" --out "$S4DIR/stdout/10.7-limits-$STAMP.json"
 ```
 
 判据：退出码 `0`；日志里含 `wrist_roll` 的那一行（打印键是 URDF 名 `left_wrist_roll` / `right_wrist_roll`）把 `-163.7°` 包住；所选臂的六个关节都有窗口。产物 `stdout/10.7-limits-$STAMP.json` 在 `effective_limits_deg` 中记录这六组交集。
@@ -848,13 +848,13 @@ run 10.7-dryrun uv run --no-sync python tools/run_cartesian_move.py --dry-run --
 标签叫 `move_to`，脚本实际调 `ArmHandle.move_by`（内部算出增量目标后转给 `move_to`，`src/alohamini_cartesian/control/api.py:440` 的文档串写明「The resulting target is then passed to :meth:`move_to`」，`move_to` 在 `:214`）——**`move_by` → `move_to` 同一入口**，两者语义等价。
 
 ```bash
-run 10.7-single env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:/Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python tools/run_cartesian_move.py --site configs/site.yaml --host "$PI_HOST" --enable-motion --points 1 --timeout-s 10.0 --signs-json "$S4DIR/stdout/10.7-signs-$STAMP.json" --zeros-json "$S4DIR/stdout/10.7-zeros-$STAMP.json" --out "$S4DIR/stdout/10.7-single-$STAMP.json"
+run 10.7-single env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:src .venvs/s4-move-to/bin/python tools/run_cartesian_move.py --site configs/site.yaml --host "$PI_HOST" --enable-motion --points 1 --timeout-s 10.0 --signs-json "$S4DIR/stdout/10.7-signs-$STAMP.json" --zeros-json "$S4DIR/stdout/10.7-zeros-$STAMP.json" --out "$S4DIR/stdout/10.7-single-$STAMP.json"
 ```
 
 **③ 7 点路径**
 
 ```bash
-run 10.7-path env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:/Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python tools/run_cartesian_move.py --site configs/site.yaml --host "$PI_HOST" --enable-motion --points 7 --timeout-s 10.0 --signs-json "$S4DIR/stdout/10.7-signs-$STAMP.json" --zeros-json "$S4DIR/stdout/10.7-zeros-$STAMP.json" --out "$S4DIR/stdout/10.7-path-$STAMP.json"
+run 10.7-path env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:src .venvs/s4-move-to/bin/python tools/run_cartesian_move.py --site configs/site.yaml --host "$PI_HOST" --enable-motion --points 7 --timeout-s 10.0 --signs-json "$S4DIR/stdout/10.7-signs-$STAMP.json" --zeros-json "$S4DIR/stdout/10.7-zeros-$STAMP.json" --out "$S4DIR/stdout/10.7-path-$STAMP.json"
 ```
 
 ②③ 以首帧末端位姿固定各段绝对目标；结束时重读反馈，`residual_m` 记录相对全程终点的误差（容差 5 mm）。失败时先读 `phase`、`exit_code` 和 `moves`：成功段有 `steps` 和段误差，失败段有 `error` 与 `reason`。结束位姿未取得时全程误差为 `null`。

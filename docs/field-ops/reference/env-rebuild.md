@@ -46,6 +46,8 @@ git -C /tmp/lerobot-vendor-6aee1f81 rev-parse HEAD
 
 第二条应等于 Pi 运行时的 HEAD `6aee1f81`（本次实测输出 `6aee1f81d503be98972d605ed32189221a674607`）。
 
+> **避坑（macOS `/tmp` 自动清理，2026-11-24 实测）**：macOS 会定期清理 `/tmp` 下闲置数天的文件，可能只留下 `/tmp/lerobot-vendor-6aee1f81` 空壳目录而删掉 `src/lerobot/robots/alohamini/alohamini_client.py`。一旦文件缺失，Python 会静默退回 `site-packages` 里的旧版 `ec65318f` wheel，导致 `test_char_2` 失败或现场 `rtt` 报 exit `9`。每次跑差分测试或现场命令前，务必先确认 `git -C /tmp/lerobot-vendor-6aee1f81 rev-parse HEAD` 为 `6aee1f81...` 且 `test -f /tmp/lerobot-vendor-6aee1f81/src/lerobot/robots/alohamini/alohamini_client.py` 成立，不成立就重跑上面的 `git clone`。
+
 环境事实：
 
 | 项 | 值 |
