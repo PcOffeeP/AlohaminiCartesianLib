@@ -59,6 +59,8 @@ EXIT_MOTION_BLOCKED = 13
 EXIT_NOT_ENABLED_OR_RUNTIME = 14
 EXIT_MISSING_CALIB = 15
 
+ARRIVAL_TOLERANCE_M = 0.005
+
 DEFAULT_TARGET_FRAME = "left_Fixed_Jaw"
 DEFAULT_URDF_PATH = (
     Path(__file__).resolve().parents[1]
@@ -285,6 +287,10 @@ def _emit_output(payload: dict[str, Any], *, out_path: Path | None, as_json: boo
         print(f"[limits-only] side={payload['side']} robot_model={payload['robot_model']}")
         for joint, bounds in payload["effective_limits_deg"].items():
             print(f"  {joint}: [{bounds[0]:.2f}, {bounds[1]:.2f}] deg")
+    elif payload.get("exit_code") != EXIT_OK:
+        print(
+            f"[motion] {payload['phase']}: {payload['error']}: {payload['reason']}", file=sys.stderr
+        )
     else:
         print(
             f"[motion] side={payload['side']} points={payload['points']} "
@@ -294,6 +300,81 @@ def _emit_output(payload: dict[str, Any], *, out_path: Path | None, as_json: boo
         )
     if out_path is not None:
         print(f"[产物] {out_path}")
+
+
+def _run_motion(
+    arm: Any, args: argparse.Namespace, robot_model: str, clock: Callable[[], float]
+) -> dict[str, Any]:
+    """Execute absolute waypoints and retain measured progress on refusal or feedback loss."""
+    moves: list[dict[str, Any]] = []
+    payload: dict[str, Any] = {
+        "mode": "motion",
+        "side": args.side,
+        "robot_model": robot_model,
+        "points": args.points,
+        "orientation_mode": "identity" if args.identity_orientation else "hold",
+        "moves": moves,
+        "steps": 0,
+        "residual_m": None,
+        "phase": "start_measurement",
+        "start_xyz_m": None,
+        "target_xyz_m": None,
+        "final_xyz_m": None,
+    }
+    active_move = None
+    try:
+        start_pose = arm.measured_pose()
+        start = start_pose[:3, 3]
+        delta = np.array([args.dx, args.dy, args.dz])
+        target = start + delta
+        orientation = np.eye(3) if args.identity_orientation else start_pose[:3, :3]
+        payload.update(start_xyz_m=start.tolist(), target_xyz_m=target.tolist(), phase="move")
+        for idx in range(1, args.points + 1):
+            waypoint = start + (idx / args.points) * delta
+            active_move = {"point": idx, "target_xyz_m": waypoint.tolist()}
+            moves.append(active_move)
+            t0 = clock()
+            report = arm.move_to(*waypoint, timeout_s=args.timeout_s, orientation=orientation)
+            active_move.update(
+                residual_m=report.residual_m, steps=len(report.steps), elapsed_s=clock() - t0
+            )
+            payload["steps"] += len(report.steps)
+            active_move = None
+
+        payload["phase"] = "final_measurement"
+        end = arm.measured_pose()[:3, 3]
+        residual = float(np.linalg.norm(end - target))
+        payload.update(final_xyz_m=end.tolist(), residual_m=residual)
+        if residual > ARRIVAL_TOLERANCE_M:
+            raise MotionBlocked(
+                f"measured endpoint residual {residual:.6f} m exceeds {ARRIVAL_TOLERANCE_M} m"
+            )
+        payload.update(phase="complete", exit_code=EXIT_OK)
+    except (
+        OutOfRange,
+        MotionTimeout,
+        FeedbackLost,
+        MotionBlocked,
+        MotionNotEnabled,
+        RuntimeError,
+        OSError,
+    ) as exc:
+        if isinstance(exc, OutOfRange):
+            code = EXIT_PRECHECK_REJECTED
+        elif isinstance(exc, MotionTimeout):
+            code = EXIT_MOTION_TIMEOUT
+        elif isinstance(exc, FeedbackLost):
+            code = EXIT_FEEDBACK_LOST
+        elif isinstance(exc, MotionBlocked):
+            code = EXIT_MOTION_BLOCKED
+        else:
+            code = EXIT_NOT_ENABLED_OR_RUNTIME
+        if active_move is not None:
+            active_move.update(error=type(exc).__name__, reason=str(exc), elapsed_s=clock() - t0)
+        payload.update(exit_code=code, error=type(exc).__name__, reason=str(exc))
+        if payload["residual_m"] is None:
+            payload["notes"] = "Final measured position and path residual unavailable."
+    return payload
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -477,6 +558,7 @@ def main(
             ik_factory=ik_factory,
             adapter=adapter,
             move_timeout_s=args.timeout_s,
+            arrival_tolerance_m=ARRIVAL_TOLERANCE_M,
             max_joint_step_deg=args.max_joint_step_deg,
             follow_error_tolerance_deg=args.follow_error_tolerance_deg,
             settled_max_joint_delta_deg=args.settled_max_joint_delta_deg,
@@ -510,58 +592,9 @@ def main(
             return EXIT_OK
 
         arm = session.left if args.side == "left" else session.right
-        orientation = np.eye(3, dtype=float) if args.identity_orientation else None
-        step_dx = args.dx / args.points
-        step_dy = args.dy / args.points
-        step_dz = args.dz / args.points
-        moves: list[dict[str, Any]] = []
-        total_steps = 0
-        last_residual = 0.0
-        for idx in range(1, args.points + 1):
-            t0 = run_clock()
-            report = arm.move_by(
-                dx=step_dx,
-                dy=step_dy,
-                dz=step_dz,
-                timeout_s=args.timeout_s,
-                orientation=orientation,
-            )
-            elapsed_s = float(run_clock() - t0)
-            total_steps += len(report.steps)
-            last_residual = float(report.residual_m)
-            moves.append(
-                {
-                    "point": idx,
-                    "residual_m": last_residual,
-                    "steps": len(report.steps),
-                    "elapsed_s": elapsed_s,
-                }
-            )
-        payload = {
-            "mode": "motion",
-            "side": args.side,
-            "robot_model": robot_model,
-            "points": args.points,
-            "orientation_mode": "identity" if args.identity_orientation else "hold",
-            "residual_m": last_residual,
-            "steps": total_steps,
-            "moves": moves,
-            "exit_code": EXIT_OK,
-        }
+        payload = _run_motion(arm, args, robot_model, run_clock)
         _emit_output(payload, out_path=args.out, as_json=args.json)
-        return EXIT_OK
-    except OutOfRange as exc:
-        print(f"路径预检拒绝：{exc}", file=sys.stderr)
-        return EXIT_PRECHECK_REJECTED
-    except MotionTimeout as exc:
-        print(f"运动超时：{exc}（moved={exc.moved:.4f} m）", file=sys.stderr)
-        return EXIT_MOTION_TIMEOUT
-    except FeedbackLost as exc:
-        print(f"反馈失联：{exc}", file=sys.stderr)
-        return EXIT_FEEDBACK_LOST
-    except MotionBlocked as exc:
-        print(f"运动被阻断：{exc}", file=sys.stderr)
-        return EXIT_MOTION_BLOCKED
+        return payload["exit_code"]
     finally:
         session.disconnect()
 

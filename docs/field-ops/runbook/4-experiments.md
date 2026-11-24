@@ -826,14 +826,14 @@ Host 起法见 [§6.1](2-host.md#host-start)（本节不重启 Host：只要它�
 
 **①a 只读：真机限位窗口（零发送）**
 
-做什么：连 Host 读一帧观测与 metadata，打印两侧「有效限位窗口」——标定刻度窗口与 URDF 限位的交集（换算口径见 `JointKinematicAdapter.effective_limits_deg`，`src/alohamini_cartesian/kinematics/joint_adapter.py:443`）。
+做什么：连 Host 读一帧观测与 metadata，打印所选臂的「有效限位窗口」——标定刻度窗口与 URDF 限位的交集（换算口径见 `JointKinematicAdapter.effective_limits_deg`，`src/alohamini_cartesian/kinematics/joint_adapter.py:443`）。
 为什么先做：`move_to` 的限位门用的是**标定窗口**，不是 URDF 的 `±179.9087°`（URDF 只是乐观上界），离线推不出真机窗口。
 
 ```bash
-run 10.7-limits env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:/Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python tools/run_cartesian_move.py --host "$PI_HOST" --limits-only --signs-json "$S4DIR/stdout/10.7-signs-$STAMP.json" --zeros-json "$S4DIR/stdout/10.7-zeros-$STAMP.json" --out "$S4DIR/stdout/10.7-limits-$STAMP.json"
+run 10.7-limits env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:/Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python tools/run_cartesian_move.py --site configs/site.yaml --host "$PI_HOST" --limits-only --signs-json "$S4DIR/stdout/10.7-signs-$STAMP.json" --zeros-json "$S4DIR/stdout/10.7-zeros-$STAMP.json" --out "$S4DIR/stdout/10.7-limits-$STAMP.json"
 ```
 
-判据：退出码 `0`；日志里含 `wrist_roll` 的那一行（打印键是 URDF 名 `left_wrist_roll` / `right_wrist_roll`）把 `-163.7°` 包住；两侧六个关节都有窗口（出现 `error:` 即该侧 metadata 不全）。产物：`stdout/10.7-limits-$STAMP.json`，含每台臂电机的 `normalization` / `range_min` / `range_max` / `resolution` 原文。
+判据：退出码 `0`；日志里含 `wrist_roll` 的那一行（打印键是 URDF 名 `left_wrist_roll` / `right_wrist_roll`）把 `-163.7°` 包住；所选臂的六个关节都有窗口。产物 `stdout/10.7-limits-$STAMP.json` 在 `effective_limits_deg` 中记录这六组交集。
 
 **①b 离线：IK 解与预检（零网络、零发送）**
 
@@ -848,16 +848,16 @@ run 10.7-dryrun uv run --no-sync python tools/run_cartesian_move.py --dry-run --
 标签叫 `move_to`，脚本实际调 `ArmHandle.move_by`（内部算出增量目标后转给 `move_to`，`src/alohamini_cartesian/control/api.py:440` 的文档串写明「The resulting target is then passed to :meth:`move_to`」，`move_to` 在 `:214`）——**`move_by` → `move_to` 同一入口**，两者语义等价。
 
 ```bash
-run 10.7-single env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:/Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python tools/run_cartesian_move.py --host "$PI_HOST" --enable-motion --points 1 --timeout-s 10.0 --signs-json "$S4DIR/stdout/10.7-signs-$STAMP.json" --zeros-json "$S4DIR/stdout/10.7-zeros-$STAMP.json" --out "$S4DIR/stdout/10.7-single-$STAMP.json"
+run 10.7-single env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:/Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python tools/run_cartesian_move.py --site configs/site.yaml --host "$PI_HOST" --enable-motion --points 1 --timeout-s 10.0 --signs-json "$S4DIR/stdout/10.7-signs-$STAMP.json" --zeros-json "$S4DIR/stdout/10.7-zeros-$STAMP.json" --out "$S4DIR/stdout/10.7-single-$STAMP.json"
 ```
 
 **③ 7 点路径**
 
 ```bash
-run 10.7-path env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:/Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python tools/run_cartesian_move.py --host "$PI_HOST" --enable-motion --points 7 --timeout-s 10.0 --signs-json "$S4DIR/stdout/10.7-signs-$STAMP.json" --zeros-json "$S4DIR/stdout/10.7-zeros-$STAMP.json" --out "$S4DIR/stdout/10.7-path-$STAMP.json"
+run 10.7-path env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:/Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python tools/run_cartesian_move.py --site configs/site.yaml --host "$PI_HOST" --enable-motion --points 7 --timeout-s 10.0 --signs-json "$S4DIR/stdout/10.7-signs-$STAMP.json" --zeros-json "$S4DIR/stdout/10.7-zeros-$STAMP.json" --out "$S4DIR/stdout/10.7-path-$STAMP.json"
 ```
 
-②③ 的判据见下面的判据表、安全前置与预期值表；最可能先落到「超时 + `moves` 无成功行」，那是预期形态之一，读法见判据表 (b) 的说明。
+②③ 以首帧末端位姿固定各段绝对目标；结束时重读反馈，`residual_m` 记录相对全程终点的误差（容差 5 mm）。失败时先读 `phase`、`exit_code` 和 `moves`：成功段有 `steps` 和段误差，失败段有 `error` 与 `reason`。结束位姿未取得时全程误差为 `null`。
 
 **④ 卷尺实测（URDF 锚定，必做）**
 
@@ -873,7 +873,7 @@ run 10.7-path env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:/Users/pcoffeep/pi
 | 量测方向 | 沿基座系 `+Z`（默认即竖直向上）。立尺时用垂线或角尺校一次竖直，尺面与位移方向平行，读数取量点投影到尺面的刻度 |
 | 读数精度 | 读到 1 mm；同一人、同一把尺、同一基准点重复 3 次取中位；3 次之间极差 > 2 mm 视为基准点漂了，重贴美纹纸重标后再量 |
 | 什么时候量 | ② 的成功行出现后，等手臂静止 2 s 再量（等 `steady`，避免在动的时候读） |
-| 不能量的时候 | ② 落成「超时 + `moves` 无成功行」这类预期形态时**没有位移可量**：记「未测：② 未达成动作，原因「异常类名」」，**不得**拿 FK 预测值回填、不得估读 |
+| 不能量的时候 | ② 落成「超时 + `moves` 无成功行」这类预期形态时不能据此判断位移为零：记「未完成终点测量，原因「异常类名」」，**不得**拿 FK 预测值回填、不得估读 |
 
 三条数必须同源（同一次 ② 的产物 `stdout/10.7-single-$STAMP.json` + 命令原文 `stdout/10.7-single-$STAMP.cmd`）：
 
@@ -909,7 +909,7 @@ run 10.7-path env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:/Users/pcoffeep/pi
 | --- | --- | --- | --- |
 | `0` | 到位（离线档为判据全过） | — | 离线档为零发送 |
 | `2` | 参数或配置错误（含缺 `--enable-motion`） | argparse 自身，或本脚本对 `--points` / `--dx..dz` / `--timeout-s` / 跟随容差参数的校验（`EXIT_USAGE`），同 [§10](../reference/gates.md#exit-codes) 既有口径 | 否 |
-| `10` | 预检 / IK 拒绝 | `OutOfRange`（`src/alohamini_cartesian/control/api.py`） | 否 |
+| `10` | 预检 / IK 拒绝 | `OutOfRange`（`src/alohamini_cartesian/control/api.py`） | 本段预检拒绝；连接时可已发送保持指令，前段也可已执行。查 JSON 的 `moves` |
 | `11` | `move_to` 超时 | `MotionTimeout`（`src/alohamini_cartesian/control/api.py`） | 可能（视 step gate 是否放行过某些周期） |
 | `12` | 反馈失联 | `FeedbackLost`（`src/alohamini_cartesian/control/api.py`） | 可能 |
 | `13` | 运动被阻断 | `MotionBlocked`，含 adapter 连续 3 次失败（`src/alohamini_cartesian/control/api.py`） | 可能 |
@@ -927,9 +927,9 @@ run 10.7-path env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:/Users/pcoffeep/pi
 
 | 特征串 | 源码位置 | 何时出现 | 现场怎么读 |
 | --- | --- | --- | --- |
-| `move_to timed out after ` | `src/alohamini_cartesian/control/api.py:300` | 到 `timeout_s` 仍未满足到达条件 | 最常见形态；配合 JSON 里 `moves[].moved_m` 一起读 |
+| `move_to timed out after ` | `src/alohamini_cartesian/control/api.py:300` | 到 `timeout_s` 仍未满足到达条件 | 最常见形态；配合失败段的 `point`、`elapsed_s`、`reason` 一起读 |
 | `no new feedback for ` | `src/alohamini_cartesian/control/api.py:325` | 超过 `feedback_timeout_s` 没有新样本 | 链路问题，不是运动问题 |
-| `precheck failed at waypoint ` | `src/alohamini_cartesian/control/api.py:200` | 预检发现不可达或越限 | IK 不可达 → 零下发 |
+| `precheck failed at t=` | `src/alohamini_cartesian/control/api.py:200` | 预检发现不可达或越限 | 当前段预检拒绝；此前已完成的段保留在 `moves` |
 | `adapter failed (` | `src/alohamini_cartesian/control/api.py:391` | 控制器连续 3 个周期报 `ADAPTER_FAILED` | 先查 `signs` / `zeros` 与 metadata |
 | `STEP_LIMIT` / `JOINT_LIMIT` / `FOLLOW_TIMEOUT` / `RESIDUAL` / `IK_FAILED` | `src/alohamini_cartesian/control/controller.py:48-57` | 控制器每周期判 | **不会出现在 stdout**：`move_to` 只把 `ADAPTER_FAILED` 转成异常，其余 `error_code` 不向外传（`src/alohamini_cartesian/control/api.py:387-391`），现场只能从「超时 + 无成功行」反推 |
 | `MotionTimeout` / `OutOfRange` / `FeedbackLost` | 异常类（`src/alohamini_cartesian/control/api.py:75-97`） | 见 (a) | 脚本把类名写进 JSON 的 `moves[].error` |

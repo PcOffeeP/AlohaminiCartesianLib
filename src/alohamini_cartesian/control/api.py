@@ -293,32 +293,18 @@ def _precheck_straight_path(
             )
         q_b = np.asarray(result.q_deg, dtype=float)
         joint_step = float(np.max(np.abs(q_b - q_a)))
-        if (
-            joint_step > max_joint_step_deg
-            and depth < _MAX_BISECT_DEPTH
-            and (t_b - t_a) > 1e-5
-            and not np.allclose(q_b, q_a)
-        ):
-            t_mid = 0.5 * (t_a + t_b)
-            pose_mid = _pose_at(t_mid)
-            mid_result = arm_ik.solve(
-                q_current_deg=q_a,
-                target_pose=pose_mid,
-                joint_limits_deg=joint_limits_deg,
-                orientation_weight=orientation_weight,
+        if math.isfinite(joint_step) and joint_step <= max_joint_step_deg:
+            return [(pose_b, q_b)], q_b
+        if not math.isfinite(joint_step) or depth >= _MAX_BISECT_DEPTH or t_b - t_a <= 1e-5:
+            raise OutOfRange(
+                f"precheck failed at t={t_b:.4f}: joint step {joint_step:.6g} deg "
+                f"exceeds limit {max_joint_step_deg:.6g} deg or is non-finite",
+                target=target_pose,
             )
-            if not mid_result.ok:
-                raise OutOfRange(
-                    f"precheck failed at t={t_mid:.4f}: {mid_result.reason}",
-                    target=target_pose,
-                )
-            q_mid = np.asarray(mid_result.q_deg, dtype=float)
-            # Guard against scripted/constant mock solvers that ignore pose changes.
-            if not np.allclose(q_mid, q_b, atol=1e-9):
-                left_wps, q_after_left = _solve_segment(t_a, q_a, t_mid, depth + 1)
-                right_wps, q_after_right = _solve_segment(t_mid, q_after_left, t_b, depth + 1)
-                return left_wps + right_wps, q_after_right
-        return [(pose_b, q_b)], q_b
+        t_mid = 0.5 * (t_a + t_b)
+        left_wps, q_mid = _solve_segment(t_a, q_a, t_mid, depth + 1)
+        right_wps, q_end = _solve_segment(t_mid, q_mid, t_b, depth + 1)
+        return left_wps + right_wps, q_end
 
     waypoints: list[tuple[np.ndarray, np.ndarray]] = []
     q_prev = np.asarray(q_current_deg, dtype=float)
@@ -585,13 +571,7 @@ class ArmHandle:
                         target[:3, :3],
                     )
                     rot_tol_rad = math.radians(max(2.0, controller._follow_error_tolerance_deg))
-                    at_final_q = (
-                        bool(waypoints)
-                        and q_current is not None
-                        and float(np.max(np.abs(q_current - waypoints[-1][1])))
-                        <= max(controller._follow_error_tolerance_deg, 1.0)
-                    )
-                    orientation_ok = (rot_err_rad <= rot_tol_rad) or at_final_q
+                    orientation_ok = rot_err_rad <= rot_tol_rad
 
             if (
                 session.state.state is ControlState.ACTIVE
@@ -624,21 +604,8 @@ class ArmHandle:
 
             session._sleeper(session._control_period_s)
 
-    def move_by(
-        self,
-        dx: float = 0.0,
-        dy: float = 0.0,
-        dz: float = 0.0,
-        timeout_s: float | None = None,
-        *,
-        orientation: np.ndarray | None = None,
-    ) -> MoveReport:
-        """Blocking Cartesian move by ``(dx, dy, dz)`` in meters.
-
-        The increment is interpreted in the body frame, rotated per side by
-        ``session._r_body_to_arm[side]``, and added to the current measured
-        FK pose.  The resulting target is then passed to :meth:`move_to`.
-        """
+    def measured_pose(self) -> np.ndarray:
+        """Read the measured end-effector pose in the arm frame (4x4, meters)."""
         session = self._session
         if session is None:
             raise MotionNotEnabled("ArmHandle is not attached to a session")
@@ -654,12 +621,30 @@ class ArmHandle:
             if metadata is None:
                 raise FeedbackLost("feedback is missing _robot_metadata")
             q_current = session._adapter.observation_to_kinematic_deg(self.side, feedback, metadata)
+            pose = np.asarray(controller._arm_ik.fk(q_current), dtype=float)
+            if pose.shape != (4, 4) or not np.isfinite(pose).all():
+                raise ValueError("invalid measured FK pose")
+            return pose.copy()
         except Exception as exc:
             raise FeedbackLost(f"cannot read current pose for {self.side}: {exc}") from exc
 
-        current_pose = controller._arm_ik.fk(q_current)
-        current_trans = np.asarray(current_pose[:3, 3], dtype=float)
+    def move_by(
+        self,
+        dx: float = 0.0,
+        dy: float = 0.0,
+        dz: float = 0.0,
+        timeout_s: float | None = None,
+        *,
+        orientation: np.ndarray | None = None,
+    ) -> MoveReport:
+        """Blocking Cartesian move by ``(dx, dy, dz)`` in meters.
 
+        The increment is interpreted in the body frame, rotated per side by
+        ``session._r_body_to_arm[side]``, and added to the current measured
+        FK pose.  The resulting target is then passed to :meth:`move_to`.
+        """
+        current_trans = self.measured_pose()[:3, 3]
+        session = self._session
         delta = np.array([float(dx), float(dy), float(dz)], dtype=float)
         r = session._r_body_to_arm.get(self.side)
         if r is not None:

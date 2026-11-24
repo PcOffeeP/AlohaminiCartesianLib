@@ -180,3 +180,107 @@ def test_limits_only_primes_window_intersects_urdf_and_never_sends(
         assert np.isfinite(lo) and np.isfinite(hi) and lo < hi
         assert lo > u_lo + 1.0
         assert hi == pytest.approx(u_hi, abs=1e-6)
+
+
+def test_dry_run_refuses_subdivision_that_cannot_meet_step_budget(capsys: Any) -> None:
+    """The smallest remaining interval must still respect the requested joint limit."""
+    pytest.importorskip("placo")
+    tool = _load_tool()
+    code = tool.main(["--dry-run", "--dz", ".001", "--max-joint-step-deg", ".0001", "--json"])
+    result = json.loads(capsys.readouterr().out)
+    assert code == tool.EXIT_PRECHECK_REJECTED
+    assert "joint step" in result["error"]
+    assert not result["ok"] and result["send_action_calls"] == 0
+
+
+@pytest.mark.parametrize(
+    "scenario", ["short_steps", "endpoint_drift", "second_refused", "lost_endpoint"]
+)
+def test_motion_cli_anchors_path_and_records_partial_results(
+    scenario: str, monkeypatch: Any, tmp_path: Path
+) -> None:
+    """Exercise the motion CLI with a simulated arm that stops 2 mm short at each point."""
+    from types import SimpleNamespace
+
+    tool = _load_tool()
+    start = np.array([0.12, -0.04, 0.2])
+    position = start.copy()
+    targets = []
+
+    def measured_pose() -> np.ndarray:
+        pose = np.eye(4)
+        pose[:3, 3] = position
+        if len(targets) == 7:
+            if scenario == "endpoint_drift":
+                pose[2, 3] = start[2] + 0.076
+            if scenario == "lost_endpoint":
+                raise tool.FeedbackLost("no final feedback")
+        return pose
+
+    def move_to(x: float, y: float, z: float, **kwargs: Any) -> Any:
+        targets.append([x, y, z])
+        if len(targets) == 2 and scenario == "second_refused":
+            raise tool.OutOfRange("second segment unreachable")
+        position[:] = [x, y, z - 0.002]
+        return SimpleNamespace(steps=[1], residual_m=0.002)
+
+    arm = SimpleNamespace(measured_pose=measured_pose, move_to=move_to)
+    session = SimpleNamespace(left=arm, disconnect=lambda: None)
+    monkeypatch.setattr(tool, "connect", lambda *a, **kw: session)
+    signs, zeros, output = (tmp_path / name for name in ("signs.json", "zeros.json", "move.json"))
+    signs.write_text(json.dumps(dict.fromkeys(JOINT_ORDER, 1)))
+    zeros.write_text(json.dumps(dict.fromkeys(JOINT_ORDER, 0)))
+    code = tool.main(
+        [
+            "--enable-motion",
+            "--signs-json",
+            str(signs),
+            "--zeros-json",
+            str(zeros),
+            "--points",
+            "7",
+            "--dz",
+            "0.09",
+            "--out",
+            str(output),
+        ]
+    )
+    result = json.loads(output.read_text())
+    assert result["exit_code"] == code
+    assert result["start_xyz_m"] == pytest.approx(start)
+    assert result["target_xyz_m"] == pytest.approx(start + [0, 0, 0.09])
+    for i, target in enumerate(targets, start=1):
+        assert target == pytest.approx(start + [0, 0, 0.09 * i / 7])
+    if scenario == "second_refused":
+        assert code == 10 and len(result["moves"]) == 2
+        assert result["moves"][0]["steps"] == 1
+        assert result["moves"][1]["error"] == "OutOfRange"
+        assert result["moves"][1]["reason"] == "second segment unreachable"
+        assert result["residual_m"] is None
+    elif scenario == "lost_endpoint":
+        assert code == 12 and len(result["moves"]) == 7
+        assert result["residual_m"] is None and result["notes"]
+    elif scenario == "endpoint_drift":
+        assert code == 13 and result["residual_m"] == pytest.approx(0.014)
+    else:
+        assert code == 0 and result["residual_m"] == pytest.approx(0.002)
+
+
+def test_field_commands_select_the_deployed_robot_configuration() -> None:
+    """Parse all three field commands using the CLI's actual configuration loader."""
+    import shlex
+
+    tool = _load_tool()
+    runbook = (REPO_ROOT / "docs/field-ops/runbook/4-experiments.md").read_text()
+    commands = [
+        shlex.split(line)
+        for line in runbook.splitlines()
+        if line.startswith("run 10.7-") and "tools/run_cartesian_move.py --site" in line
+    ]
+    assert {words[1] for words in commands} == {"10.7-limits", "10.7-single", "10.7-path"}
+    for words in commands:
+        args = tool._build_parser().parse_args(
+            words[words.index("tools/run_cartesian_move.py") + 1 :]
+        )
+        settings = tool.load_settings(site=REPO_ROOT / args.site, env={})
+        assert settings.robot_model == "alohamini2pro" and settings.observation_request_window == 3

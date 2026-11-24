@@ -4467,7 +4467,10 @@ def test_d24_lift_and_base_prime_without_arm_adapter_while_gripper_still_require
     session.disconnect()
 
 
-def test_d24_in_place_explicit_rotation_steps_through_all_waypoints_and_converges() -> None:
+@pytest.mark.parametrize("restricted", [False, True], ids=["reachable", "restricted"])
+def test_d24_in_place_explicit_rotation_steps_through_all_waypoints_and_converges(
+    restricted: bool,
+) -> None:
     """同位置 45° 显式纯旋转不得在首拍因位置残差为 0 提前退出，必须完整步进并收敛姿态。"""
     pytest.importorskip("placo")
     import math
@@ -4502,9 +4505,12 @@ def test_d24_in_place_explicit_rotation_steps_through_all_waypoints_and_converge
         side: {j: ik._urdf_limits_deg[URDF_JOINT_NAMES[j]] for j in JOINT_ORDER}
         for side in ("left", "right")
     }
-    adapter = JointKinematicAdapter(signs=signs, zeros=zeros, urdf_limits=urdf_limits)
-
     start_q = np.array([10.0, -20.0, 30.0, -40.0, 20.0, -10.0], dtype=float)
+    if restricted:
+        urdf_limits["left"] = {
+            joint: (q - 0.4, q + 0.4) for joint, q in zip(JOINT_ORDER, start_q, strict=True)
+        }
+    adapter = JointKinematicAdapter(signs=signs, zeros=zeros, urdf_limits=urdf_limits)
     start_pose = ik.fk(start_q)
     # 45 deg pure rotation around wrist_roll (keeps end-effector xyz identical).
     goal_q = start_q + np.array([0.0, 0.0, 0.0, 0.0, 0.0, 45.0])
@@ -4586,6 +4592,16 @@ def test_d24_in_place_explicit_rotation_steps_through_all_waypoints_and_converge
         move_timeout_s=5.0,
         max_joint_step_deg=2.0,
     )
+    if restricted:
+        from alohamini_cartesian.control import MotionTimeout
+
+        with pytest.raises(MotionTimeout):
+            session.left.move_to(*start_pose[:3, 3], 5.0, orientation=goal_pose[:3, :3])
+        final_pose = ik.fk(client.q)
+        assert math.degrees(_rotation_axis_angle(final_pose[:3, :3], goal_pose[:3, :3])[1]) > 40
+        session.disconnect()
+        return
+
     report = session.left.move_to(
         float(start_pose[0, 3]),
         float(start_pose[1, 3]),
