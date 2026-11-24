@@ -46,6 +46,48 @@ git -C /tmp/lerobot-vendor-6aee1f81 rev-parse HEAD
 
 第二条应等于 Pi 运行时的 HEAD `6aee1f81`（本次实测输出 `6aee1f81d503be98972d605ed32189221a674607`）。
 
+> **避坑（macOS `/tmp` 自动清理，2026-11-24 实测）**：macOS 会定期清理 `/tmp` 下闲置数天的文件，可能只留下含 `.git/objects` 与 `src/` 的非空残缺目录而删掉 `alohamini_client.py`。一旦文件缺失，Python 会静默退回 `site-packages` 里的旧版 `ec65318f` wheel，导致 `test_char_2` 失败或现场 `rtt` 报 exit `9`；且对非空残缺目录直接向同一路径重跑 `git clone` 会被 Git 拒绝。
+>
+> 每次跑差分测试或现场命令前，执行下方子 shell 校验与安全重建（`set -euo pipefail` 保证任一步失败立即中止，绝不会在校验失败后误删旧快照；`$PY` 按实际环境取 `.venvs/s4-move-to/bin/python` 或 `.venvs/alohamini-lerobot/bin/python`）：
+> ```bash
+> (
+>   set -euo pipefail
+>   SNAP=/tmp/lerobot-vendor-6aee1f81
+>   TARGET_SHA=6aee1f81d503be98972d605ed32189221a674607
+>   PY="${PY:-.venvs/s4-move-to/bin/python}"
+>   [ -x "$PY" ] || PY=".venvs/alohamini-lerobot/bin/python"
+>
+>   if [ "$(git -C "$SNAP" rev-parse HEAD 2>/dev/null || true)" != "$TARGET_SHA" ] \
+>      || [ ! -f "$SNAP/src/lerobot/robots/alohamini/alohamini_client.py" ]; then
+>     NEW_SNAP="$(mktemp -d /tmp/lerobot-vendor-6aee1f81.XXXXXX)"
+>     rmdir "$NEW_SNAP"
+>     trap 'rm -rf "$NEW_SNAP"' ERR
+>     git clone --no-checkout --quiet /Users/pcoffeep/AgentPlayground/active-projects/lerobot_alohamini "$NEW_SNAP"
+>     git -C "$NEW_SNAP" checkout --detach --quiet "$TARGET_SHA"
+>     [ "$(git -C "$NEW_SNAP" rev-parse HEAD)" = "$TARGET_SHA" ]
+>     test -f "$NEW_SNAP/src/lerobot/robots/alohamini/alohamini_client.py"
+>     env PYTHONPATH="$NEW_SNAP/src" "$PY" -c "import os, lerobot.robots.alohamini.alohamini_client as m; assert os.path.realpath(m.__file__).startswith(os.path.realpath('$NEW_SNAP/src') + os.sep), m.__file__"
+>
+>     OLD_BACKUP=""
+>     if [ -e "$SNAP" ]; then
+>       OLD_BACKUP="${SNAP}.old.$$"
+>       mv "$SNAP" "$OLD_BACKUP"
+>     fi
+>     if mv "$NEW_SNAP" "$SNAP"; then
+>       [ -n "$OLD_BACKUP" ] && rm -rf "$OLD_BACKUP"
+>     else
+>       [ -n "$OLD_BACKUP" ] && mv "$OLD_BACKUP" "$SNAP"
+>       exit 1
+>     fi
+>     trap - ERR
+>   fi
+>
+>   # 最终路径复核：同时确认完整 SHA 与实际导入路径命中 $SNAP/src/
+>   [ "$(git -C "$SNAP" rev-parse HEAD)" = "$TARGET_SHA" ]
+>   env PYTHONPATH="$SNAP/src" "$PY" -c "import os, lerobot.robots.alohamini.alohamini_client as m; assert os.path.realpath(m.__file__).startswith(os.path.realpath('$SNAP/src') + os.sep), m.__file__; print('OK:', m.__file__)"
+> )
+> ```
+
 环境事实：
 
 | 项 | 值 |

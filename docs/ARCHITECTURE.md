@@ -55,7 +55,7 @@ flowchart TD
 | 术语 / 编号 | 它是什么 | 不是什么 | 权威位置 |
 | --- | --- | --- | --- |
 | **V01–V13** | **现行**产品验收基线（每条含软件证据 + 实机证据 + 判据） | 不是旧仓库的 Gate 归档 | `docs/acceptance-baseline.md` |
-| **D1–D25** | **现行**本库架构决策记录（ADR），按时间顺序追加 | 不是历史设计规范里的 `D001–D018` | `docs/ADR.md` |
+| **D1–D26** | **现行**本库架构决策记录（ADR），按时间顺序追加 | 不是历史设计规范里的 `D001–D018` | `docs/ADR.md` |
 | **Gate A–F** | **现行**基准脚本 `benchmarks/alohamini_io/measure_latency.py` 的 6 道运行时资格门禁 | 不是旧仓库按臂归档的 `Gate A–E` | `docs/field-ops/reference/gates.md` |
 | **D001–D018 / Gate A–E** | 已退役旧仓库的历史设计编号与旧归档（仅作溯源参考，**无现行权威**） | 不能当现行验收或代码规范使用 | `docs/ADR.md` D4、D17 |
 | **`signs` / `zeros`** | 本库 `JointKinematicAdapter` 消费的六关节方向（±1）与运动学零点（度） | 不是舵机固件的 `drive_mode` / `homing_offset`（tick），严禁混算 | `tools/calibrate_kinematics.py`、`docs/field-ops/runbook/4-experiments.md#exp-e8` |

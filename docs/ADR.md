@@ -1,6 +1,6 @@
 # 架构决策记录（ADR）
 
-本文记录 `alohamini-cartesian` 自 v0.1.0 起沿用的设计取舍与流程红线，编号 D1–D25。本文件收设计取舍；纯流程条目仅收 D19 一类发版纪律，不再追加。每条按背景、决定、后果三段记录，后果同时写正面收益与已知代价。状态写作「已接受（自 vX.Y.Z 起）」；已落地但尚未发版的条目写作「已接受（未发版：…）」并写明当前 `pyproject.toml` 版本与 `docs/changelog.md` 缺行，不记具体日期。新的重大取舍按顺序追加编号，已接受的条目不回改。
+本文记录 `alohamini-cartesian` 自 v0.1.0 起沿用的设计取舍与流程红线，编号 D1–D26。本文件收设计取舍；纯流程条目仅收 D19 一类发版纪律，不再追加。每条按背景、决定、后果三段记录，后果同时写正面收益与已知代价。状态写作「已接受（自 vX.Y.Z 起）」；已落地但尚未发版的条目写作「已接受（未发版：…）」并写明当前 `pyproject.toml` 版本与 `docs/changelog.md` 缺行，不记具体日期。新的重大取舍按顺序追加编号，已接受的条目不回改。
 
 ## 索引
 
@@ -31,6 +31,7 @@
 | D23 | 标定包络检查与标定抓取：阈值单一来源、不合格不硬阻断、会话内不可变 | 已接受（未发版：`pyproject.toml` 为 0.7.0，`docs/changelog.md` 无 D23 条目） |
 | D24 | `ArmHandle.move_to` 默认保持起始姿态、航点二分步进、暴露真机跟随参数与 `Stage.BASE_LIFT` 解耦 | 已接受（未发版：`pyproject.toml` 为 0.7.0，`docs/changelog.md` 无 D24 条目） |
 | D25 | 移除未接入旧模块与重复转发层、收敛单臂控制器、拆分超长基准脚本并瘦身文档与许可对齐 | 已接受（未发版：`pyproject.toml` 为 0.7.0，`docs/changelog.md` 无 D25 条目） |
+| D26 | V06 实机过流子项按结构性不可达豁免，V10 按现有真机拒绝记录与离线单测收口 | 已接受（未发版：`pyproject.toml` 为 0.7.0，`docs/changelog.md` 无 D26 条目） |
 
 ## D1 依赖形态：独立包，lerobot 作为可选 extra
 
@@ -865,3 +866,27 @@ V01 是本阶段唯一挡住「能不能说不接 leader 就算通」的条目�
 
 正面：净减少两千余行孤立/重复代码与文档噪音，新工程师接手路径从跨 10+ 长文档收敛到 `docs/ARCHITECTURE.md` 一页入口；单臂控制器职责清晰单一；全仓 `deg_per_unit` 换算归口唯一来源；`measure_latency.py` 移除全部 lint 豁免且不破坏任何冻结契约。
 已知代价：若未来现场实测得到真实物理限位并需建立三层限位，需从零设计并与控制路径同步接入；旧代码里依赖 `adapter.lerobot_version`、`calibration.limits`、`CalibrationRegistry.register` 或向 `CartesianController.tick` 直接投递 `BaseCommand` 的外部脚本需按新边界调整。
+
+## D26 V06 实机过流子项按结构性不可达豁免，V10 按现有真机拒绝记录与离线单测收口
+
+状态：已接受（未发版：`pyproject.toml` 为 0.7.0，`docs/changelog.md` 无 D26 条目）
+
+### 背景
+
+`docs/acceptance-baseline.md` 中仍有两条验收口径长期悬而未决（原挂于 `TODO.md` §4）：
+
+1. **V06（复用底层过流保护并终止目标累积）**：软件侧已由 `tests/test_control_controller.py::test_t_c4_1_hold_terminates_forward_step_and_reports_overcurrent_hold`、`::test_t_c4_2_hold_clears_target_accumulation_prevents_windup`、`::test_t_c10_4_hold_persists_never_restores_forward_motion` 锁死收到 hold 后的前进步终止、目标累积清零与持续保持行为；但实机侧受三条客观事实阻断——① 不修改厂商运行时（`AGENTS.md` §4）；② 2026-11-05 实测臂总线运动窗口最大电流仅 `19.5 mA`（低于 `20 mA` / 3 raw 刻度判读门槛），且厂商默认日志级别不打印 `[Currents]`（`docs/field-results.md`）；③ 厂商 `alohamini.py` 中 `_joint_hold_goal` 无写入点导致 `joint_holds` 恒空（D18）。在不改厂商代码且无外接电流表与受控堵转工装的前提下，实机侧无法稳定构造并观测过流事件。
+2. **V10（两道 Gate 资格门禁）**：软件侧已由 `tests/benchmarks/test_measure_latency.py` 与 `tests/benchmarks/test_capture_robot_fingerprint.py` 锁死 Gate C（机型不匹配）与 Gate F 两段（`schema_version != 2` 及换算字段不全）的 exit `6` 零命令拒绝；实机侧已取得两条真实 exit `6` 零命令拒绝记录——① 2026-10-25 v1 宿主 Gate F 第一段拒绝（`Gate F refused: the host metadata schema_version is 1, expected 2.`）；② 2026-11-06 错机型反向拒绝（exit `6`、无 CSV 产物），但因厂商客户端先按 `robot_model` 降级观测 schema，实际由本库 Gate B 提前拦下，真机链路走不到 Gate C 专属文案；同时 v2 宿主 18/18 电机字段齐备，Gate F 第二段在不改厂商代码或注入伪造损坏帧的情况下结构上不会触发。
+
+### 决定
+
+1. **V06 实机过流子项正式登记为「豁免（当前约束下结构性不可达）」**：在只读厂商固件与无外接测量仪器的现行边界下，不再挂起「真机过流事件记录」作为未取待办，也不阻塞 `v0.8.0` 及后续发版（同时与 `docs/acceptance-baseline.md` §2.4 跨阶段项不阻断阶段推进的口径保持一致）。软件侧 3 条 hold 退让单测继续作为必过回归门禁保留。
+2. **V10 实机侧以现有两条真实 exit `6` 零命令拒绝记录 + 全套离线单测正式收口为「通过（附结构性不可达边界）」**：承认 2026-10-25 v1 Gate F 第一段拒绝与 2026-11-06 错机型触发的 Gate B 拒绝共同构成真机零命令拒绝证据；明确标注 Gate C 专属文案与 v2 缺字段分支在未改厂商运行时的真机链路上结构性不可达，由离线单测长期锁定，严禁为凑文案改动厂商代码或注入假帧。
+3. **同步收口台账与验收矩阵**：更新 `docs/acceptance-baseline.md`（V06、V10 及 §2.2/§2.3 汇总表）与 `README.md` 现状表，并从 `TODO.md` §4 移除这两项已决裁决。
+
+### 后果
+
+正面：验收基线区分了「尚未开展的真机验证（V02–V05/V07/V08/V11）」与「受只读厂商红线约束的结构性不可达项（V06 实机子项、V10 两个子分支）」，避免发版清单被无解的外部依赖永久卡死，同时杜绝为凑覆盖率去破坏厂商只读红线的诱因。
+已知代价：① 本库在真机物理过流场景下与厂商端到端联动的实测仍为空白（软件侧仅验证了收到 hold 后的控制行为）；② 若未来厂商客户端改变机型不匹配时的降级策略，Gate C 在真机上的实际触发路径未曾实地跑过。
+
+触发重新评估的条件（达成任一条即重新评估）：① 采购/接入外接电流表并建立受控堵转安全预案，或厂商提供过流事件接口，此时重开 V06 实机过流取证并同步评估 D19 红线 2；② 厂商客户端调整错机型观测处理逻辑（不再先降级 schema 触发 Gate B）或出现字段不全的 v2 宿主，此时补采 Gate C / Gate F 第二段真机记录。

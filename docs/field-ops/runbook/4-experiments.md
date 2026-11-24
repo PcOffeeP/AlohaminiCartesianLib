@@ -304,7 +304,7 @@ run 7.1b-gatec-reverse env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src /Users/pc
 
 机理：厂商客户端解每一帧观测时拿 metadata 的 `robot_model` 与自己的配置比对，不一致就打一条 ERROR 并退回上一帧观测（`serving last observation`），此时状态 schema 里已没有关节键；本库的键存在性检查（Gate B）按 `--joint` 找不到键，直接以 `6` 退出，Gate C 的模型名比对根本没走到。**这是厂商行为，不改 vendor，也不为凑 Gate C 去改本库代码。** Gate B 同样是有效的「零命令」证据。
 
-原文此处曾写「两侧关节键名集合相同，所以 Gate B（键在不在）不会先拒」——2026-11-06 实测推翻：厂商先在客户端侧把 schema 降级，键集合随之改变，Gate B 反而先拒。V10 的 Gate C 专属实机子项在真机上不可达，是否接受 Gate B 替代由上层裁决（已登记进 `TODO.md`）。
+原文此处曾写「两侧关节键名集合相同，所以 Gate B（键在不在）不会先拒」——2026-11-06 实测推翻：厂商先在客户端侧把 schema 降级，键集合随之改变，Gate B 反而先拒。V10 的 Gate C 专属实机子项在真机上不可达，已由 `docs/ADR.md` D26 正式裁决按现有 v1 Gate F 拒绝 + 2026-11-06 Gate B 拒绝与离线单测收口。
 
 Gate C 本身的零命令拒绝由离线测试锁住（现场拿不到就以它们为据）：`tests/benchmarks/test_measure_latency.py::test_main_should_refuse_tracking_when_the_host_reports_another_robot_model`（退出码 `6`、`sent_actions == []`、不写 CSV）、`::test_main_should_refuse_tracking_when_the_host_cannot_name_its_model[empty_metadata|no_robot_model|null_robot_model]`（宿主报不出型号时 fail closed）。
 
@@ -756,26 +756,23 @@ grep -rn "baseline feedback" tests/ --include=*.py
 
 本节接 [§10.6](#exp-e6)：ik 通路只有库 API 这一条路，所以这里给的是「怎么把库 API 跑起来」的完整跑法，而不是某个现成脚本的参数表。
 
-**硬前置（先满足再动手）：本节 ①a / ② / ③ 三条命令的前置当前不满足。** 这三条都强制 `--signs-json` / `--zeros-json`，而 `signs`（六关节 ±1）/ `zeros`（六关节零点，度）的**产出流程见 [§10.8](#exp-e8)（预写，未真机执行）；未标定前 ①a / ② / ③ 不可执行**。仓库侧现状照旧：`tools/` 只有 `verify_unit_consistency.py`（离线核对指纹与标定的单位口径），`benchmarks/` 下两个脚本不产出它们，仓库内的 `.py` 文件对 `signs-json` / `zeros-json` 零命中（`grep -rn "signs-json\|zeros-json" --include=*.py .` 无输出，只有本手册提到这两个选项名）；`examples/robot_dry_run.py:46` 自述「`JointKinematicAdapter` 需要每侧六关节完整的 `signs`/`zeros`，现场没有标定值」。因此：
+**硬前置（先满足再动手）：本节 ①a / ② / ③ 三条真机档命令的前置当前不满足。** 这三条都强制 `--signs-json` / `--zeros-json`，而 `signs`（六关节 ±1）/ `zeros`（六关节零点，度）的**产出流程见 [§10.8](#exp-e8)（正式 CLI 已沉淀为 `tools/calibrate_kinematics.py`，但尚未执行真机标定）；未标定前 ①a / ② / ③ 不可执行**。因此：
 
 | 档 | 可执行性 | 依据 |
 | --- | --- | --- |
-| ①b（纯离线 `--dry-run`） | **可执行**：只用 URDF 与 seed，不读 `signs` / `zeros` | `_run_dry` 只调 `_build_ik` / `_urdf_limits_deg`，不建 adapter、不建 client |
-| ①a / ② / ③ | **暂不可执行**：缺 `signs` / `zeros` 就直接按 `15` 退出 | `_load_side_json` 的 `path is None` 分支 |
+| ①b（纯离线 `--dry-run`） | **可执行**：只用 URDF 与 seed，不读 `signs` / `zeros` | `tools/run_cartesian_move.py` 的 `--dry-run` 分支只调 `ArmIK` / URDF 限位，不建 adapter、不建 client |
+| ①a / ② / ③ | **暂不可执行**：缺 `signs` / `zeros` 就直接按 `15` 退出 | `tools/run_cartesian_move.py` 的 `_load_flat_joint_json` 前置拒绝（`EXIT_MISSING_CALIB = 15`） |
 
-`signs` / `zeros` 的产出流程已在 [§10.8](#exp-e8) 预写、待现场执行并回写；在这之前这三条记为「**暂不可执行**」，且**不得为了让命令跑起来去手写或猜 `signs` / `zeros`**（那是伪标定，违反 `AGENTS.md` 第 3 节的证据纪律）。本节其余内容（判据表、预期值表、安全前置、现场确认项）仍按预写保留，等 [§10.8](#exp-e8) 现场执行并回写后照原样执行。
+`signs` / `zeros` 的产出流程已在 [§10.8](#exp-e8) 预写并沉淀为 `tools/calibrate_kinematics.py`，待现场执行并回写；在这之前 ①a / ② / ③ 记为「**暂不可执行**」，且**不得为了让命令跑起来去手写或猜 `signs` / `zeros`**（那是伪标定，违反 `AGENTS.md` 第 3 节的证据纪律）。本节其余内容（判据表、预期值表、安全前置、现场确认项）仍按预写保留，等 [§10.8](#exp-e8) 现场执行并回写后照原样执行。
 
-### 调用途径判定：仓库里没有现成入口
+### 调用入口判定：使用仓库正式 CLI
 
 | 候选入口 | 有什么 | 能不能下发 `move_to` |
 | --- | --- | --- |
 | `benchmarks/alohamini_io/measure_latency.py` | `--mode rtt` / `--mode tracking` | 不能：两个模式都不碰 IK（[§10.6](#exp-e6)） |
-| `tools/` | 只有 `verify_unit_consistency.py`（离线核对指纹与标定的单位口径，只读两个 JSON） | 不能 |
 | `examples/minimal_dry_run.py` | 内存假 transport 演示 `move_by` 全链路 | 不能：不连设备 |
-| `examples/robot_dry_run.py` | 真 client 注入 + 零发送 dry-run | 不能：不注入 adapter 与 IK 工厂，命令在状态机之前就被拒 |
-| `connect(...)` + `ArmHandle.move_to` | 唯一真下发路径 | 能，但仓库里没有调用方脚本 |
-
-结论：最小改动路径 = 本节内嵌的 Python 驱动脚本，落 `/tmp`（照 [§4.2](3-health.md#sec-4-2)「脚本副本落 `$S4DIR/stdout/`」的同一套纪律，不新建仓库文件）。写法照 `examples/robot_dry_run.py` 的姿势：厂商客户端由 `client_factory` 注入，`lerobot` 的 import 只发生在最内层工厂函数体内。「`src/` 不许 import `lerobot`」那条边界只约束 `src/`；驱动脚本作为手册内嵌代码，按 `examples/` 的既有写法注入。
+| `examples/robot_dry_run.py` | 真 client 注入 + 零发送 dry-run | 不能：不注入手臂 adapter 与 IK 工厂 |
+| `tools/run_cartesian_move.py`（封装 `connect(...)` + `ArmHandle.move_to` / `move_by`） | 正式真机与离线三档 CLI，按 `examples/` 姿势在工厂函数体内惰性 import `lerobot`（不违反 `src/` 零 `lerobot` 边界） | **能**（需先完成 [§10.8](#exp-e8) 真实 `signs` / `zeros` 标定） |
 
 ### 环境前置：两个 venv 都不够用（本轮实测）
 
@@ -796,14 +793,45 @@ lerobot: None
 ModuleNotFoundError: No module named 'placo'
 ```
 
-补 `placo` 的两条路，任选一条并留痕（`stdout/10.7-env-*`）：
+补 `placo` 的现行方案定为 **路线 B（隔离副本）** 并留痕（`stdout/10.7-env-*`）；路线 A 仅作历史方案记录，不再作为可选路径（直接改原环境会改变 `numpy` 版本且不会创建下文实机命令使用的 `.venvs/s4-move-to`）：
 
 | 路 | 命令 | 风险与判据 |
 | --- | --- | --- |
-| A（首选） | `uv pip install --python .venvs/alohamini-lerobot/bin/python "placo==0.10.1"` | 可能挪 `numpy`（该环境现为 `2.2.6`，主 `.venv` 是 `2.3.5`）。装前装后各存一份 `uv pip list`；判据：`import lerobot` 与 `import placo` 同时成功且差异只在预期内，否则回退 |
-| B（隔离） | `cp -a .venvs/alohamini-lerobot .venvs/s4-move-to` 后在副本里装 `placo` | vendor 环境零改动；代价是多一份同量级副本（[§5.3](../reference/env-rebuild.md#sec-5-3) 记录过 875 M 这一量级） |
+| A（历史方案，已弃用） | `uv pip install --python .venvs/alohamini-lerobot/bin/python "placo==0.10.1"` | 2026-11-24 实测：安装 `placo==0.10.1` 会把环境内 `numpy` 从 `2.2.6` 升至 `2.3.5`，污染原本冻结的 44 包基线；弃用 |
+| B（现行唯一路径，已落地） | 见下方显式 `--python` 完整命令（**严禁**在副本里 `source bin/activate` 或直接跑 `bin/pip`，因 `cp -a` 后两者的路径仍硬编码指向 `.venvs/alohamini-lerobot`） | 原 `.venvs/alohamini-lerobot` 保持 44 包 / 881 M / `numpy 2.2.6` 零改动；副本 `.venvs/s4-move-to`（1.2 G，已被 `.gitignore` 忽略，内含 `lerobot 0.6.1`、`placo 0.10.1`、`pytest 9.2.0`、`numpy 2.3.5` 与可编辑安装的 `alohamini-cartesian 0.7.0`）已在 `6aee1f81` 快照下实测跑通两份 `lerobot` 差分测试（61/61）与 `tools/run_cartesian_move.py --dry-run`（exit `0`） |
 
-两条都不改仓库文件，也不改 Pi 上的部署。
+> **已知依赖版本例外**：`.venvs/s4-move-to` 中 `placo==0.10.1` 将 `numpy` 升级至 `2.3.5`，超出 `lerobot 0.6.1` 元数据声明的 `numpy<2.3.0`（`pip check` 会报告该区间不匹配）。离线差分测试（61/61）与 `--dry-run` 在 `numpy 2.3.5` 下已通过，**但不能替代真机链路兼容性证明**；首次上现场须先跑只读 ①a（`--limits-only`）验证真实 `connect()` 与观测解析无异常，并留存依赖清单与日志。
+
+路线 B 完整重建与核验命令（子 shell 遇错即停、目标目录已存在时拒绝嵌套复制、每条安装均显式指定 `--python .venvs/s4-move-to/bin/python` 并用完整 `pip freeze` 差异核验源环境未动）：
+
+```bash
+(
+  set -euo pipefail
+  [ ! -e .venvs/s4-move-to ] || { echo "ERROR: .venvs/s4-move-to already exists" >&2; exit 1; }
+  ORIG_BEFORE="$(mktemp /tmp/alohamini-lerobot-freeze-before.XXXXXX)"
+  ORIG_AFTER="$(mktemp /tmp/alohamini-lerobot-freeze-after.XXXXXX)"
+  trap 'rm -f "$ORIG_BEFORE" "$ORIG_AFTER"' EXIT
+
+  .venvs/alohamini-lerobot/bin/python -m pip freeze | sort > "$ORIG_BEFORE"
+  cp -a .venvs/alohamini-lerobot .venvs/s4-move-to
+  .venvs/s4-move-to/bin/python -c "import sys; assert sys.prefix.endswith('.venvs/s4-move-to'), sys.prefix"
+  uv pip install --python .venvs/s4-move-to/bin/python "placo==0.10.1" "pytest>=8.0"
+  uv pip install --python .venvs/s4-move-to/bin/python --no-deps -e .
+
+  .venvs/s4-move-to/bin/python -c "
+import os, sys, numpy, lerobot, placo, pytest, alohamini_cartesian
+prefix = os.path.realpath('.venvs/s4-move-to')
+assert os.path.realpath(sys.prefix) == prefix, sys.prefix
+assert os.path.realpath(placo.__file__).startswith(prefix + os.sep), placo.__file__
+assert os.path.realpath(alohamini_cartesian.__file__).startswith(os.path.realpath('src') + os.sep), alohamini_cartesian.__file__
+print('OK:', sys.prefix, numpy.__version__, lerobot.__version__, placo.__file__, alohamini_cartesian.__file__)
+"
+  .venvs/alohamini-lerobot/bin/python -m pip freeze | sort > "$ORIG_AFTER"
+  diff -u "$ORIG_BEFORE" "$ORIG_AFTER"
+)
+```
+
+本方案不改仓库文件，也不改 Pi 上的部署。现场执行本节 ①a / ② / ③ 时，解释器直接指向 `.venvs/s4-move-to/bin/python`（不激活 `bin/activate`），并在执行前按 [§5.3](../reference/env-rebuild.md#sec-5-3) 核对 `/tmp/lerobot-vendor-6aee1f81` 快照完整且实际导入路径命中该快照。
 
 ### 正式驱动脚本（`tools/run_cartesian_move.py`）
 
@@ -822,7 +850,7 @@ Host 起法见 [§6.1](2-host.md#host-start)（本节不重启 Host：只要它�
 
 产物与输入都落 `$S4DIR/stdout/`（`scope-*` 同目录；[§11](../reference/artifacts.md#sec-11) 的五个子目录不变，本节不新增目录）。`signs` / `zeros` 两份 JSON 是**输入**，不是本节产物：它们是六关节的 sign（±1）与 zero（度）映射，只能来自真实标定，**产出流程见 [§10.8](#exp-e8)（正式 CLI 已落地 `tools/calibrate_kinematics.py`，待现场执行）**，来源见本节「现场确认项」第 6 条；缺文件时脚本按 `15` 退出、不跑、不造假值。
 
-三条真机档命令的 `PYTHONPATH` 比 [§10.5](#exp-e5) 多一截 `:…/src`：本库没装进 vendor 环境（本轮实测 `find_spec('alohamini_cartesian')` 在该环境返回 `None`），而这三档都要 import `alohamini_cartesian`；`measure_latency.py` 只用标准库，所以 [§7.1](#exp-e3) / [§10.5](#exp-e5) 的那些命令不需要这一截。
+三条真机档命令统一使用已落地的合一隔离环境 `.venvs/s4-move-to/bin/python`（含 `lerobot 0.6.1`、`placo 0.10.1` 与可编辑安装的 `alohamini-cartesian`）；`PYTHONPATH` 仍显式写 `/tmp/lerobot-vendor-6aee1f81/src:src`，同时钉住 `6aee1f81` 厂商快照与当前工作区 `src/`（兼容独立 worktree）。下方示例默认演示左臂（引用 [§10.8](#exp-e8) 产出的 `10.8-signs-left-$STAMP.json` / `10.8-zeros-left-$STAMP.json`）；跑右臂时须同时传 `--side right` 并切换为 `10.8-signs-right-$STAMP.json` / `10.8-zeros-right-$STAMP.json`。
 
 **①a 只读：真机限位窗口（零发送）**
 
@@ -830,7 +858,7 @@ Host 起法见 [§6.1](2-host.md#host-start)（本节不重启 Host：只要它�
 为什么先做：`move_to` 的限位门用的是**标定窗口**，不是 URDF 的 `±179.9087°`（URDF 只是乐观上界），离线推不出真机窗口。
 
 ```bash
-run 10.7-limits env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:/Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python tools/run_cartesian_move.py --site configs/site.yaml --host "$PI_HOST" --limits-only --signs-json "$S4DIR/stdout/10.7-signs-$STAMP.json" --zeros-json "$S4DIR/stdout/10.7-zeros-$STAMP.json" --out "$S4DIR/stdout/10.7-limits-$STAMP.json"
+run 10.7-limits env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:src .venvs/s4-move-to/bin/python tools/run_cartesian_move.py --site configs/site.yaml --host "$PI_HOST" --limits-only --signs-json "$S4DIR/stdout/10.8-signs-left-$STAMP.json" --zeros-json "$S4DIR/stdout/10.8-zeros-left-$STAMP.json" --out "$S4DIR/stdout/10.7-limits-$STAMP.json"
 ```
 
 判据：退出码 `0`；日志里含 `wrist_roll` 的那一行（打印键是 URDF 名 `left_wrist_roll` / `right_wrist_roll`）把 `-163.7°` 包住；所选臂的六个关节都有窗口。产物 `stdout/10.7-limits-$STAMP.json` 在 `effective_limits_deg` 中记录这六组交集。
@@ -848,13 +876,13 @@ run 10.7-dryrun uv run --no-sync python tools/run_cartesian_move.py --dry-run --
 标签叫 `move_to`，脚本实际调 `ArmHandle.move_by`（内部算出增量目标后转给 `move_to`，`src/alohamini_cartesian/control/api.py:440` 的文档串写明「The resulting target is then passed to :meth:`move_to`」，`move_to` 在 `:214`）——**`move_by` → `move_to` 同一入口**，两者语义等价。
 
 ```bash
-run 10.7-single env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:/Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python tools/run_cartesian_move.py --site configs/site.yaml --host "$PI_HOST" --enable-motion --points 1 --timeout-s 10.0 --signs-json "$S4DIR/stdout/10.7-signs-$STAMP.json" --zeros-json "$S4DIR/stdout/10.7-zeros-$STAMP.json" --out "$S4DIR/stdout/10.7-single-$STAMP.json"
+run 10.7-single env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:src .venvs/s4-move-to/bin/python tools/run_cartesian_move.py --site configs/site.yaml --host "$PI_HOST" --enable-motion --points 1 --timeout-s 10.0 --signs-json "$S4DIR/stdout/10.8-signs-left-$STAMP.json" --zeros-json "$S4DIR/stdout/10.8-zeros-left-$STAMP.json" --out "$S4DIR/stdout/10.7-single-$STAMP.json"
 ```
 
 **③ 7 点路径**
 
 ```bash
-run 10.7-path env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:/Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/src /Users/pcoffeep/pi-workspace/alohamini-cartesian-lib/.venvs/alohamini-lerobot/bin/python tools/run_cartesian_move.py --site configs/site.yaml --host "$PI_HOST" --enable-motion --points 7 --timeout-s 10.0 --signs-json "$S4DIR/stdout/10.7-signs-$STAMP.json" --zeros-json "$S4DIR/stdout/10.7-zeros-$STAMP.json" --out "$S4DIR/stdout/10.7-path-$STAMP.json"
+run 10.7-path env PYTHONPATH=/tmp/lerobot-vendor-6aee1f81/src:src .venvs/s4-move-to/bin/python tools/run_cartesian_move.py --site configs/site.yaml --host "$PI_HOST" --enable-motion --points 7 --timeout-s 10.0 --signs-json "$S4DIR/stdout/10.8-signs-left-$STAMP.json" --zeros-json "$S4DIR/stdout/10.8-zeros-left-$STAMP.json" --out "$S4DIR/stdout/10.7-path-$STAMP.json"
 ```
 
 ②③ 以首帧末端位姿固定各段绝对目标；结束时重读反馈，`residual_m` 记录相对全程终点的误差（容差 5 mm）。失败时先读 `phase`、`exit_code` 和 `moves`：成功段有 `steps` 和段误差，失败段有 `error` 与 `reason`。结束位姿未取得时全程误差为 `null`。
