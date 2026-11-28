@@ -63,7 +63,8 @@ finally:
 
 | 想知道什么 | 去哪看 |
 | --- | --- |
-| 15 分钟架构总览、分层图、模块速查与术语消歧（新人首选） | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| 新人接手与 Windows + WSL2 环境搭建、PR 协作、双人现场实操指南（交接首选） | [docs/HANDOFF.md](docs/HANDOFF.md) |
+| 15 分钟架构总览、分层图、模块速查与术语消歧 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | 为什么做这件事、形态怎么变、边界在哪、各模块已提供什么 | [docs/background.md](docs/background.md) |
 | 某个设计为什么这么定、代价是什么（D1–D26） | [docs/ADR.md](docs/ADR.md) |
 | 配置怎么覆盖、`deg_per_unit` 怎么算、公开 API 有哪些、代码约束与机器守卫 | [docs/library-guide.md](docs/library-guide.md) |
