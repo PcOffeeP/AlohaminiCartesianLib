@@ -79,4 +79,4 @@ uv run --no-sync python tools/calib.py --help
 uv run --no-sync python tools/run_cartesian_move.py --dry-run --points 7 --out /tmp/move-dryrun.json
 ```
 
-> 延伸阅读：接口与配置细节看 `docs/library-guide.md`，设计取舍看 `docs/ADR.md`，现场步骤看 `docs/field-ops/README.md`，当前未完待办看 `TODO.md`。
+> 延伸阅读：Windows + WSL2 搭环境、PR 协作与双人现场接手指南看 [docs/HANDOFF.md](HANDOFF.md)，接口与配置细节看 `docs/library-guide.md`，设计取舍看 `docs/ADR.md`，现场步骤看 `docs/field-ops/README.md`，当前未完待办看 `TODO.md`。

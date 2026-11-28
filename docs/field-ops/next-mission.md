@@ -29,7 +29,7 @@
 | 供电 | 变了：pi 与机械臂不再共电池（用户告知） | [§5](#mission-power) |
 | 控制代码 | 没变：厂商仓 `/home/pi5/lerobot_alohamini`（分支 `p1a-merged`、HEAD `6aee1f81`）唯一未提交改动是把三个摄像头（backward / chest / wrist_left）从注释改为启用，**无任何数值常量变化** | 2026-11-10 只读侦察 |
 | PID 与 stall 常量 | 没变：`P_Coefficient=16`、`I_Coefficient=0`、`_JOINT_STALL_MIN_COMMAND_ERROR_DEG=2.0`、`arm_acceleration=100`、`lift_target_speed_mm_s=150.0`、`disable_torque_on_disconnect=True` 均未改 | 同上（`config_alohamini.py` 逐项核过） |
-| `signs` / `zeros` | 没变：仍完全缺失，T1 仍是从零产出 | `TODO.md` §4「signs/zeros 标定流程」行；`completed-work.md` §1 第 6 条 |
+| `signs` / `zeros` | 没变：仍完全缺失，T1 仍是从零产出 | `TODO.md` §3 第 3 项（E8 `signs`/`zeros` 标定）；`completed-work.md` §1 第 6 条 |
 | 达成率口径 | 没变：仍是增量比值 `Δmeasured / Δcommanded`；标定零点变化在差分里一阶抵消，故 2026-11-08 的 `79.1209%` / `82.6374%` 与本轮可比 | `docs/field-results.md` 2026-11-08 节；[§5](#mission-power) 的挂起项 |
 
 同一次只读侦察（2026-11-10，未动机器人）另有一条要先知道：Host 进程**未运行**，无任何 lerobot / python 进程，无自定义 systemd 服务；`/dev/ttyACM0`（SN `5B14029263`）与 `/dev/ttyACM1`（SN `5B14111703`）都在、开机 4 秒内枚举成功、本 boot 无掉线重连；根分区 `/dev/mmcblk0p2` 29 G 已用 23 G、**剩 4.8 G（83%）**；`ssh pi5@10.34.170.98` 免密可通，`pi5.local` 解析失败，`10.34.159.106` 与 `10.168.1.100` 不可达。`/dev/am_arm_follower_left` / `_right` 两个 udev 别名**本次未查**，已列进 §7 前置清单。
@@ -49,9 +49,9 @@
 | 链路层（PC→Host 值传递） | 链路清白：sidecar（与主 CSV 同一窗口写出的 safety 快照）的运动帧里 `requested_target == accepted_target` 全 100% | — | `completed-work.md` §1 第 1 条 |
 | 关节层 | 肩部全案按分级口径关闭：目标已被 Host 采纳，残余落在 Host 下游伺服／机械静摩擦；门槛肩类 `≤2°`、其余 `≤2 tick`（电机位置读数的最小刻度，`1 tick = 0.087890625°`） | — | `completed-work.md` §1 第 2 条；`docs/ADR.md` D20 |
 | 标定字段 | 包络检查已跑（离线，`tools/calib_fetch.py --from-file`，现役代际 `4a80c0fd4421`）：1 台判 `IMPLAUSIBLE`（`arm_right_shoulder_lift`，1143 tick ≈ 100.5°）、其余 17 台合格（其中 6 台满圈占位），退出码 `1`。旧结论 `CALIB_FIELD_DIFFS: 0` 已退休（只对同一代际内两份快照成立），见 [§0](#mission-sec-0) | 右肩 lift 与左肩 pan 的**实测行程**（S1 推臂）——包络值是我方经验值、非厂商规定，只能靠实测确认或推翻 | `docs/ADR.md` D23；[§4.1c](runbook/3-health.md#sec-4-1c)；`completed-work.md` §1 第 4 条 |
-| 笛卡尔层 | 只有离线用例 | **唯一空白**：无 `signs`/`zeros` 现场产出、无 Gate D 现场形态、无 `move_to` 真机记录、无杆长实测 | `docs/ADR.md` D21；`TODO.md` §4「IK → `ArmHandle.move_to` 的实机验证」「URDF 杆长零实测」两行；`completed-work.md` §1 第 5、6 条 |
+| 笛卡尔层 | 只有离线用例 | **唯一空白**：无 `signs`/`zeros` 现场产出、无 Gate D 现场形态、无 `move_to` 真机记录、无杆长实测 | `docs/ADR.md` D21 / D24；`TODO.md` §3 第 3–4 项（E8 `signs`/`zeros` 标定、E7 `move_to` 真机闭环与 `+Z` 9 cm 卷尺实测）；`completed-work.md` §1 第 5、6 条 |
 
-最后一行展开成三件事，正好对应本文的 T1–T3。三项同属「无现场记录」这一类空白，是并列关系，不是一条依赖链：T2 与 T3 之间**没有依赖**——Gate A–F 在 `move_to` 路径上不生效（[§10.7](runbook/4-experiments.md#exp-e7) 的 (d) 表；`TODO.md` §4「Gate D 的现场形态」行明写「不阻塞 `move_to` 实机验证」），两者只是共用同一次起 Host 的窗口。需要先说清的三条：
+最后一行展开成三件事，正好对应本文的 T1–T3。三项同属「无现场记录」这一类空白，是并列关系，不是一条依赖链：T2 与 T3 之间**没有依赖**——Gate A–F 在 `move_to` 路径上不生效（[§10.7](runbook/4-experiments.md#exp-e7) 的 (d) 表与 [§10.6](runbook/4-experiments.md#exp-e6)；Gate D 仅属于 `measure_latency.py --mode tracking`，不阻塞 `move_to` 实机验证），两者只是共用同一次起 Host 的窗口。需要先说清的三条：
 
 - 缺 T1 则 T3 不可执行：`move_to` 的 ①a / ② / ③ 强制 `--signs-json` / `--zeros-json`，缺文件即按 `15` 退出，不得手写或猜。
 - 缺 T0 则 T3 同样不可执行：新标定代际没登记、或者标定抓取这一步没跑（`tools/calib_fetch.py` 退出码 `4`），T3 的 ④ 与「限位交集」类结论就没有可比基线（见 [§3.2](#mission-t0)）。
@@ -86,7 +86,7 @@
 | ssh 与超时 | `tools/calib_fetch.py` 的 ssh 带 `-o BatchMode=yes -o ConnectTimeout=20` 与 20 秒 `subprocess.run(timeout=)`（常量 `SSH_TIMEOUT_S`）；`BatchMode` 让需要口令或 host key 确认时直接失败、不挂住等输入。**远端读不到不回落任何本地缓存**，一律退出 `4` 且不留标定落盘文件 |
 | 产物 | `$S4DIR/stdout/calib-gen2-registry-$STAMP.md`。T0 可离线做，产物仍与现场证据同根，便于与 §4.1c 的比对产物并列。内容 = 引用登记表里的那一条（`calib_id` / `source` / `first_seen` / `file_sha256` / `byte_size` / `acknowledged_by`）＋ `tools/calib_health.py` 的健康检查结论原文（`CALIB_STATE` 行与退出码）＋（本轮新增）`tools/calib_fetch.py` 的 `CALIB_MOTOR:` 逐台结论与 `CALIB_ENVELOPE:` / `CALIB_ENVELOPE_IMPLAUSIBLE:` 两行、退出码原文 |
 | 不过怎么办 | 可执行判据（不再靠目测）：包络这一层先按上面「抓取与包络」的退出码判——`4` 直接不过，`1` 只有现场核对并写明理由后才允许 `--allow-implausible` 继续。登记这一层：① 跑 `uv run --no-sync python tools/calib_health.py --calib-file <标定文件>`（`--registry` 省略时默认就是仓库内 `configs/calib-registry.yaml`），现役标定必须输出 `CALIB_STATE: CALIB_KNOWN` 且退出码 `0`；② 输出 `CALIB_NEW_UNREGISTERED`（退出码 `1`）**不算过**——那是「新代际还没登记」的非阻断警告，须先跑 `uv run --no-sync python tools/calib_register.py --from-file <标定文件> --write` 登记（再跑 ① 应变 `CALIB_KNOWN`）；③ `CALIB_SUSPECT`（退出码 `3`）/ `CALIB_CORRUPT`（退出码 `4`）一律不过，按事故处置，**不得改标定文件去「对齐」**。四项缺一、或三处处置没写 → T0 不过，**T3 降级为「不可执行，记录原因」**（依赖见 [§6](#mission-order)）。不得只记一个 `file_sha256` 就算登记，也不得把「已看到新标定」当成「已登记」 |
-| 已落地的做法（ADR D22） | 原「彻底做法」那一行已落地，见 `docs/ADR.md` D22。`src/alohamini_cartesian/calibration/` 子包（`identity` / `registry` / `limits`）已实现，`configs/calib-registry.yaml` 已登记两条真实代际（`2905048c28a2`、`4a80c0fd4421`），`tools/calib_health.py` 给四态健康检查（`CALIB_KNOWN` / `CALIB_NEW_UNREGISTERED` / `CALIB_SUSPECT` / `CALIB_CORRUPT`），`tools/calib_register.py` 负责登记。D23 又补三件：包络判定与阈值单一来源 `src/alohamini_cartesian/calibration/envelope.py`、抓取入口 `tools/calib_fetch.py`、会话锚定 `--session-anchor`（第五态 `CALIB_SESSION_DRIFT`，退出 `4`）。三层限位模块**已实现但未接入控制路径**（D22 决定 7：前置是现场实测层，`configs/limits-observed.yaml` 仍是空模板）。本卡现在只剩「补登记人」（`acknowledged_by` 仍是 `null`）＋ 上面那行「三处受影响基线怎么处置」 |
+| 已落地的做法（ADR D22 / D23 / D25） | 原「彻底做法」那一行已落地，见 `docs/ADR.md` D22 / D23 / D25。`src/alohamini_cartesian/calibration/` 子包现包含 `identity` / `registry` / `envelope` 三个模块，`configs/calib-registry.yaml` 已登记两条真实代际（`2905048c28a2`、`4a80c0fd4421`），`tools/calib_health.py` 给四态健康检查（`CALIB_KNOWN` / `CALIB_NEW_UNREGISTERED` / `CALIB_SUSPECT` / `CALIB_CORRUPT`），`tools/calib_register.py` 负责登记。D23 又补三件：包络判定与阈值单一来源 `src/alohamini_cartesian/calibration/envelope.py`、抓取入口 `tools/calib_fetch.py`、会话锚定 `--session-anchor`（第五态 `CALIB_SESSION_DRIFT`，退出 `4`）。D25 新增统一标定 CLI 入口 `tools/calib.py`（子命令 `fetch` / `health` / `register`，行为、参数与退出码与三份兼容保留的独立脚本完全一致），并移除了从未接入控制路径的旧三层限位模块与对应空模板（未来若基于现场实测建立多级限位再另行设计并同步接入控制路径）。本卡现在只剩「补登记人」（`acknowledged_by` 仍是 `null`）＋ 上面那行「三处受影响基线怎么处置」 |
 
 <a id="mission-s1"></a>
 ### 3.3 S1 行程复核（现场步骤，排在开场落 scope 之后、T1 之前）
@@ -108,7 +108,7 @@
 | 前置 | ① 摆姿在 **torque 释放态**（扭矩已释放，人手工摆臂）；② 摆姿与保持期间人手不离开；③ Host 启停按 [§6.1](runbook/2-host.md#host-start) / §8.1——**停 Host ≠ 失力**：要拿到释放态，停 Host 必须用 `kill -INT`，**只有 `SIGINT`（终端中断信号，即 `kill -INT`）会释放扭矩**，`kill -9` / `SIGTERM` 只停进程、手臂仍通电保持（[§8.1](runbook/2-host.md#sec-8-1)、README「安全底线」第 1 条）；④ `sign` 判定属运动档，要有现场运动授权 |
 | 做法 | 指针：[§10.8](runbook/4-experiments.md#exp-e8) 全节（参考位形、zeros、sign 判定、自检、右臂流程、安全前置）。一句话：把臂摆成参考位形 C2b `(0, −72, +73, 0, 0, 0)`°（大臂竖直向上、小臂水平朝正前方；**这组角是 URDF 运动学角，不是电机角**，电机角现场读），读一次数算 `zeros`，再用 1° 单步判六轴 `sign`，最后注入文件跑自检 |
 | 判据 | 全部落 `$S4DIR/stdout/`：左右各一份标定文件（2）＋ 拆分后扁平六键 `signs` / `zeros` 四份（4）＋ 自检 md（每侧一份；文件名无侧别后缀，右臂那份需另命名避免同 `$STAMP` 覆盖）——只做左臂共 7 份。自检两道闸都算判据：**构造闸**＝用拆好的四份文件喂 §10.7 的 ①a（`--limits-only`，只读、零发送），判退出码 `0` 且两侧六个关节都有窗口；**数值闸**＝`q_kinematic_deg` 与 `q_target` 差 ≤ 3°，末端量级核对口径 ±0.05 m（量级核对，不是毫米级判据）。①a 要连 Host，所以 T1 段内的可执行次序是「摆姿（释放态）→ 起 Host 读数 → 自检 → 停 Host」 |
-| 不过怎么办 | `sign` 判定按 1° 单步法**重做单轴**（不整段重做）；仍不过就把现场值先落当次证据目录。写进 `TODO.md` §4 对应行**需另一次任务授权**（`AGENTS.md` §4「写入需授权」；记录要求本身不构成写入授权），未授权就只在报告里列「待记录事项」。**不得猜值**，**不得把左臂值当右臂值**（沿用某轴须「实测一致」＋两侧各自独立读数） |
+| 不过怎么办 | `sign` 判定按 1° 单步法**重做单轴**（不整段重做）；仍不过就把现场值先落当次证据目录。更新 `TODO.md` §3 第 3 项（E8 标定待办）**需另一次任务授权**（`AGENTS.md` §4「写入需授权」；记录要求本身不构成写入授权），未授权就只在报告里列「待记录事项」。**不得猜值**，**不得把左臂值当右臂值**（沿用某轴须「实测一致」＋两侧各自独立读数） |
 
 一条硬要求单独提：**拆分后必须是扁平六键**，多包一层外层键会被当成「缺关节」并按 `15` 退出。
 
@@ -126,20 +126,20 @@
 
 ### 3.6 T3 §10.7 `move_to` + 卷尺
 
-**预期剧本，开跑前先读这一段。** `move_to` 下发的是 identity 姿态（单位矩阵，不是「保持当前姿态」），末端姿态会朝 identity 大幅转。identity 形态下 `wrist_roll` 要一路转到约 `-163.7°`；这个跨度 `153.6°` 的起点是**假设 seed `−10°`**，[§10.7](runbook/4-experiments.md#exp-e7)「点位从哪来」表写明「这是假设，不是真机位姿」。**两支都要按预期留痕，都不是故障**：
+**预期剧本，开跑前先读这一段（按 `docs/ADR.md` D24 更新）。** 自 ADR D24 起，`ArmHandle.move_to` 与正式驱动 CLI `tools/run_cartesian_move.py` 在 `orientation=None` 时**默认锁定起始实测 FK 姿态**（保持当前姿态，不再隐式转向世界单位姿态），并由链式航点二分将相邻航点的关节跳变控制在 `<= max_joint_step_deg`（默认 `2.0°`）。因此，D24 之前「单拍跨 `153.6°` 腕部翻转撞 step gate（每周期允许的关节步长上限，`2.0°` / 周期）死锁超时」的旧剧本已不再是默认形态：
 
-- 若真机位姿接近该 seed：跨 `153.6°` 这种量级的单周期解会被 step gate（每周期允许的关节步长上限，`2.0°` / 周期）逐周期拒发，最后走满超时抛 `MotionTimeout`（退出码 `11`，`moves` 里没有成功行）。
-- 若真机 `wrist_roll` 本来就在 `-163°` 附近：第一次真跑**可能真的动起来**。
+- **默认形态（`orientation=None`，本轮主跑路径）**：预期沿 `+Z` 9 cm 连续步进并到位（离线假设 seed 下单点残差 `0.000692 m`、7 点路径 7/7 收敛、最小限位裕度均为 `115.54°`；`tools/run_cartesian_move.py` 默认注入 `follow_error_tolerance_deg=2.5`、`settled_max_joint_delta_deg=0.2` 对齐 D20 肩轴稳态残余口径）。若真机实际出现 `MotionTimeout`（退出码 `11`），优先查异常消息末尾是否带 `(FOLLOW_TIMEOUT)` 并复核 ①a 的真机有效限位窗口，按实际形态留痕，不临时改限值。
+- **对照形态（显式传入 `--identity-orientation` 时才启用）**：仅用于历史对比或大跨度 SO(3) 姿态插值回归测试，不在默认路径触发；启用时末端会转向世界单位姿态（离线假设 seed 下 `wrist_roll` 需转到约 `-163.7°`），须先经 ①a 确认真机 `wrist_roll` 有效窗口覆盖该角度。
 
-两支的留痕口径同源（[§10.7](runbook/4-experiments.md#exp-e7) 末尾「现场最可能的形态」段）：按预期形态留痕，不翻修代码、不改限值。
+详细数值与判断口径见 [§10.7](runbook/4-experiments.md#exp-e7)「点位从哪来」「预期值表（两种形态）」与「现场预期形态（D24 升级后）」。
 
 | 项 | 内容 |
 | --- | --- |
-| 目的 | 笛卡尔入口的第一条真机记录：① IK 解出的关节目标真的下发，② `move_to` 的成功与失败两条路径各留一条现场记录；若出现成功行，就地卷尺量一次 |
-| 前置 | ① T1 产出的 `--signs-json` / `--zeros-json`（右臂用右臂自己的文件）；② 先跑 ①a 只读取限窗口，确认 `wrist_roll` 覆盖所需角度；③ 手臂低位或有承托；④ 能按断电开关的人在机器人旁；⑤ 卷尺 ＋ 美纹纸 ＋ 垂线或角尺在场；⑥ 空场、无负载、另一臂不参与；⑦ ①a（只读）与 ①b（离线 dry-run）两者都过再谈真跑（⑥⑦ 出自 [§10.7](runbook/4-experiments.md#exp-e7)「安全前置」） |
-| 做法 | 指针：[§10.7](runbook/4-experiments.md#exp-e7)。一句话：①a 只读取限窗口 → ①b 离线 dry-run（零网络、零发送）→ ② 9 cm 单次 →（出现成功行才）③ 7 点路径 → ④ 卷尺实测（**必做**，不因 ② 跑顺就跳过；③ 只跑路径不量） |
+| 目的 | 笛卡尔入口的第一条真机闭环记录：① 验证默认姿态保持（`orientation=None`）＋ 链式航点二分下 IK 解出的关节目标真实下发且无 D24 前的腕部翻转 / step gate 死锁；② ② 跑出成功行后就地卷尺实测 `+Z` 9 cm 位移，锚定 URDF 杆长 |
+| 前置 | ① T1 产出的 `--signs-json` / `--zeros-json`（右臂用右臂自己的文件）；② 先跑 ①a 只读取限窗口，确认所选臂六个关节均有有效窗口（仅在显式加 `--identity-orientation` 对照测试时才需重点确认 `wrist_roll` 覆盖 `-163.7°`）；③ 手臂低位或有承托；④ 能按断电开关的人在机器人旁；⑤ 卷尺 ＋ 美纹纸 ＋ 垂线或角尺在场；⑥ 空场、无负载、另一臂不参与；⑦ ①a（只读）与 ①b（离线 dry-run）两者都过再谈真跑（⑥⑦ 出自 [§10.7](runbook/4-experiments.md#exp-e7)「安全前置」） |
+| 做法 | 指针：[§10.7](runbook/4-experiments.md#exp-e7)（正式 CLI `tools/run_cartesian_move.py`）。一句话：①a 只读取限窗口 → ①b 离线 dry-run（零网络、零发送）→ ② 9 cm 单次 →（出现成功行才）③ 7 点路径 → ④ 卷尺实测（**必做**，不因 ② 跑顺就跳过；③ 只跑路径不量） |
 | 判据 | 出现成功行：就地卷尺实测，实测与 `90 mm` 之差的绝对值 ≤ 1 mm 为过。量的是末端夹爪尖沿基座系 `+Z` 的位移标量，起点必须在跑 ② 之前立成实物标记；读数 1 mm，重复 3 次取中位 |
-| 不过怎么办 | 差值超 1 mm：**停在 ④**，不改容差、不改判据，并触发 `docs/ADR.md` D21 的重新评估条件①（卷尺实测偏差超毫米级）。量具不在场：记「未测」，**不得**用目测或 FK 预测值回填。② 落成「超时 + `moves` 无成功行」时**没有位移可量**：记「未测：② 未达成动作，原因「异常类名」」，**不得**用 FK 预测值回填（[§10.7](runbook/4-experiments.md#exp-e7) 卷尺表「不能量的时候」行） |
+| 不过怎么办 | 差值超 1 mm：**停在 ④**，不改容差、不改判据，并触发 `docs/ADR.md` D21 的重新评估条件①（卷尺实测偏差超毫米级）。量具不在场：记「未测」，**不得**用目测或 FK 预测值回填。② 若落成 `MotionTimeout`（退出码 `11`）且 `moves` 无成功行，先查是否带 `(FOLLOW_TIMEOUT)` 并核对 ①a 限位窗口；此时**没有位移可量**，记「未测：② 未达成动作，原因「异常类名」」，**不得**用 FK 预测值回填（[§10.7](runbook/4-experiments.md#exp-e7) 卷尺表「不能量的时候」行） |
 
 判据只比「实测 vs 指令」，判据形式写作 `|实测 − 90 mm| ≤ 1 mm`；JSON 里同一份 URDF 算出的残差只用来解释差值落在哪，不是独立证据。口径与 `docs/ADR.md` D21 决定 2 不同，两处不要混读：D21 写「实测 vs **FK 预测**之差毫米级以内」，本节按 [§10.7](runbook/4-experiments.md#exp-e7) ④ 判「实测 vs **指令 `90 mm`** ≤ 1 mm」；D21 那句只作为「几何验收的收口方式与重新评估条件」的出处。
 
@@ -162,7 +162,7 @@
 读法三条：
 
 - **风险在被压窄的两只**：`arm_right_shoulder_lift` 的上界从 3258 掉到 2048（少 1210 tick ≈ 106.4°），`arm_left_shoulder_pan` 的上界从 3327 掉到 2956（少 371 tick ≈ 32.6°）。凡 T3 的目标点落在这些被切掉的方向上，会在 ①a 只读窗口或 IK 的限位检查里被拒。**T3 的目标点一律先过 ①a 的 `effective_limits_deg` 再谈真跑，不按旧 range 挑点。**
-- **放宽的那只不改 T3 选点**：`arm_left_gripper` 51 → 1465 tick 是异常消失（现与右侧 1479 tick 基本一致）；夹爪有自己的入口（`GripperHandle`），`ArmHandle.move_to` 只收 `x` / `y` / `z` 三个量，所以它不进六轴限位。它改的是 V12 单位口径核对的输入（18 个电机全比），处置见 T0。
+- **放宽的那只不改 T3 选点**：`arm_left_gripper` 51 → 1465 tick 是异常消失（现与右侧 1479 tick 基本一致）；夹爪有自己的入口（`GripperHandle`），`ArmHandle.move_to` 只控制六轴手臂末端位姿（不含夹爪），所以它不进六轴限位。它改的是 V12 单位口径核对的输入（18 个电机全比），处置见 T0。
 - **不猜方向**：「上界被切掉」对应哪个物理方向，本轮没有现场实测，不写方向假说；以 S1 的实测极限为准。
 - **右肩 lift 的 100.5° 待 S1 推臂实测确认**：`arm_right_shoulder_lift` 的 `905..2048`（1143 tick ≈ 100.5°）落在肩经验区间 `180–260°` 之外，`tools/calib_fetch.py` 判它 `IMPLAUSIBLE`（退出码 `1`）。确认前**不放行也不预填接受名单**——`configs/calib-envelope-accepted.yaml` 保持空模板（`accepted: []`），等 S1 拿到实测行程再决定是登记（真实机械限位）还是修标定（标定没扫满）。理由：包络值是**我方经验值、非厂商规定**，没有实测就不能替现场写答案。
 
@@ -216,7 +216,7 @@
 | 要什么 | 为什么 | 缺了怎么办 |
 | --- | --- | --- |
 | 上电 | 手臂带电才有力矩与位置读数 | 不上电就一步都不跑 |
-| 手臂低位或有承托 | T3 的姿态目标是 identity，末端会朝 identity 大幅转；T1 的 C2b 要把大臂抬到竖直向上 | 摆不到安全姿态就换参考位形（§10.8 的 C2）或换侧；两侧都做不到就当天不做 T1 |
+| 手臂低位或有承托 | T3 默认按 `docs/ADR.md` D24 保持起始实测 FK 姿态（`orientation=None`）并按航点二分步进，仅在显式加 `--identity-orientation` 对照测试时才会转向单位姿态，但首次真机闭环仍须防异常运动与失力跌落；T1 的 C2b 要把大臂抬到竖直向上 | 摆不到安全姿态就换参考位形（§10.8 的 C2）或换侧；两侧都做不到就当天不做 T1 |
 | 网络（`PI_HOST` 现场填） | SSH 与 Host 端口都靠它 | 连不上按 [§2](runbook/1-prepare.md#sec-2) 的四步处置走（上次可用的地址是 `10.34.170.98`，2026-11-10 复测免密可通） |
 | 开机后先确认两个 udev 别名 | 2026-11-10 的只读侦察只看到 `ttyACM0` / `ttyACM1` 与 `/dev/serial/by-id/` 下的 `usb-1a86_…` 名，**`/dev/am_arm_follower_left` / `_right` 当前是否存在本次未查**；两套名字不能互相代替，别名缺失会让指向别名的脚本读不到口 | 按 [§3.7](runbook/1-prepare.md#sec-3) 的只读口径核：手册 §3.7 正文只有 `3.7` / `3.7b` / `3.7c` / `3.7d` / `3.7e` 五条 `run` 命令（`ttyACM*` 与 `by-id` 的核对在 `3.7b`），**别名一项此前没有命令块**，本条是本轮新点的第一项核对，用这一条只读命令：`ssh "$PI" 'ls -l /dev/am_arm_follower_* /dev/ttyACM*'`，产物存 `$S4DIR/stdout/`；判据看 `.log`（`ls` 无匹配时 exit 2，不看 `.exit`）。别名不在就改用 `ttyACM0` / `ttyACM1`，并在 scope 里写明换了路径 |
 | pi 根分区的写入位置 | 2026-11-10 实测根分区 `/dev/mmcblk0p2` 29 G 已用 23 G、**剩 4.8 G（83%）**；证据与产物都落这台机器 | 产证据前先 `df -h ~` 确认余量，落盘位置写进 scope；余量不够先腾位置（清旧证据需授权） |
@@ -240,7 +240,7 @@
 | 证据落盘 | `~/pi-workspace/alohamini-cartesian-teleop/evidence/s4-<日期>/`，一次现场一个窗口目录；目录内 `README.md` 写命名约定 |
 | scope | 按 [§3.9](runbook/1-prepare.md#sec-3) 追加，不覆盖原有记录 |
 | 台账 | 现场值先落当次证据目录；回来在 `docs/field-results.md` 写新日期节（结论 / 关键数字 / 条件 / 证据文件四列）**需另一次任务授权** |
-| 待办 | 关闭 `TODO.md` §4 里对应的行同样**需另一次任务授权**；未授权就只在报告里列「待记录事项」。叙事惯例照 `completed-work.md` §1 的结论表与 §2 的时间线 |
+| 待办 | 更新或关闭 `TODO.md` §3 对应的现场待办行（第 1–4 项；原 `TODO.md` §4 的工程债已按 `docs/ADR.md` D25 重组归档，V06 / V10 验收裁决已由 `docs/ADR.md` D26 收口）同样**需另一次任务授权**；未授权就只在报告里列「待记录事项」。叙事惯例照 `completed-work.md` §1 的结论表与 §2 的时间线 |
 | 未测项 | 未测就写「未测」并点名缺什么，不留空、不填替代值 |
 
 授权前提一行：**记录要求本身不构成写入授权**（`AGENTS.md` §4「写入需授权」，§8「文档里的命令不构成执行授权」；[§8.3](runbook/5-wrapup.md#sec-8-3) 也写明「数字入 `docs/field-results.md` 需另一次任务授权」）。
