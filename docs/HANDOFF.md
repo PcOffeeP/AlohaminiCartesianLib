@@ -125,9 +125,10 @@ uv pip install --python .venvs/s4-move-to/bin/python --no-deps -e .
 # 4. 核对导入路径：确认 lerobot 来自本地 fork（6aee1f81）且本库来自 src/
 .venvs/s4-move-to/bin/python -c "
 import numpy, lerobot, placo, alohamini_cartesian
-from lerobot.robots.alohamini.alohamini_client import AlohaMiniClient
+import lerobot.robots.alohamini.alohamini_client as alohamini_client
+assert hasattr(alohamini_client, 'AlohaMiniClient')
 print('OK:', 'numpy=', numpy.__version__, 'lerobot=', lerobot.__version__)
-print('client:', AlohaMiniClient.__file__)
+print('client:', alohamini_client.__file__)
 print('lib:', alohamini_cartesian.__file__)
 "
 ```
@@ -236,7 +237,7 @@ git push -u origin feat/<短任务名>
 
 ### 4.3 按顺序推进的 4 步核心现场路线图（Phase A → B → C）
 
-**开场准备（每次到现场先做，约 5 分钟）**：确认机器人和笔记本在同一局域网，获取树莓派当前 IP，在 WSL2 终端初始化本次会话变量与本地证据目录，并检查树莓派磁盘余量与串口软链接：
+**开场准备（每次到现场先做，约 5 分钟）**：确认机器人和笔记本在同一局域网，获取树莓派当前 IP，在 WSL2 终端初始化本次会话变量、本地证据目录与 [1-prepare.md §2](field-ops/runbook/1-prepare.md#sec-2) 的 `run` 留痕包装函数（[2-host.md §6.1](field-ops/runbook/2-host.md#host-start) 的 Host 三步法等后续命令块都会直接调用 `run`），做完 `0.9-probe false` 自检后再检查树莓派磁盘余量与串口软链接：
 
 ```bash
 export PI_HOST="<树莓派当前IP>"              # 例如 10.34.170.98，每次连之前先确认
@@ -245,7 +246,25 @@ export STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 export S4DIR="$HOME/alohamini-evidence/s4-$(date -u +%Y%m%d)"
 mkdir -p "$S4DIR"/{capture,rtt,tracking,configs,stdout}
 
-# 1. 测 SSH、查树莓派磁盘余量（上次仅剩 4.8G，务必先看）与串口设备
+# 1. 定义 run 留痕包装函数（与 docs/field-ops/runbook/1-prepare.md §2 同源）
+#    每次调用落盘 $S4DIR/stdout/<步骤号>-<STAMP>.{cmd,log,exit}，并保留被调命令真实退出码
+run() {
+  local step="$1"; shift
+  local base="$S4DIR/stdout/$step-$STAMP"
+  printf '%s\n' "$*" > "$base.cmd"
+  "$@" >"$base.log" 2>&1
+  local code=$?
+  echo "$code" > "$base.exit"
+  cat "$base.log"
+  echo "[exit $code] $base"
+  return $code
+}
+
+# 2. 自检留痕链路（预期打印 [exit 1]，且 0.9-probe-$STAMP.exit 内容为 1；否则先修好再往下走）
+run 0.9-probe false
+cat "$S4DIR/stdout/0.9-probe-$STAMP.exit"
+
+# 3. 测 SSH、查树莓派磁盘余量（上次仅剩 4.8G，务必先看）与串口设备
 ssh "$PI" 'df -h / ~ && ls -l /dev/am_arm_follower_* /dev/ttyACM* 2>&1'
 ```
 
@@ -256,8 +275,8 @@ ssh "$PI" 'df -h / ~ && ls -l /dev/am_arm_follower_* /dev/ttyACM* 2>&1'
 | 步骤 | 目标与操作要点 | 关键命令与通过判据 |
 | --- | --- | --- |
 | **Step 1**<br>抓标定 + S1 推臂核查右肩 `1143 tick` | ① 从 Pi 抓取现役标定（代际 `4a80c0fd4421`）并核对与 Pi 原件 `sha256` 一致（因右肩 `1143 tick`，此步预期返回退出码 `1` 提醒 `IMPLAUSIBLE`）。<br>② 确认 Host 已用 `kill -INT` 停止且扭矩已释放后，A 同学轻推 `arm_right_shoulder_lift` 与 `arm_left_shoulder_pan` 到两端物理极限，B 同学按 [3-health.md §4.2](field-ops/runbook/3-health.md#sec-4-2) 读寄存器 `Present_Position` 与 `Min/Max_Position_Limit`。 | `uv run --no-sync python tools/calib.py fetch --host "$PI_HOST" --out "$S4DIR/capture/calib-$STAMP.json"`<br>**判据**：若推臂实测超出标定 range → 说明重标未扫满，需先用厂商工具重扫并重新登记；若确实顶到机械限位 → 记入 `configs/calib-envelope-accepted.yaml` 或后续带 `--allow-implausible "实测理由"`。详见 [next-mission.md §3.3](field-ops/next-mission.md#mission-s1)。 |
-| **Step 2**<br>起 Host + 新代际重采指纹复核 V12 | ① 按 [2-host.md §6.1](field-ops/runbook/2-host.md#host-start) **三步法** 启动树莓派 Host（验证 `5555` 与 `5556` 端口 `LISTEN`，并记下 `ps` 中的真实 python PID）。<br>② 用合一环境 `.venvs/s4-move-to` 采一份新代际 v2 指纹。<br>③ 同会话内把新指纹与 Step 1 抓回的标定做单位口径比对。 | `.venvs/s4-move-to/bin/python benchmarks/alohamini_io/capture_robot_fingerprint.py --host "$PI_HOST" --lerobot-version 0.6.1 --out "$S4DIR/capture/fingerprint-$STAMP.json"`<br>`uv run --no-sync python tools/verify_unit_consistency.py "$S4DIR/capture/fingerprint-$STAMP.json" "$S4DIR/capture/calib-$STAMP.json"`<br>**判据**：`robot_metadata.schema_version == 2`（注意不是顶层 `schema_version: 1`），`verify_unit_consistency.py` 输出 **18/18 电机差异 0、退出码 `0`** → 新代际 V12 关闭。 |
-| **Step 3**<br>E8 `signs` / `zeros` 标定 | ① 扭矩释放态下，A 同学扶臂摆成参考位形 **C2b**（URDF 运动学角 `(0, -72, +73, 0, 0, 0)°`：大臂竖直向上、小臂水平朝正前方、腕部顺直）。<br>② 起 Host 后，对 6 个关节逐轴跑一次 `+1°` 单步（`measure_latency.py --mode tracking --delta-deg 1.0 --steps 1`），看 CSV 中该轴实测角增/减定出 `sign`（增=`+1`，减=`-1`；**勿肉眼看 `wrist_roll`**，它 1° 末端原点位移 `0 mm`），写成扁平六键 JSON `10.8-signs-left-$STAMP.json`。<br>③ 跑 `tools/calibrate_kinematics.py` 算出扁平六键 `zeros` 并自动跑 FK 自检。右臂严格独立重跑一遍。 | `.venvs/s4-move-to/bin/python tools/calibrate_kinematics.py --side left --signs-json "$S4DIR/stdout/10.8-signs-left-$STAMP.json" --host "$PI_HOST" --zeros-out "$S4DIR/stdout/10.8-zeros-left-$STAMP.json"`<br>**判据**：退出码 `0`、`self_check` 的 `max_error_deg <= 3.0°`，且末端位置与 C2b 离线 FK `(-0.001, -0.316, +0.234) m` 在 `±0.05 m` 量级内吻合。详见 [4-experiments.md §10.8](field-ops/runbook/4-experiments.md#exp-e8)。 |
+| **Step 2**<br>起 Host + 新代际重采指纹复核 V12 | ① 确认当前 shell 已完成上方「开场准备」的 `run` 函数初始化与 `0.9-probe false` 自检，按 [2-host.md §6.1](field-ops/runbook/2-host.md#host-start) **三步法** 启动树莓派 Host（验证 `5555` 与 `5556` 端口 `LISTEN`，并记下 `ps` 中的真实 python PID）。<br>② 用合一环境 `.venvs/s4-move-to` 采一份新代际 v2 指纹。<br>③ 同会话内把新指纹与 Step 1 抓回的标定做单位口径比对。 | `.venvs/s4-move-to/bin/python benchmarks/alohamini_io/capture_robot_fingerprint.py --host "$PI_HOST" --lerobot-version 0.6.1 --out "$S4DIR/capture/fingerprint-$STAMP.json"`<br>`uv run --no-sync python tools/verify_unit_consistency.py "$S4DIR/capture/fingerprint-$STAMP.json" "$S4DIR/capture/calib-$STAMP.json"`<br>**判据**：`robot_metadata.schema_version == 2`（注意不是顶层 `schema_version: 1`），`verify_unit_consistency.py` 输出 **18/18 电机差异 0、退出码 `0`** → 新代际 V12 关闭。 |
+| **Step 3**<br>E8 `signs` / `zeros` 标定 | ① **先在安全低位定 `signs`**（承接 Step 2 已运行的 Host，A 同学手守断电开关）：对左臂 6 个关节逐轴跑一次 `+1°` 单步（`measure_latency.py --mode tracking --enable-motion --joint arm_left_<joint>.pos --delta-deg 1.0 --steps 1`），看 CSV 中该轴实测角 `measured_deg` 相对基线的增/减定出 `sign`（增=`+1`，减=`-1`；**勿肉眼看 `wrist_roll`**，它 1° 末端原点位移 `0 mm`），写成扁平六键 JSON `10.8-signs-left-$STAMP.json`。<br>② **释放扭矩、摆正并核对参考位形 C2b**：用 `kill -INT <真实python PID>` 停 Host 释放扭矩（A 同学全程承托手臂），按 [4-experiments.md §10.8](field-ops/runbook/4-experiments.md#exp-e8) 逐关节目视与垂线/角尺判据摆成参考位形 **C2b**（URDF 运动学角 `(0, -72, +73, 0, 0, 0)°`：大臂竖直向上、小臂水平朝正前方、腕部顺直）；人手扶稳不动，重新按 [2-host.md §6.1](field-ops/runbook/2-host.md#host-start) 三步法启动 Host 并复核 C2b 姿态未偏移。<br>③ **在未移动的 C2b 姿态下立刻算 `zeros`**：**不得在此时再下发任何运动命令**，立刻跑 `tools/calibrate_kinematics.py` 连机只读采帧，按当前 C2b 实时观测算出扁平六键 `zeros` 并自动跑 FK 自检（`calibrate_kinematics.py` 按 `zero = q_ref - sign * motor_deg` 用实时位姿反推零点；若摆好 C2b 后又做过 `+1°` 单步或被碰歪，必须先 `kill -INT` 释放扭矩、重新摆正并核对 C2b 再重起 Host 采帧，否则位移会直接变成 `zeros` 的系统性零点偏差且同帧自检无法察觉；离线复算亦可用 `--from-observation-json` 传入移动前保存的 C2b 快照 JSON，含 `observation` 与 `metadata` 键）。右臂严格独立重跑 ①→③。 | `.venvs/s4-move-to/bin/python tools/calibrate_kinematics.py --site configs/site.yaml --side left --signs-json "$S4DIR/stdout/10.8-signs-left-$STAMP.json" --host "$PI_HOST" --zeros-out "$S4DIR/stdout/10.8-zeros-left-$STAMP.json"`<br>**判据**：退出码 `0`、`self_check` 的 `max_error_deg <= 3.0°`，且末端位置与 C2b 离线 FK `(-0.001, -0.316, +0.234) m` 在 `±0.05 m` 量级内吻合。详见 [4-experiments.md §10.8](field-ops/runbook/4-experiments.md#exp-e8)。 |
 | **Step 4**<br>E7 `move_to` 真机闭环与 `+Z` 9 cm 实测 | 严格按 **①a → ①b → ② → ④ → ③** 顺序跑：<br>• **①a 只读限位窗口（`--limits-only`）**：零发送，同时检验 `numpy 2.3.5` 下真机连接与 6 轴有效限位窗口。<br>• **①b 离线 `--dry-run`**：已在 2.4 节跑过，可复跑对齐真机 seed。<br>• **② 单次 `+Z` 9 cm 真机运动（`--enable-motion --points 1`）**：自 ADR D24 起默认保持起始 FK 姿态并自动航点二分（每周期跳变 `≤2.0°`），不会再出现旧版腕部大幅翻转死锁。<br>• **④ 物理量测**：② 跑完静止 2 s 后立刻量测末端夹爪尖 `+Z` 实走距离。<br>• **③ 7 点路径（`--points 7`）**：② 与 ④ 正常后再跑连续多点路径。 | ①a：`.venvs/s4-move-to/bin/python tools/run_cartesian_move.py --site configs/site.yaml --host "$PI_HOST" --limits-only --signs-json "$S4DIR/stdout/10.8-signs-left-$STAMP.json" --zeros-json "$S4DIR/stdout/10.8-zeros-left-$STAMP.json" --out "$S4DIR/stdout/10.7-limits-$STAMP.json"`<br>②：把 `--limits-only` 换成 `--enable-motion --points 1 --timeout-s 10.0`，输出改 `10.7-single-$STAMP.json`。<br>**判据**：①a 与 ② 退出码 `0`；④ 满足 `\|实测值 − 90 mm\| ≤ 1 mm`（详见下节量具指南与 [4-experiments.md §10.7](field-ops/runbook/4-experiments.md#exp-e7)）。 |
 
 **Phase A 收口后的后续阶段（Phase B → C）**：
@@ -306,7 +325,7 @@ ssh "$PI" 'df -h / ~ && ls -l /dev/am_arm_follower_* /dev/ttyACM* 2>&1'
 | 查 Pi 5 Host 进程与端口 | `ssh "$PI" 'ps -eo pid,args \| grep alohamini_host \| grep -v grep; ss -ltnp \| grep -E ":5555\|:5556"'` |
 | **安全停止 Pi 5 Host（释放扭矩）** | `ssh "$PI" 'kill -INT <真实python PID>'`（停完用上一条复核端口无 `LISTEN`，扶臂放低位再断电） |
 
-启动 Host 请直接照抄 [2-host.md §6.1](field-ops/runbook/2-host.md#host-start) 的三步法命令块（避免单条前台 SSH 挂住 10 分钟不返回）。
+启动 Host 前，请先在当前 WSL2 shell 完成第 4.3 节「开场准备」（与 [1-prepare.md §2](field-ops/runbook/1-prepare.md#sec-2) 同源的会话变量、`run` 留痕包装函数与 `run 0.9-probe false` 自检，确认写入退出码 `1`），再照抄 [2-host.md §6.1](field-ops/runbook/2-host.md#host-start) 的三步法命令块（既避免单条前台 SSH 挂住 10 分钟不返回，也确保 `run 6.1a-host-pid` 正常落盘真实 python PID 与 `5555`/`5556` 端口核验，不报 `run: command not found`）。
 
 ### 5.2 证据归档位置约定
 
@@ -324,7 +343,7 @@ ssh "$PI" 'df -h / ~ && ls -l /dev/am_arm_follower_* /dev/ttyACM* 2>&1'
 | **exit `2`**（各脚本通用） | 命令行参数/配置错误（如 `--delta-deg 0`、`run_cartesian_move.py` 忘传 `--enable-motion`、`calib.py` 互斥参数同传或全缺） | 读 stderr 补齐/修正参数；不涉硬件，可放心重跑 |
 | **exit `6`**（`capture` / `measure`） | **一码两义**：在 `capture` 表示宿主 metadata 非 `schema_version == 2` 或 `motors` 为空；在 `measure` 表示命中运行时门禁 **Gate A–F**（发命令前的 6 道检查）并零下发拒绝 | 读 stderr 确认命中的是哪道 Gate（详见 [gates.md §10](field-ops/reference/gates.md#exit-codes) 与 [Gate A–F 表](field-ops/reference/gates.md#gate-a)），核对 `--joint`、`--robot-model` 与 Host 版本 |
 | **exit `8`**（`measure`） | 结束时的收尾 hold 命令被拒绝，停机指令可能没送到 | **按「机械臂可能仍在动」处置：先断电，再排查**（见 [2-host.md §8.1](field-ops/runbook/2-host.md#sec-8-1)） |
-| **exit `9`**（`measure --mode rtt`） | 导入了不含 `latest_request_timing` 的旧版 `lerobot`（例如错用了 `ec65318f` 或旧 wheel） | 检查 `AlohaMiniClient.__file__` 与 `git -C ~/workspace/lerobot_alohamini rev-parse --short HEAD` 是否为 `6aee1f81` |
+| **exit `9`**（`measure --mode rtt`） | 导入了不含 `latest_request_timing` 的旧版 `lerobot`（例如错用了 `ec65318f` 或旧 wheel） | 检查 `alohamini_client.__file__`（`.venvs/s4-move-to/bin/python -c "import lerobot.robots.alohamini.alohamini_client as m; print(m.__file__)"`）与 `git -C ~/workspace/lerobot_alohamini rev-parse --short HEAD` 是否为 `6aee1f81` |
 | **exit `10`**（`run_cartesian_move.py`） | `OutOfRange`：IK 求解或直线路径预检被拒（超关节限位或超位置残差 `5 mm`） | 查输出 JSON 的 `moves`，对比 ①a `--limits-only` 限位窗口，缩小位移或调整起始姿态 |
 | **exit `11`**（`run_cartesian_move.py`） | `MotionTimeout`：超过 `--timeout-s` 仍未在容差内稳住 | 查 stderr 与 JSON 是否含 `FOLLOW_TIMEOUT`、有效限位窗口是否过窄，或适度增大 `--timeout-s` |
 | **exit `12`**（`run_cartesian_move.py`） | `FeedbackLost`：超过 `feedback_timeout_s`（默认 1.0 s）无新观测样本 | 检查局域网丢包（`ping "$PI_HOST"`）与树莓派 Host 进程是否存活 |
